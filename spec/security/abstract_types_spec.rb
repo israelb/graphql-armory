@@ -111,6 +111,10 @@ RSpec.describe "Authorization of interfaces and unions" do
   describe "the audit of interface fields" do
     # A bypassed type implementing `interfaces`; `number_rule` is the kwargs of the interface field.
     def audit_of(number_rule: {}, nested: false, node: false)
+      report_of(number_rule: number_rule, nested: nested, node: node).problems
+    end
+
+    def report_of(number_rule: {}, nested: false, node: false, unscoped_load: false)
       armory = GraphQL::Armory::Authorization
       base_field = Class.new(GraphQL::Schema::Field) { include armory::Base }
       base_object = Class.new(GraphQL::Schema::Object) do
@@ -118,11 +122,21 @@ RSpec.describe "Authorization of interfaces and unions" do
         field_class base_field
         default_action :read
       end
+      invoice_type = Class.new(base_object) do
+        graphql_name "Invoice"
+        field :number, String, null: false
+      end
       numbered = Module.new do
         include GraphQL::Schema::Interface
         graphql_name "Numbered"
         field_class base_field
-        field :number, String, null: false, **number_rule
+        if unscoped_load
+          field :number, String, null: false, authorize: :none, reason: "public", load_through_scope: false do
+            argument :invoice_id, GraphQL::Types::ID, loads: invoice_type
+          end
+        else
+          field :number, String, null: false, **number_rule
+        end
       end
       document = Module.new do
         include GraphQL::Schema::Interface
@@ -150,7 +164,7 @@ RSpec.describe "Authorization of interfaces and unions" do
         use armory, adapter: :pundit
         define_singleton_method(:resolve_type) { |*| public_note }
       end
-      GraphQL::Armory::Authorization::Audit.build(schema).call(schema).problems
+      GraphQL::Armory::Authorization::Audit.build(schema).call(schema)
     end
 
     it "reports an undeclared field once, on the interface, not again on each implementer" do
@@ -171,6 +185,18 @@ RSpec.describe "Authorization of interfaces and unions" do
       problems = audit_of(number_rule: { authorize: :none, reason: "public" }, node: true).map { |p| [p.kind, p.path, p.message] }
 
       expect(problems).to match([[:unprotected, "Node.id", /not checked/]])
+    end
+
+    it "still lists a bypassed interface field, which is open, on the implementer" do
+      report = report_of(number_rule: { authorize: :none, reason: "public" })
+
+      expect([report.problems, report.bypasses.map(&:path)]).to match([[], include("PublicNote.number")])
+    end
+
+    it "still reports a load that skips the scope on a field inherited from an interface" do
+      problems = report_of(nested: true, unscoped_load: true).problems.map { |p| [p.kind, p.path] }
+
+      expect(problems).to include([:unscoped_load, "PublicNote.number(invoice_id)"])
     end
   end
 

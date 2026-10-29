@@ -115,12 +115,13 @@ module GraphQL
         def audit_fields(type, findings, model:, bypassed:, reported:)
           type.all_field_definitions.each do |field|
             path = "#{type.graphql_name}.#{field.original_name}"
-            next if bypassed && interface_field?(field)
-            next findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !field.respond_to?(:armory_declared)
+            # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
+            inherited = bypassed && interface_field?(field)
+            next findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !inherited && !field.respond_to?(:armory_declared)
             next unless field.respond_to?(:armory_declared)
             next audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)
 
-            audit_declaration(field, path, findings, model: model, bypassed: bypassed, reported: reported)
+            audit_declaration(field, path, findings, model: model, bypassed: bypassed && !inherited, reported: reported)
             audit_visibility(field, path, findings, model: model, reported: reported)
             audit_loads(field, path, findings)
             audit_arguments(field, path, findings, reported: reported)
