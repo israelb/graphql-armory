@@ -54,9 +54,15 @@ module GraphQL
           scoped(model.all, type.armory_rule, context).find_by((key || model.primary_key) => value)
         end
 
+        # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.
         def self.allowed?(subject, rule, context)
-          configuration = configuration(context)
-          Authorize.(subject, rule, context, adapter: configuration.adapter, sinks: configuration.sinks)
+          store = context.namespace(:armory)
+          authorize = store[:authorize] ||= begin
+            configuration = configuration(context)
+            Authorize.build(context, adapter: configuration.adapter, sinks: configuration.sinks)
+          end
+
+          authorize.(subject, rule, context)
         end
       end
     end
