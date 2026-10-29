@@ -22,7 +22,7 @@ Gem::Specification.new do |s|
     "rubygems_mfa_required" => "true",
   }
 
-  s.files = Dir["lib/**/*.{rb,rake}"] + ["LICENSE", "README.md", "CHANGELOG.md", "MIGRATING.md"]
+  s.files = Dir["lib/**/*.{rb,rake}"] + Dir["docs/**/*.md"] + ["LICENSE", "README.md", "CHANGELOG.md", "MIGRATING.md"]
   s.require_paths = ["lib"]
 
   # Execution::Next is supported from graphql 2.6.2 (the integration refuses it earlier); everything else works from 2.4.
