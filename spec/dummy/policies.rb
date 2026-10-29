@@ -24,6 +24,10 @@ class InvoicePolicy < ApplicationPolicy
     record.account_id == user.account_id
   end
 
+  def export?
+    user.admin?
+  end
+
   def manage?
     user.admin?
   end

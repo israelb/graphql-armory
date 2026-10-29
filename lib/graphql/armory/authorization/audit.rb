@@ -66,6 +66,7 @@ module GraphQL
             model = model_of(type, path, findings)
             reported = Set.new
             check(path, model, rule, findings, reported) if model
+            check(path, model, Rule.new(rule.visible_when, policy: rule.policy), findings, reported) if model && rule.visible_when
             audit_fields(type, findings, model: model, bypassed: false, reported: reported)
           end
         end
@@ -91,8 +92,16 @@ module GraphQL
             next unless field.respond_to?(:armory_declared)
 
             audit_declaration(field, path, findings, model: model, bypassed: bypassed, reported: reported)
+            audit_visibility(field, path, findings, model: model, reported: reported)
             audit_loads(field, path, findings)
           end
+        end
+
+        # The action a field is hidden with is asked of the policy like any other, so it must exist.
+        def audit_visibility(field, path, findings, model:, reported:)
+          return unless model && field.armory_visible_when
+
+          check(path.split(".").first, model, Rule.new(field.armory_visible_when, attribute: field.original_name), findings, reported)
         end
 
         def audit_declaration(field, path, findings, model:, bypassed:, reported:)

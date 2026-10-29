@@ -44,6 +44,16 @@ module GraphQL
             super(Integration.scoped(items, armory_rule, context), context)
           end
 
+
+          # `authorize :read, visible_when: :export` hides the type from users the policy answers `false`
+          # for, in introspection and in error suggestions. Asked of the model's class, with no record.
+          def visible?(context)
+            rule = armory_rule
+            return super unless rule&.visible_when
+
+            super && Integration.visible?(armory_model, Rule.new(rule.visible_when, policy: rule.policy), context)
+          end
+
           def authorized?(object, context)
             rule = armory_rule
             return false if rule.nil?

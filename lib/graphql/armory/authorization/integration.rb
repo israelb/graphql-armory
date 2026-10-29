@@ -70,6 +70,17 @@ module GraphQL
 
           authorize.(subject, rule, context)
         end
+
+        # Whether a type or field may appear in the schema this user sees. The question is asked of the
+        # model's class, with no record, so the rule's action must be one a policy can answer that way.
+        # `Schema.types` with no context sees the whole schema. A schema dump asks for it explicitly with
+        # `to_definition(context: { armory_full_schema: true })`: graphql 2.6 builds an ordinary context for it,
+        # which cannot be told from an anonymous request, and an anonymous request must not see hidden members.
+        def self.visible?(model, rule, context)
+          return true if context.is_a?(GraphQL::Query::NullContext) || context[:armory_full_schema] == true
+
+          allowed?(model, rule, context)
+        end
       end
     end
   end

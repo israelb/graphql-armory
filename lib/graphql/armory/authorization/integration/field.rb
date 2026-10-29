@@ -9,6 +9,7 @@ module GraphQL
         #   field :notes, String, authorize: :manage                      # another action on the parent
         #   field :id, ID, authorize: :none, reason: "ids are public"     # declared bypass
         #   field :owner_id, ID, authorize: true                          # the parent type's own action
+        #   field :notes, String, authorize: :manage, visible_when: :export  # hidden from users who cannot export
         #
         # A field with no rule is covered by its type's rule, unless the type is bypassed:
         # coverage does not propagate from a bypass, so that field is denied.
@@ -18,16 +19,17 @@ module GraphQL
         module Field
           # `find_by: :id` looks the object up inside the user's scope instead of calling the resolver.
           # `loads:` arguments also load through the scope unless `load_through_scope: false`.
-          def initialize(*args, authorize: nil, reason: nil, find_by: nil, load_through_scope: true, **kwargs, &block)
+          def initialize(*args, authorize: nil, reason: nil, find_by: nil, load_through_scope: true, visible_when: nil, **kwargs, &block)
             @armory_declared = authorize
             @armory_reason = reason
+            @armory_visible_when = visible_when&.to_sym
             @armory_load_through_scope = load_through_scope
             Rule.none(reason: reason) if authorize == :none
             super(*args, **kwargs, &block)
             extension(Integration::FindBy, key: find_by) if find_by
           end
 
-          attr_reader :armory_declared, :armory_reason
+          attr_reader :armory_declared, :armory_reason, :armory_visible_when
 
           def armory_load_through_scope?
             @armory_load_through_scope
@@ -44,6 +46,19 @@ module GraphQL
             return super unless @armory_load_through_scope
 
             raise GraphQL::UnauthorizedError.new(object: nil, type: error.argument.loads, context: error.context)
+          end
+
+
+          # `visible_when: :export` hides the field from users the owner's policy answers `false` for.
+          def visible?(context)
+            return super unless @armory_visible_when
+
+            unless owner.respond_to?(:armory_model)
+              raise ConfigurationError, "#{owner.graphql_name}.#{original_name} uses visible_when:, so its type must include Base"
+            end
+
+            rule = Rule.new(@armory_visible_when, attribute: original_name)
+            super && Integration.visible?(owner.armory_model, rule, context)
           end
 
           def authorized?(object, args, context)

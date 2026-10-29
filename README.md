@@ -141,6 +141,30 @@ The actor is `context[:current_ability]` (it wins over `current_user`), or `Abil
 
 **Guests.** `Ability.new(nil)` is your ability class's decision. Make it deny everything if there is no user.
 
+## Visibility
+
+Hide a type or a field from users who may not use it, in introspection and in "did you mean" suggestions:
+
+```ruby
+class InvoiceExportType < BaseObject
+  authorize :read, model: Invoice, visible_when: :export     # InvoicePolicy#export? / can?(:export, Invoice)
+end
+
+field :internal_notes, String, authorize: :manage, visible_when: :export
+```
+
+`visible_when:` is an action like any other, but it is asked **of the model's class, with no record**: `InvoicePolicy.new(user, Invoice).export?` with Pundit, `can?(:export, Invoice)` with CanCanCan. Write a method that decides from the user (`user.admin?`), not from the record. Nothing is hidden unless you declare it, and the audit reports a `visible_when:` action the policy does not define.
+
+A hidden member also hides what leads only to it: a root field that returns a hidden type disappears with it.
+
+**Schema dumps.** graphql 2.6 builds an ordinary context for `to_definition`, which cannot be told apart from an anonymous request, and an anonymous request must never see hidden members. Ask for the full schema explicitly:
+
+```ruby
+AppSchema.to_definition(context: { armory_full_schema: true })
+```
+
+Visibility is computed per query (and memoized inside it). Role-based profile caching across requests is graphql-ruby's `Schema::Visibility` feature and is not wrapped here.
+
 ## Telemetry
 
 Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypassed`; data holds only `type`, `action` and `reason`, never record attributes.
@@ -149,7 +173,7 @@ Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypass
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).
 
-Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
+Not covered yet: arguments, mutations, interfaces and unions, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
 
 ## Engines
 
@@ -188,7 +212,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: arguments, mutations, interfaces and unions, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |

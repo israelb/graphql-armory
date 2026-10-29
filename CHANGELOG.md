@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Visibility driven by the policy: `authorize :read, visible_when: :export` on a type and `visible_when:` on a field hide
+  them from introspection and error suggestions. A schema dump needs `context: { armory_full_schema: true }`.
+
 - CanCanCan adapter (`adapter: :cancan`): `can?` with the field attribute, `accessible_by` for relations, and
   `MissingScopeError` for block-only rules unless the type declares `authorize :read, scope: :in_memory`.
 
