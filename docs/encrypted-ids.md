@@ -46,6 +46,18 @@ end
 
 With the [authorization module](authorization.md), an ID the encoder refuses in a `loads:` argument is answered exactly like a missing record.
 
+### The default encoder
+
+If you do not need your own encoder class, use the default one. It never ships a key: it takes `GRAPHQL_ARMORY_KEY` from the environment or, in a Rails app, derives a key of its own from `secret_key_base` with HKDF (purpose `graphql-armory/ids`, so the Rails secret itself is never used to encrypt). Without either, it raises when the schema loads (at boot, with eager loading) instead of serving unencrypted IDs.
+
+```ruby
+class AppSchema < GraphQL::Schema
+  cursor_encoder GraphQL::Armory::Encoder.default
+end
+```
+
+`GRAPHQL_ARMORY_KEY` wins over Rails; an empty value counts as unset, and a value with surrounding whitespace is refused (another process might strip it and get other IDs). Changing `secret_key_base` changes every ID: if you rotate it, keep the old encoder in a versioned chain (below). The key does not depend on any other Rails setting: it does not use `Rails.application.key_generator`, whose digest changes during boot. With `SECRET_KEY_BASE_DUMMY` Rails invents a secret per process, so IDs do not survive a restart; set a real secret where IDs matter. `MyEncoder.default` keeps `MyEncoder`'s tag and codec but replaces its key with the default one.
+
 ## Rotating keys and migrating from base64
 
 Put encoders in a chain, newest first. The chain encodes with the first and decodes with whichever accepts the value, so clients keep working while you change keys:
@@ -94,12 +106,13 @@ log_legacy_id(id) if encoder == GraphQL::Armory::Encoder::Legacy
 | `decode(id)` / `decode(cursor, nonce: true)` | The text, or raises `GraphQL::Armory::Encoder::InvalidError` (a `GraphQL::ExecutionError`, so clients see `Invalid ID or cursor`). |
 | `Encoder.versioned(newest, ..., oldest)` | A chain with the same `encode` and `decode`; encodes with `newest`. |
 | `chain.decode_versioned(text, nonce: false)` | `[data, encoder]`, or `[nil, nil]` when no encoder accepts it. |
+| `Encoder.default` | An encoder keyed by `GRAPHQL_ARMORY_KEY`, else by a key derived with HKDF from Rails' `secret_key_base`; raises `ConfigurationError` without either. |
 
 A subclass inherits `key`, `tag` and `codec`, and can override any of them. Passing `nil` to any of them raises `ConfigurationError`, so an unset environment variable fails at boot instead of being ignored.
 
 ## Guarantees and limits
 
-Covered by `spec/security/encoder_spec.rb` and `encoder_versioning_spec.rb` on both engines: round trips, tampering at several positions, another key, another tag, a cursor used as an ID and the reverse, malformed and truncated input, encrypted pagination and a tampered cursor, rotation and migration from base64 cursors.
+Covered by `spec/security/encoder_spec.rb`, `encoder_versioning_spec.rb` and `default_encoder_spec.rb` on both engines: round trips, tampering at several positions, another key, another tag, a cursor used as an ID and the reverse, malformed and truncated input, encrypted pagination and a tampered cursor, rotation and migration from base64 cursors, and where the default encoder takes its key.
 
 - **Changing the key invalidates every ID and cursor already handed out**, unless the old encoder stays in a versioned chain.
 - **`Legacy` in a chain can be forged**, and it does not separate IDs from cursors. Keep it only while migrating.
