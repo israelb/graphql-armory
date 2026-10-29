@@ -1,0 +1,52 @@
+name: CI
+
+# Two jobs, only one of them runs. While the repository is private (limited Actions minutes) the
+# minimal job runs. To run the full matrix:
+#   gh variable set CI_FULL_MATRIX --body true
+# and back to minimal:
+#   gh variable delete CI_FULL_MATRIX
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  spec-minimal:
+    name: Ruby 3.4 / graphql ~> 2.6.0 / interpreter (minimal)
+    if: ${{ vars.CI_FULL_MATRIX != 'true' }}
+    runs-on: ubuntu-24.04
+    env:
+      GRAPHQL_VERSION: "~> 2.6.0"
+      GRAPHQL_ARMORY_ENGINE: interpreter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - run: bundle exec rspec
+
+  spec:
+    name: Ruby ${{ matrix.ruby }} / graphql ${{ matrix.graphql }} / ${{ matrix.engine }}
+    if: ${{ vars.CI_FULL_MATRIX == 'true' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.1", "3.2", "3.3", "3.4"]
+        graphql: ["~> 2.4.0", "~> 2.5.0", "~> 2.6.0"]
+        engine: [interpreter, next]
+        exclude:
+          # Execution::Next is supported from graphql 2.6.2 (a denied field crashes it in 2.5.26 to 2.6.1).
+          - { graphql: "~> 2.4.0", engine: next }
+          - { graphql: "~> 2.5.0", engine: next }
+    env:
+      GRAPHQL_VERSION: ${{ matrix.graphql }}
+      GRAPHQL_ARMORY_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - run: bundle exec rspec

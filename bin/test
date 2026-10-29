@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Runs the suite inside the Docker image: `docker compose run --rm test`.
+# Extra arguments go to RSpec: `docker compose run --rm test bash bin/test spec/some_spec.rb`.
+set -euo pipefail
+bundle check >/dev/null 2>&1 || bundle install --quiet
+exec bundle exec rspec "$@"

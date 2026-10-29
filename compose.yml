@@ -1,0 +1,18 @@
+services:
+  test:
+    build:
+      context: .
+      args:
+        RUBY_VERSION: ${RUBY_VERSION:-3.3}
+    environment:
+      GRAPHQL_ARMORY_ENGINE: ${GRAPHQL_ARMORY_ENGINE:-interpreter}
+      GRAPHQL_VERSION: ${GRAPHQL_VERSION:-}
+    volumes:
+      - .:/app
+      - bundle:/bundle
+    command: bash bin/test
+
+volumes:
+  bundle:
+    # One gem cache per Ruby version, so switching RUBY_VERSION never reuses native extensions.
+    name: graphql-armory-bundle-ruby${RUBY_VERSION:-3.3}
