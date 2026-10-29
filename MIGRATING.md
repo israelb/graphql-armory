@@ -10,7 +10,7 @@ class AppSchema < GraphQL::Schema
 end
 ```
 
-Make your base classes include `GraphQL::Armory::Authorization::Base` (see the README quick start). Types that inherit from them are now covered; run the audit to see the rest.
+Make your base classes include `GraphQL::Armory::Authorization::Base` (see "How to use it" in [docs/authorization.md](docs/authorization.md)). Types that inherit from them are now covered; run the audit to see the rest.
 
 ## 2. Replace `authorized?` with a rule
 

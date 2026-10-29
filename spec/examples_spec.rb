@@ -2,7 +2,7 @@
 
 require_relative "../examples/invoices"
 
-# The README points here, so the example must keep working.
+# docs/authorization.md points here, so the example must keep working.
 RSpec.describe "examples/invoices.rb" do
   let(:alice) { InvoicesExample::User.new(id: 1, account_id: 1, admin: false) }
   let(:carol) { InvoicesExample::User.new(id: 3, account_id: 1, admin: true) }

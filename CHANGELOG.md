@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: each module has its own page in `docs/` (the problem, the solution, how to use it, guarantees and limits). The authorization guide moved from the README to `docs/authorization.md`; the README now lists the modules.
+
 ## 0.1.0.pre2 (2026-10-29)
 
 Closes the known gaps of the authorization module.
