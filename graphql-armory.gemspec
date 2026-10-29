@@ -9,7 +9,7 @@ Gem::Specification.new do |s|
   s.summary     = "Authorization for graphql-ruby: Pundit and CanCanCan, deny-by-default, with a schema audit."
   s.description = "Open-source extensions for graphql-ruby built on its public extension points. " \
                   "The first module is authorization: deny-by-default coverage, scoped lists and " \
-                  "connections, IDOR-safe lookups and a schema audit for CI."
+                  "connections, IDOR-safe lookups, mutations, interfaces and unions, visibility driven by the policy, and a schema audit for CI."
   s.homepage    = "https://github.com/israelb/graphql-armory"
   s.license     = "MIT"
   s.required_ruby_version = ">= 3.1"
@@ -22,9 +22,9 @@ Gem::Specification.new do |s|
     "rubygems_mfa_required" => "true",
   }
 
-  s.files = Dir["lib/**/*.{rb,rake}"] + ["LICENSE", "README.md", "CHANGELOG.md"]
+  s.files = Dir["lib/**/*.{rb,rake}"] + ["LICENSE", "README.md", "CHANGELOG.md", "MIGRATING.md"]
   s.require_paths = ["lib"]
 
-  # The second engine, Execution::Next, exists from graphql 2.5.26; everything else works from 2.4.
+  # Execution::Next is supported from graphql 2.6.2 (the integration refuses it earlier); everything else works from 2.4.
   s.add_dependency "graphql", ">= 2.4", "< 3"
 end
