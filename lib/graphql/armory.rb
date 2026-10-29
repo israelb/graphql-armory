@@ -9,3 +9,5 @@ module GraphQL
     class Error < GraphQL::Error; end
   end
 end
+
+require "graphql/armory/authorization"
