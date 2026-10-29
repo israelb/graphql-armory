@@ -222,6 +222,10 @@ end
 - **Payload types** are ordinary objects: declare `authorize :none, reason: "...", covers_fields: true` so their fields are covered by the mutation instead of denied.
 - **`authorize :none, reason:`** documents a mutation anyone may call; the audit lists it with its reason. A mutation with no rule appears as `:no_rule` (for example `Mutation.forgotten`), and a rule the policy does not define as `:adapter`.
 - An unknown `on_denied:` raises `ArgumentError`; a mutation with a rule but no model raises `ConfigurationError`.
+- **Class-level answers are weak.** With no loaded record of the model (no `loads:`, an empty `loads: [ID]`, or a `loads:` of another type) the rule is asked about the model's class: CanCan answers true for anyone holding the right, and a Pundit policy that reads `record` attributes raises. Load the record you are authorizing.
+- **`ready?` runs before authorization** (and, on the interpreter, before a failing `loads:`). Keep it free of side effects.
+- **`loads:` works on top-level arguments only.** Inside an input object it is not scoped, and the engines disagree (the interpreter raises, `Execution::Next` yields nil).
+- **Do not put `authorize:` on a mutation field or on payload fields**; the mutation's own rule is the one that counts. A subclass that redeclares `authorize :none` is open to everyone, on purpose.
 
 ## Telemetry
 
