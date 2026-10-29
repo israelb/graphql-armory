@@ -20,8 +20,9 @@ module GraphQL
   module Armory
     module Authorization
       module Adapters
-        # Loaded on first use, so Pundit is only needed by whoever picks this adapter.
+        # Loaded on first use, so only the library behind the adapter you pick is required.
         autoload :Pundit, "graphql/armory/authorization/adapters/pundit"
+        autoload :CanCan, "graphql/armory/authorization/adapters/cancan"
       end
     end
 

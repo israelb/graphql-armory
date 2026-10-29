@@ -43,3 +43,15 @@ RSpec.describe GraphQL::Armory::Authorization::Rule do
     expect(GraphQL::Armory::Authorization::Controls::Rule.example).to be_a(rule_class)
   end
 end
+
+RSpec.describe "a type declaring how its lists are scoped" do
+  it "carries `scope: :in_memory` into the rule the adapter receives" do
+    type = Class.new(GraphQL::Schema::Object) do
+      include GraphQL::Armory::Authorization::Base
+      graphql_name "Scoped"
+      authorize :read, scope: :in_memory
+    end
+
+    expect(type.armory_rule.scope).to eq(:in_memory)
+  end
+end

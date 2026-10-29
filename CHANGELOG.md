@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- CanCanCan adapter (`adapter: :cancan`): `can?` with the field attribute, `accessible_by` for relations, and
+  `MissingScopeError` for block-only rules unless the type declares `authorize :read, scope: :in_memory`.
+
 - Black-box security suite (`spec/security`), runnable example (`examples/invoices.rb`), benchmark,
   README and MIGRATING guide.
 - Execution::Next is supported from graphql 2.6.2: in 2.5.26 to 2.6.1 a denied field crashes the engine.

@@ -13,13 +13,13 @@ The first module is **authorization**. It plugs [Pundit](https://github.com/varv
 - **Lookups by ID cannot leak** (IDOR). A record you may not read and a record that does not exist look identical.
 - **An audit tells you what you forgot**, from a rake task or an RSpec matcher, so CI fails instead of production leaking.
 
-> **Status: early development (0.1, unreleased).** Pundit only; CanCanCan comes next. Not published yet.
+> **Status: early development (0.1, unreleased).** Pundit and CanCanCan adapters. Not published yet.
 
 ## Install
 
 ```ruby
 gem "graphql-armory"
-gem "pundit"
+gem "pundit"      # or "cancancan", whichever you use
 ```
 
 Requires Ruby >= 3.1 and graphql >= 2.4. `GraphQL::Execution::Next` is supported from graphql 2.6.2 (see [Engines](#engines)).
@@ -119,6 +119,28 @@ load "tasks/graphql_armory.rake"
 
 It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, and lists every declared bypass with its reason.
 
+## CanCanCan
+
+Same schema, different adapter. Your types and fields do not change:
+
+```ruby
+use GraphQL::Armory::Authorization, adapter: :cancan
+```
+
+The actor is `context[:current_ability]`, or `Ability.new(context[:current_user])` (pass `Adapters::CanCan.new(ability_class: MyAbility)` for another class). It is built once per query.
+
+| Question | CanCanCan call |
+|---|---|
+| Can this object be seen? | `ability.can?(:read, object)` |
+| Can this field be seen? | `ability.can?(:manage, object, :internal_notes)`: the attribute is passed, because `can :read, User, [:username]` makes `can?(:read, user)` true for the whole object |
+| Which items of a list? | `Model.accessible_by(ability, :read)`, still a paginable relation; Arrays are filtered with `can?` |
+
+**Block-only rules.** `can(:read, Invoice) { |i| ... }` cannot be turned into SQL, so `accessible_by` fails. The adapter raises `MissingScopeError` instead of guessing. To accept the cost, declare it on the type: `authorize :read, scope: :in_memory`. Lists are then filtered with `can?` one by one and efficient pagination is lost.
+
+**The audit covers less.** It still reports missing rules, bypasses and unscoped `loads:`, but not whether the `Ability` grants the action: abilities depend on the user.
+
+**Guests.** `Ability.new(nil)` is your ability class's decision. Make it deny everything if there is no user.
+
 ## Telemetry
 
 Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypassed`; data holds only `type`, `action` and `reason`, never record attributes.
@@ -127,7 +149,7 @@ Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypass
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).
 
-Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, CanCanCan, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
+Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
 
 ## Engines
 

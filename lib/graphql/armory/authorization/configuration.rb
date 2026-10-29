@@ -24,7 +24,8 @@ module GraphQL
         def resolve(adapter)
           case adapter
           when :pundit then Adapters::Pundit.new
-          when Symbol, String then raise ArgumentError, "unknown adapter #{adapter.inspect}; use :pundit or an adapter object"
+          when :cancan then Adapters::CanCan.new
+          when Symbol, String then raise ArgumentError, "unknown adapter #{adapter.inspect}; use :pundit, :cancan or an adapter object"
           else adapter
           end
         end
