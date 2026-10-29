@@ -162,20 +162,22 @@ GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test         # another graphq
 
 ## Roadmap
 
-| Order | Module |
-|---|---|
-| 1 | Authorization (Pundit, CanCanCan) |
-| 2 | Encrypted, versioned IDs and cursors |
-| 3 | Persisted queries / operation whitelisting |
-| 4 | Rate limiting |
-| 5 | Stable (keyset) connections |
-| 6 | Subscriptions over Pusher / Ably |
-| 7 | Response caching |
-| 8 | API versioning (changesets) |
-| 9 | `@defer` / `@stream` |
-| 10 | Dashboard |
+Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the same PR that changes a module.
 
-Each module starts with its own research before design.
+| Order | Module | Status | Current limits |
+|---|---|---|---|
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit done. CanCanCan pending. Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
+| 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
+| 4 | Rate limiting | ⬜ | Research not started. |
+| 5 | Stable (keyset) connections | ⬜ | Research not started. |
+| 6 | Subscriptions over Pusher / Ably | ⬜ | Research not started. |
+| 7 | Response caching | ⬜ | Research not started. |
+| 8 | API versioning (changesets) | ⬜ | Research not started. |
+| 9 | `@defer` / `@stream` | ⬜ | Research not started. |
+| 10 | Dashboard | ⬜ | Research not started. |
+
+Each module starts with its own research before design. A module is ✅ only when it is released and its limits are documented here.
 
 ## Related gems
 
