@@ -131,3 +131,6 @@ module GraphQL
     end
   end
 end
+
+require "graphql/armory/encoder/versioned"
+require "graphql/armory/encoder/legacy"
