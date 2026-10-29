@@ -282,6 +282,16 @@ GRAPHQL_ARMORY_ENGINE=next docker compose run --rm test         # full suite, Ex
 GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test         # another graphql version
 ```
 
+### Releasing
+
+Releases are published from GitHub Actions with RubyGems Trusted Publishing (`.github/workflows/release.yml`): no API key is stored and no OTP is asked. Bump `GraphQL::Armory::VERSION` and the CHANGELOG on `main`, then push the matching tag:
+
+```
+git tag v0.1.0.pre2 && git push origin v0.1.0.pre2
+```
+
+The workflow checks that the tag matches the version, runs the specs and pushes the gem. It only publishes a tag on a commit of `main`. The `release` environment can require a maintainer's approval first (on a public repository, or a private one on a paid GitHub plan).
+
 ## Roadmap
 
 Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the same PR that changes a module.

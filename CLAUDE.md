@@ -7,7 +7,7 @@ Open-source extensions for graphql-ruby (authorization first). Read `README.md` 
 - **Clean room.** Use only graphql-ruby's open-source code, its public guides, and the public docs of Pundit and CanCanCan. Never copy, derive from, or try to obtain GraphQL-Pro or GraphQL-Enterprise code. If something can only be known from Pro's code, say so and design our own solution.
 - **Never modify the graphql-ruby clone** (`../graphql-ruby`). Read-only. Hook only through public extension points; no fork, no monkey patching where a public hook exists.
 - **Commits:** conventional commits, English, no `Co-Authored-By` or AI attribution lines. The commit author email is the GitHub noreply address, never a personal one; do not put a personal email in any file.
-- **Remote operations.** Pushing a branch and opening its PR is expected for every increment. Merging, force-pushing, deleting remote branches and publishing the gem are the user's decisions: ask first.
+- **Remote operations.** Pushing a branch and opening its PR is expected for every increment. Merging, force-pushing, deleting remote branches and publishing the gem (pushing a `v*` tag publishes it through `release.yml`) are the user's decisions: ask first.
 - **Style.** Useful Objects: `new` is inert, `build` wires real dependencies, `Substitute` classes, `Controls::*.example`. RSpec uses no mocks (`mock_with :nothing`; no `receive`, `instance_double` or `stub_const`).
 
 ## Workflow per increment
