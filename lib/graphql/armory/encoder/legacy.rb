@@ -20,11 +20,12 @@ module GraphQL
           raise InvalidError unless text.is_a?(String) && !text.empty?
 
           plain = Base64.urlsafe_decode64(text.tr("+/", "-_").delete_suffix("==").delete_suffix("="))
+          raise InvalidError if plain.empty?
           plain.force_encoding(Encoding::UTF_8)
           raise InvalidError unless plain.valid_encoding? && plain.match?(PRINTABLE)
 
           plain
-        rescue ArgumentError
+        rescue StandardError
           raise InvalidError
         end
       end

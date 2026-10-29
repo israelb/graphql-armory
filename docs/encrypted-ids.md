@@ -71,7 +71,7 @@ Drop the old encoder from the chain once its values have expired (cursors are sh
 AppIDs = GraphQL::Armory::Encoder.versioned(AppEncoder, GraphQL::Armory::Encoder::Legacy)
 ```
 
-`Legacy` is not encryption: while it is in the chain, anyone can still forge a base64 value. It only accepts printable text, so a tampered encrypted value never comes back as garbage. To treat old values differently, ask which encoder decoded them:
+`Legacy` is not encryption: while it is in the chain, anyone can still forge a base64 value. It only accepts printable text, so a tampered full-length encrypted value does not come back as data (a truncated one may decode to short gibberish, like any forged value). Do not put `GraphQL::Schema::Base64Encoder` in a chain: it would turn tampered values into binary data. To treat old values differently, ask which encoder decoded them:
 
 ```ruby
 data, encoder = AppIDs.decode_versioned(id)

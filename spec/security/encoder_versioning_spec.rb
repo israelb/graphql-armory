@@ -46,6 +46,25 @@ RSpec.describe "Versioned encoders" do
     expect { armory::Encoder.versioned(newest, Object.new) }.to raise_error(armory::Encoder::ConfigurationError, /encode and decode/)
   end
 
+  it "fails at boot for a member without a key or whose decode does not take nonce:" do
+    plain = Module.new do
+      def self.encode(text) = text
+      def self.decode(text) = text
+    end
+
+    expect { armory::Encoder.versioned(newest, Class.new(armory::Encoder)) }.to raise_error(armory::Encoder::ConfigurationError, /no key/)
+    expect { armory::Encoder.versioned(newest, plain) }.to raise_error(armory::Encoder::ConfigurationError, /nonce:/)
+  end
+
+  it "does not count a member that answers nil as having decoded the value" do
+    silent = Module.new do
+      def self.encode(text, nonce: false) = text
+      def self.decode(_text, nonce: false) = nil
+    end
+
+    expect(armory::Encoder.versioned(silent).decode_versioned("x")).to eq([nil, nil])
+  end
+
   describe "Legacy, graphql-ruby's base64" do
     let(:legacy) { armory::Encoder::Legacy }
     let(:migrating) { armory::Encoder.versioned(newest, legacy) }
@@ -68,7 +87,7 @@ RSpec.describe "Versioned encoders" do
     it "refuses base64 that does not hold printable text" do
       invalid { legacy.decode(Base64.strict_encode64("\x00\xFF binary".b)) }
       invalid { legacy.decode("%%%") }
-      invalid { legacy.decode("") }
+      ["=", "==", "===", ""].each { |text| invalid { legacy.decode(text) } }
     end
   end
 

@@ -11,11 +11,7 @@ module GraphQL
         def initialize(encoders)
           raise ConfigurationError, "a versioned encoder needs at least one encoder" if encoders.empty?
 
-          encoders.each do |encoder|
-            next if %i[encode decode].all? { |name| encoder.respond_to?(name) }
-
-            raise ConfigurationError, "#{encoder.inspect} cannot be versioned: it must respond to encode and decode"
-          end
+          encoders.each { |encoder| check(encoder) }
           @encoders = encoders.freeze
         end
 
@@ -33,13 +29,33 @@ module GraphQL
         # The data and the encoder that decoded it, or `[nil, nil]`, so the app can treat old values differently.
         def decode_versioned(text, nonce: false)
           encoders.each do |encoder|
-            return [encoder.decode(text, nonce: nonce), encoder]
+            data = encoder.decode(text, nonce: nonce)
+            return [data, encoder] if data.is_a?(String)
           rescue ConfigurationError
             raise
           rescue StandardError
             next
           end
           [nil, nil]
+        end
+
+        private
+
+        # Fails at boot for a member that would otherwise refuse every value at request time.
+        def check(encoder)
+          unless %i[encode decode].all? { |name| encoder.respond_to?(name) }
+            raise ConfigurationError, "#{encoder.inspect} cannot be versioned: it must respond to encode and decode"
+          end
+          unless %i[encode decode].all? { |name| accepts_nonce?(encoder.method(name)) }
+            raise ConfigurationError, "#{encoder.inspect} cannot be versioned: encode and decode must accept `nonce:`"
+          end
+          return unless encoder.respond_to?(:key) && encoder.respond_to?(:tag) && encoder.key.nil?
+
+          raise ConfigurationError, "#{encoder.inspect} cannot be versioned: it has no key"
+        end
+
+        def accepts_nonce?(method)
+          method.parameters.any? { |kind, name| kind == :keyrest || (%i[key keyreq].include?(kind) && name == :nonce) }
         end
       end
 
