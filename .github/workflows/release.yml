@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
       - name: Check that the tag is on main
         run: |
-          git fetch --no-tags origin main
+          # fetch-depth: 0 already fetched every branch; a new fetch has no credentials (persist-credentials: false).
           if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
             echo "Tag ${GITHUB_REF_NAME} points to a commit that is not on main" >&2
             exit 1
