@@ -290,7 +290,7 @@ Releases are published from GitHub Actions with RubyGems Trusted Publishing (`.g
 git tag v0.1.0.pre2 && git push origin v0.1.0.pre2
 ```
 
-The workflow checks that the tag matches the version, runs the specs and pushes the gem. The `release` environment can require a maintainer's approval first.
+The workflow checks that the tag matches the version, runs the specs and pushes the gem. It only publishes a tag on a commit of `main`. The `release` environment can require a maintainer's approval first (on a public repository, or a private one on a paid GitHub plan).
 
 ## Roadmap
 

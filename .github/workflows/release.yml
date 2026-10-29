@@ -3,7 +3,8 @@ name: Release
 # Publishes the gem to RubyGems.org with Trusted Publishing (OIDC): no API key is stored and no OTP is asked.
 # To release: bump GraphQL::Armory::VERSION on main, then push the matching tag:
 #   git tag v0.1.0.pre2 && git push origin v0.1.0.pre2
-# The `release` environment can require a maintainer's approval before the push runs.
+# Only a tag on a commit of main publishes. The `release` environment can require a maintainer's approval
+# before the push runs (on a public repository, or a private one on a paid GitHub plan).
 # One-time setup on rubygems.org: graphql-armory > Trusted publishers > Create, with
 # owner `israelb`, repository `graphql-armory`, workflow `release.yml`, environment `release`.
 on:
@@ -18,13 +19,21 @@ jobs:
     runs-on: ubuntu-24.04
     environment: release
     permissions:
-      contents: write # lets `rake release` push the tag; it skips that step when the tag already exists
+      contents: read # the tag already exists, so `rake release` never pushes to git
       id-token: write # Trusted Publishing: exchanges the GitHub identity for a short-lived RubyGems token
     steps:
       # Actions are pinned to commits because this job can publish the gem.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Check that the tag is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Tag ${GITHUB_REF_NAME} points to a commit that is not on main" >&2
+            exit 1
+          fi
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "3.4"
