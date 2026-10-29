@@ -4,7 +4,7 @@ Open-source extensions for [graphql-ruby](https://github.com/rmosolgo/graphql-ru
 
 The first module is **authorization**: Pundit and CanCanCan integration with deny-by-default coverage, a schema audit for CI, IDOR-safe lookups, scoped lists and connections, and visibility driven by the same policies.
 
-> **Status: design phase.** Nothing is implemented or published yet. See [`docs/`](docs/README.md) for the research, the design proposal and its review.
+> **Status: early development.** The authorization core exists; nothing is published yet. Research and design notes are kept outside this repository.
 
 ## Roadmap
 
@@ -21,7 +21,7 @@ The first module is **authorization**: Pundit and CanCanCan integration with den
 | 9 | `@defer` / `@stream` |
 | 10 | Dashboard |
 
-Each module starts with its own research before design. The feasibility study ([`docs/feasibility.md`](docs/feasibility.md)) found all ten buildable on unmodified graphql-ruby.
+Each module starts with its own research before design. The feasibility study found all ten buildable on unmodified graphql-ruby.
 
 ## Related gems
 
