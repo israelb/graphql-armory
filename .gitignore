@@ -6,3 +6,4 @@
 *.gem
 /vendor/bundle/
 .rspec_status
+/odd/

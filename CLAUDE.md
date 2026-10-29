@@ -1,6 +1,6 @@
 # graphql-armory: working rules
 
-Open-source extensions for graphql-ruby (authorization first). Read `README.md` for what the gem does and `odd/tasks/graphql-armory-mvp.md` for the specs, tasks and decisions log.
+Open-source extensions for graphql-ruby (authorization first). Read `README.md` for what the gem does and `../graphql-armory-docs/odd/tasks/graphql-armory-mvp.md` (outside the repo, private) for the specs, tasks and decisions log.
 
 ## Hard rules
 
@@ -68,4 +68,4 @@ Correction bounds: one batch fixes every reported blocker, then one recheck limi
 - Policies and abilities must answer `true`, `false` or `nil`. Anything else raises `AdapterError`.
 - A `loads:` or `find_by:` lookup always goes through the user's scope: a foreign id and a missing id must look identical.
 - `to_definition` builds an ordinary context, not `NullContext`: a full-schema dump needs `context: { armory_full_schema: true }`.
-- The task log in `odd/tasks/graphql-armory-mvp.md` is the source of truth for decisions that differ from the design proposal (kept outside the repo, in `../graphql-armory-docs`).
+- The task log in `../graphql-armory-docs/odd/tasks/graphql-armory-mvp.md` is the source of truth for decisions that differ from the design proposal. It and every other internal document (design, research, verification reports) stay outside the repo; never commit them.
