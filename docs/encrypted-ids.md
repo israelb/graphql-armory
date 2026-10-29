@@ -51,7 +51,7 @@ With the [authorization module](authorization.md), an ID the encoder refuses in 
 |---|---|
 | `key "..."` | Required. At least 32 bytes. Subkeys for IDs and cursors are derived from it with HKDF. |
 | `tag "v1"` | Optional authenticated data. An ID made with another tag does not decode: use it to separate apps or environments sharing a key. |
-| `codec MyCodec` | Optional. How the encrypted bytes become text; anything with `encode(bytes)` and `decode(text)`. Default: base64url without padding. |
+| `codec MyCodec` | Optional. How the encrypted bytes become text; anything with `encode(bytes)` and `decode(text)`. Default: base64url without padding. Any error it raises while decoding becomes `InvalidError`. |
 
 | Call | Returns |
 |---|---|
@@ -59,7 +59,7 @@ With the [authorization module](authorization.md), an ID the encoder refuses in 
 | `encode(text, nonce: true)` | A cursor, different every time. |
 | `decode(id)` / `decode(cursor, nonce: true)` | The text, or raises `GraphQL::Armory::Encoder::InvalidError` (a `GraphQL::ExecutionError`, so clients see `Invalid ID or cursor`). |
 
-A subclass inherits `key`, `tag` and `codec`, and can override any of them.
+A subclass inherits `key`, `tag` and `codec`, and can override any of them. Passing `nil` to any of them raises `ConfigurationError`, so an unset environment variable fails at boot instead of being ignored.
 
 ## Guarantees and limits
 
@@ -69,3 +69,4 @@ Covered by `spec/security/encoder_spec.rb` on both engines: round trips, tamperi
 - **Encryption hides the ID; it does not authorize.** Whoever obtained a valid ID can still send it. What they may read is decided by the authorization module.
 - IDs are longer than base64 ones: 28 extra bytes (nonce and authentication tag) before encoding.
 - graphql-ruby decodes an `after:` cursor once per selection that uses it, so a tampered cursor can produce the same error more than once.
+- graphql-ruby's own `node(id:)` field does not rescue errors: a refused ID answers `Invalid ID or cursor` while a missing record answers `null`. Look IDs up through `loads:` (or rescue `InvalidError` in `object_from_id`) when that difference matters.

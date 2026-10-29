@@ -102,6 +102,34 @@ RSpec.describe GraphQL::Armory::Encoder do
       expect(child.decode(child.encode("Invoice/42"))).to eq("Invoice/42")
     end
 
+    it "refuses a nil key, tag or codec instead of silently keeping the previous one" do
+      %i[key tag codec].each do |setting|
+        expect { Class.new(described_class) { public_send(setting, nil) } }
+          .to raise_error(GraphQL::Armory::Encoder::ConfigurationError)
+      end
+    end
+
+    it "uses a key changed later in the parent, even in a subclass that already encoded" do
+      parent = encoder_with(key: key)
+      child = Class.new(parent)
+      old_id = child.encode("Invoice/42")
+      parent.key("n" * 32)
+
+      invalid { child.decode(old_id) }
+      expect(parent.decode(child.encode("Invoice/42"))).to eq("Invoice/42")
+    end
+
+    it "turns any error of a custom codec into the same InvalidError" do
+      codecs = [->(text) { {}.fetch(text) }, ->(_text) {}, ->(_text) { 42 }, ->(_text) { raise "codec bug" }].map do |decoder|
+        Module.new do
+          define_singleton_method(:encode) { |bytes| bytes.unpack1("H*") }
+          define_singleton_method(:decode) { |text| decoder.(text) }
+        end
+      end
+
+      codecs.each { |codec| invalid { encoder_with(key: key, codec: codec).decode("zzzz") } }
+    end
+
     it "writes the bytes with a custom codec" do
       hex = Module.new do
         def self.encode(bytes) = bytes.unpack1("H*")
@@ -152,6 +180,28 @@ RSpec.describe GraphQL::Armory::Encoder do
 
       # graphql-ruby decodes the cursor once per selection (nodes, pageInfo), so the error may repeat.
       expect([result.dig("data", "items", "nodes"), result["errors"].map { |error| error["message"] }.uniq]).to eq([nil, ["Invalid ID or cursor"]])
+    end
+
+    it "paginates an ActiveRecord relation, and a tampered cursor returns no page" do
+      Dummy::World.build
+      invoice = Class.new(GraphQL::Schema::Object) do
+        graphql_name "InvoiceRow"
+        field :number, String, null: false
+      end
+      query = Class.new(GraphQL::Schema::Object) do
+        graphql_name "Query"
+        field :invoices, invoice.connection_type, null: false, hash_key: :invoices
+      end
+      schema = Class.new(ArmoryEngine.base_schema) { query(query) }
+      schema.cursor_encoder(encoder)
+      run = lambda do |after|
+        execute_query(schema, "query($after: String) { invoices(first: 2, after: $after) { nodes { number } pageInfo { endCursor } } }",
+                      variables: { "after" => after }, root_value: { invoices: Invoice.order(:id) }).to_h
+      end
+      cursor = run.(nil).dig("data", "invoices", "pageInfo", "endCursor")
+
+      expect([run.(cursor).dig("data", "invoices", "nodes"), run.(tampered(cursor, 3)).dig("data", "invoices", "nodes")])
+        .to eq([[{ "number" => "B-1" }], nil])
     end
   end
 end

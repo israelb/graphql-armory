@@ -42,27 +42,32 @@ module GraphQL
       CIPHER = "aes-256-gcm"
 
       class << self
-        def key(value = nil)
-          return @key || (superclass.respond_to?(:key) ? superclass.key : nil) if value.nil?
-          raise ConfigurationError, "an Encoder key must be at least #{MINIMUM_KEY_BYTES} bytes (try SecureRandom.hex(32))" if value.bytesize < MINIMUM_KEY_BYTES
+        # The key, at least 32 bytes. With no argument, answers it (inherited from the parent class).
+        def key(*value)
+          return setting(:@key, nil) if value.empty?
 
-          @subkeys = nil
-          @key = value
+          secret = value.first
+          unless secret.is_a?(String) && secret.bytesize >= MINIMUM_KEY_BYTES
+            raise ConfigurationError, "an Encoder key must be a String of at least #{MINIMUM_KEY_BYTES} bytes (try SecureRandom.hex(32))"
+          end
+
+          @key = secret
         end
 
         # Authenticated data: an ID made with another tag does not decode. Use it to separate apps or versions.
-        def tag(value = nil)
-          return @tag || (superclass.respond_to?(:tag) ? superclass.tag : "") if value.nil?
+        def tag(*value)
+          return setting(:@tag, "") if value.empty?
+          raise ConfigurationError, "an Encoder tag cannot be nil" if value.first.nil?
 
-          @subkeys = nil
-          @tag = value.to_s
+          @tag = value.first.to_s
         end
 
         # Turns the encrypted bytes into text and back. Anything with `encode(bytes)` and `decode(text)`.
-        def codec(value = nil)
-          return @codec || (superclass.respond_to?(:codec) ? superclass.codec : URLSafeBase64) if value.nil?
+        def codec(*value)
+          return setting(:@codec, URLSafeBase64) if value.empty?
+          raise ConfigurationError, "an Encoder codec must respond to encode and decode" unless %i[encode decode].all? { |name| value.first.respond_to?(name) }
 
-          @codec = value
+          @codec = value.first
         end
 
         def encode(text, nonce: false)
@@ -95,22 +100,32 @@ module GraphQL
           raise InvalidError if !nonce && !OpenSSL.fixed_length_secure_compare(iv, derived_nonce(plain))
 
           plain.force_encoding(Encoding::UTF_8)
-        rescue ArgumentError, OpenSSL::Cipher::CipherError
+        rescue ConfigurationError, InvalidError
+          raise
+        rescue StandardError
+          # Whatever the codec, OpenSSL or the input raise, the client learns only that it did not decode.
           raise InvalidError
         end
 
         private
 
+        def setting(ivar, default)
+          return instance_variable_get(ivar) if instance_variable_defined?(ivar)
+
+          superclass.respond_to?(:key) ? superclass.send(:setting, ivar, default) : default
+        end
+
         def derived_nonce(bytes)
           OpenSSL::HMAC.digest("SHA256", subkey(:id, :nonce), tag.b + "\0".b + bytes)[0, NONCE_BYTES]
         end
 
-        # Separate keys per purpose and use, derived once from the configured key with HKDF.
+        # Separate keys per purpose and use, derived with HKDF and cached by the secret they come from, so a key
+        # changed later (here or in a parent class) is used at once.
         def subkey(purpose, use)
           secret = key or raise ConfigurationError, "#{name || "Encoder"} has no key: call `key` in its class body"
           @subkeys ||= {}
-          @subkeys[[purpose, use]] ||= OpenSSL::KDF.hkdf(secret, salt: "graphql-armory", info: "#{purpose}/#{use}",
-                                                                 length: 32, hash: "SHA256")
+          @subkeys[[secret, purpose, use]] ||= OpenSSL::KDF.hkdf(secret, salt: "graphql-armory", info: "#{purpose}/#{use}",
+                                                                         length: 32, hash: "SHA256")
         end
       end
     end
