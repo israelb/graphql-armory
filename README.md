@@ -18,7 +18,7 @@ The first module is **authorization**. It plugs [Pundit](https://github.com/varv
 ## Install
 
 ```ruby
-gem "graphql-armory"
+gem "graphql-armory", "~> 0.1.0.pre"   # a prerelease: `gem install graphql-armory --pre`
 gem "pundit"      # or "cancancan", whichever you use
 ```
 
@@ -285,7 +285,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Published as 0.1.0.pre (prerelease). |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |

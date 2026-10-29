@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0.pre (2026-10-29)
+
+First prerelease on RubyGems: Pundit and CanCanCan adapters, deny-by-default coverage, scoped lists and lookups, schema audit,
+visibility, argument rules, mutations and resolvers, interfaces and unions. The entries below describe it.
+
 - Interfaces and unions: an interface field with no rule is denied when an implementing type is a bypass, and the audit
   reports it; `include Base` in an interface or union is refused with a pointer to the possible types.
 
