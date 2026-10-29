@@ -227,6 +227,15 @@ end
 - **`loads:` works on top-level arguments only.** Inside an input object it is not scoped, and the engines disagree (the interpreter raises, `Execution::Next` yields nil).
 - **Do not put `authorize:` on a mutation field or on payload fields**; the mutation's own rule is the one that counts. A subclass that redeclares `authorize :none` is open to everyone, on purpose.
 
+## Interfaces and unions
+
+They are never authorized themselves: graphql-ruby only runs `authorized?` on the concrete type, and every path ends there (root field, association, each list item, `loads:`, union and interface resolution). A foreign object in a list of a union or an interface comes back `null`, like in any other list. So `include Base` in an interface or a union is refused with a message pointing to the possible types; declare the rule on each concrete type.
+
+What an interface adds is its fields, declared once and resolved on many types:
+
+- A field with no rule is **covered** by the types that implement the interface, unless one of them is a bypass (`authorize :none`). Then the field is **denied for every implementer**, because it cannot tell which type it runs on, and the audit reports it (`:field_without_rule`, for example `Document.number`). Declare it (`authorize: :none, reason:` or an action) to fix it.
+- `visible_when:` is not supported on an interface field; put it on the concrete types' fields.
+
 ## Telemetry
 
 Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypassed`; data holds only `type`, `action` and `reason`, never record attributes.
@@ -235,7 +244,7 @@ Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypass
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).
 
-Not covered yet: interfaces and unions, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
+Not covered yet: decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
 
 ## Engines
 
@@ -274,7 +283,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: interfaces and unions, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |

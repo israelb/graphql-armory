@@ -37,6 +37,7 @@ module GraphQL
           end
 
           audited_types(schema).each { |type| audit_type(type, findings) }
+          schema.types.each_value { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
           findings.report
         end
 
@@ -68,6 +69,18 @@ module GraphQL
             check(path, model, rule, findings, reported) if model
             check(path, model, Rule.new(rule.visible_when, policy: rule.policy), findings, reported) if model && rule.visible_when
             audit_fields(type, findings, model: model, bypassed: false, reported: reported)
+          end
+        end
+
+        # An interface field with no rule is denied when any implementer is a bypass; the fix is to declare it.
+        def audit_interface(interface, schema, findings)
+          return unless Integration.bypassed_implementer?(interface, schema)
+
+          interface.fields.each_value do |field|
+            next unless field.respond_to?(:armory_declared) && field.armory_declared.nil?
+
+            findings.problem(:field_without_rule, "#{interface.graphql_name}.#{field.original_name}",
+                             "declares no rule and an implementing type is bypassed, so it is denied")
           end
         end
 

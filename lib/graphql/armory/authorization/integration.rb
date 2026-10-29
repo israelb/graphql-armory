@@ -62,6 +62,15 @@ module GraphQL
           record if record && allowed?(record, rule, context)
         end
 
+        # An interface field with no rule of its own cannot name the type it is resolved on, so it is only
+        # covered when no implementer is a bypass: a field on a bypassed type is denied, and so is this one.
+        def self.bypassed_implementer?(interface, schema)
+          schema.possible_types(interface).any? do |type|
+            rule = type.armory_rule if type.respond_to?(:armory_rule)
+            rule && rule.none? && !rule.covers_fields?
+          end
+        end
+
         # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.
         def self.allowed?(subject, rule, context)
           store = context.namespace(:armory)

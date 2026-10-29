@@ -25,7 +25,7 @@ module GraphQL
             base.include(Integration::Argument)
           else
             raise ArgumentError,
-                  "GraphQL::Armory::Authorization::Base can only be included in a GraphQL object, field, argument, resolver or mutation class, not #{base}"
+                  "GraphQL::Armory::Authorization::Base can only be included in a GraphQL object, field, argument, resolver or mutation class, not #{base}. Interfaces and unions are not authorized themselves: declare the rule on their possible types"
           end
         end
       end

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Interfaces and unions: an interface field with no rule is denied when an implementing type is a bypass, and the audit
+  reports it; `include Base` in an interface or union is refused with a pointer to the possible types.
+
 - Mutations and resolvers: `authorize :action, model:, on_denied:` on a mutation or resolver that includes `Base`. Denied by
   default when it declares no rule; the rule runs on the loaded records; `on_denied: :errors` answers as data;
   `covers_fields: true` lets a payload type be covered by its mutation. The audit lists mutations with no rule.

@@ -62,7 +62,7 @@ module GraphQL
           end
 
           def authorized?(object, args, context)
-            rule = armory_rule_for(owner)
+            rule = armory_rule_for(owner, context)
             return false if rule.nil?
 
             (rule == :covered || Integration.allowed?(object, rule, context)) && super
@@ -77,12 +77,14 @@ module GraphQL
 
           # A Rule to check on the parent object, :covered when the type's own check already did it,
           # or nil to deny.
-          def armory_rule_for(type)
+          def armory_rule_for(type, context)
             type_rule = type.armory_rule if type.respond_to?(:armory_rule)
 
             case @armory_declared
             when nil
-              return :covered if !type.respond_to?(:armory_rule) || armory_resolver?
+              return :covered if armory_resolver?
+              return Integration.bypassed_implementer?(type, context.schema) ? nil : :covered if type.respond_to?(:kind) && type.kind.interface?
+              return :covered unless type.respond_to?(:armory_rule)
 
               type_rule && (!type_rule.none? || type_rule.covers_fields?) ? :covered : nil
             when true
