@@ -1,6 +1,6 @@
 # graphql-armory: working rules
 
-Open-source extensions for graphql-ruby (authorization first). Read `README.md` for what the gem does.
+Open-source extensions for graphql-ruby, one module at a time. Read `README.md` for the module list and `docs/<module>.md` for what each one does.
 
 ## Hard rules
 
@@ -12,7 +12,7 @@ Open-source extensions for graphql-ruby (authorization first). Read `README.md` 
 
 ## Workflow per increment
 
-1. One branch off `main` (`feat/<name>`), one PR against `main`. Tests first (observe RED), then code, then docs (README, CHANGELOG, roadmap table).
+1. One branch off `main` (`feat/<name>`), one PR against `main`. Tests first (observe RED), then code, then docs (the module page in `docs/`, CHANGELOG, the Modules table in README).
 2. Run the suite on both engines and an older graphql before opening the PR:
    ```
    docker compose run --rm test bash bin/test                                              # interpreter, graphql 2.6
@@ -46,7 +46,7 @@ read `git diff origin/main <branch>`). Do NOT edit the repo or the graphql-ruby 
 Probe only in a scratch copy from `mktemp -d` under the system temp dir; run specs with
 `docker compose run --rm test bash bin/test <spec>` (env GRAPHQL_ARMORY_ENGINE=interpreter|next,
 GRAPHQL_VERSION="~> 2.6.0"); always cd into the scratch copy; remove it at the end and say so.
-Read first: <files>, <spec files>, the README section, design-proposal section <n>.
+Read first: <files>, <spec files>, the module page in `docs/`, design-proposal section <n>.
 Feature: <what it does>.
 Security requirement: <what must hold, in the user's words>.
 Try to BREAK it with inputs the existing specs do not cover: <numbered ideas>.
