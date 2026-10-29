@@ -188,7 +188,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit done. CanCanCan pending. Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: arguments, mutations, interfaces and unions, visibility driven by policies, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |
