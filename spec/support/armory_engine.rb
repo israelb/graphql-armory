@@ -3,7 +3,7 @@
 # Selects which graphql-ruby execution engine the whole suite runs on.
 #
 #   GRAPHQL_ARMORY_ENGINE=interpreter (default) -- the legacy Interpreter
-#   GRAPHQL_ARMORY_ENGINE=next                  -- Execution::Next (graphql >= 2.5.26)
+#   GRAPHQL_ARMORY_ENGINE=next                  -- Execution::Next (graphql >= 2.6.2)
 #
 # Both engines are first-class targets: CI runs the suite once per engine.
 #
@@ -28,6 +28,11 @@ module ArmoryEngine
     defined?(GraphQL::Execution::Next) ? true : false
   end
 
+  # The armory integration needs the fix for denied fields in Execution::Next (graphql 2.6.2).
+  def self.supported?
+    available? && GraphQL::Armory::Authorization::Integration::NEXT_SUPPORTED
+  end
+
   def self.base_schema
     Class.new(GraphQL::Schema) do
       use GraphQL::Execution::Next if ArmoryEngine.available?
@@ -43,8 +48,8 @@ module ArmoryEngine
     # Executes a query on the engine selected for this run.
     def execute_query(schema, query_string, **options)
       if ArmoryEngine.next?
-        unless ArmoryEngine.available?
-          raise "GRAPHQL_ARMORY_ENGINE=next needs graphql >= 2.5.26 (running #{GraphQL::VERSION})"
+        unless ArmoryEngine.supported?
+          raise "GRAPHQL_ARMORY_ENGINE=next needs graphql >= 2.6.2 (running #{GraphQL::VERSION})"
         end
 
         schema.execute_next(query_string, **options)
