@@ -24,7 +24,7 @@ Status: ✅ released, 🚧 in progress, ⬜ not started. Update this table in th
 | Order | Module | Status | Docs | Current limits |
 |---|---|---|---|---|
 | 1 | Authorization (Pundit, CanCanCan) | ✅ | [docs/authorization.md](docs/authorization.md) | Released in 0.1.0.pre2 (prerelease). Pundit and CanCanCan (the audit checks less with CanCanCan). Global IDs in `loads:` decoded through `object_from_id`; `loads:` inside input objects scoped with `include Base`. `Execution::Next` needs graphql >= 2.6.2. |
-| 2 | Encrypted, versioned IDs and cursors | 🚧 | | Design done; in development. |
+| 2 | Encrypted, versioned IDs and cursors | 🚧 | [docs/encrypted-ids.md](docs/encrypted-ids.md) | In development: `Encoder` done; versioning, default encoder and the IDs plugin to come. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | | Research not started. |
 | 4 | Rate limiting | ⬜ | | Research not started. |
 | 5 | Stable (keyset) connections | ⬜ | | Research not started. |

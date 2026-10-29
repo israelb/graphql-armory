@@ -78,11 +78,12 @@ module GraphQL
         end
 
         # `GlobalID.find`, graphql-ruby's documented `object_from_id`, raises for a missing record, and a
-        # decoder may raise for a malformed id. Both must answer like a record out of scope: nil.
+        # decoder may raise for a malformed id (ArgumentError, or the Encoder's InvalidError). All must answer like a
+        # record out of scope: nil.
         def self.decode(schema, id, context)
           schema.object_from_id(id, context)
         rescue StandardError => error
-          raise unless error.is_a?(ArgumentError) || error.class.name == "ActiveRecord::RecordNotFound"
+          raise unless error.is_a?(ArgumentError) || error.is_a?(Encoder::InvalidError) || error.class.name == "ActiveRecord::RecordNotFound"
 
           nil
         end
