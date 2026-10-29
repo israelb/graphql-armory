@@ -192,7 +192,8 @@ end
 ```
 
 - **`authorize: :manage`** asks the policy about the parent object when it is an instance of the model, otherwise about the model's class (a root field has no record, so write the action from the user). The model is the one the field's type wraps, or `model:` when it wraps none, as on a root field. A denial denies the whole field, with the usual null or error.
-- **Defaults are skipped.** graphql-ruby does not check an argument the client left at its default; sending `false` explicitly counts as using it.
+- **Defaults.** graphql-ruby does not check an argument the client left at its default, and the two engines disagree about it (the interpreter skips the check, `Execution::Next` applies the default), so a restricted argument with a `default_value:` is refused with an `ArgumentError`. Sending `false` explicitly counts as using the argument.
+- **Every argument class needs `Base`.** `argument_class` is not inherited: set it on your base field, and also on resolvers, input objects (for restricted arguments nested in a filter) and directives that need it.
 - **`visible_when:`** hides the argument like it hides a field: it is absent from introspection and from suggestions, and a query that uses it fails like an argument that never existed.
 - **`authorize: :none, reason:`** only declares and documents: the audit lists it with its reason.
 - `authorize: true` is refused on an argument, and an argument with no model to ask about raises `ConfigurationError`.

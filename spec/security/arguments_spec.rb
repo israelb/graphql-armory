@@ -127,4 +127,23 @@ RSpec.describe "Authorization of arguments" do
   it "refuses `authorize: true` on an argument instead of ignoring it" do
     expect { schema_for(:pundit, argument_options: { authorize: true }) }.to raise_error(ArgumentError, /authorize/)
   end
+
+  # Regression cases from the independent verification of this feature.
+  describe "options that would make the engines disagree or do nothing" do
+    def define(options)
+      run(schema_for(:pundit, argument_options: options), world.alice, "{ __type(name: \"Query\") { fields { args { name } } } }")
+    end
+
+    it "refuses a restricted argument with a default value, which the two engines would treat differently" do
+      expect { define(authorize: :manage, model: Invoice, default_value: true) }.to raise_error(ArgumentError, /default_value/)
+    end
+
+    it "allows a default value on an argument that only documents a bypass" do
+      expect { define(authorize: :none, reason: "public", default_value: true) }.not_to raise_error
+    end
+
+    it "refuses `authorize: false` instead of failing later at query time" do
+      expect { define(authorize: false, model: Invoice) }.to raise_error(ArgumentError, /authorize/)
+    end
+  end
 end

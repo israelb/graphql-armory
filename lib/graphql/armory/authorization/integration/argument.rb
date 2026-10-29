@@ -18,7 +18,15 @@ module GraphQL
         # class (a root field has no record). The model is the one the field's type wraps, or `model:`.
         module Argument
           def initialize(*args, authorize: nil, reason: nil, model: nil, visible_when: nil, **kwargs, &block)
-            raise ArgumentError, "an argument's `authorize:` is an action or :none, not #{authorize.inspect}" if authorize == true
+            unless [nil, :none].include?(authorize) || authorize.is_a?(Symbol)
+              raise ArgumentError, "an argument's `authorize:` is an action or :none, not #{authorize.inspect}"
+            end
+
+            if authorize && authorize != :none && kwargs.key?(:default_value)
+              raise ArgumentError,
+                    "a restricted argument cannot have a default_value: the interpreter skips the check for a default " \
+                    "and Execution::Next applies it, so the engines would disagree"
+            end
 
             @armory_declared = authorize
             @armory_reason = reason
