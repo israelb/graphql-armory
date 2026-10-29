@@ -10,4 +10,5 @@ module GraphQL
   end
 end
 
+require "graphql/armory/encoder"
 require "graphql/armory/authorization"

@@ -101,6 +101,19 @@ RSpec.describe "Global IDs in loads:" do
         expect(malformed.to_h).to eq(missing.to_h)
       end
 
+      it "denies an ID the Encoder refuses like a missing one" do
+        encoder = Class.new(GraphQL::Armory::Encoder) { key("k" * 32) }
+        schema = schema_for(adapter, decodes: false)
+        schema.define_singleton_method(:object_from_id) do |id, _context|
+          model_name, key = encoder.decode(id).split("/", 2)
+          Object.const_get(model_name).find_by(id: key)
+        end
+        tampered = encoder.encode("Invoice/#{world.a1.id}").reverse
+
+        expect([lookup(schema, tampered, world.alice).to_h, lookup(schema, encoder.encode("Invoice/0"), world.alice).to_h])
+          .to eq([{ "data" => { "invoiceByRef" => nil } }] * 2)
+      end
+
       it "still uses the id as the primary key when the schema decodes nothing" do
         result = lookup(schema_for(adapter, decodes: false), world.a1.id.to_s, world.alice)
 

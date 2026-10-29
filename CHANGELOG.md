@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Encrypted IDs and cursors, part 1: `GraphQL::Armory::Encoder` (AES-256-GCM, HKDF subkeys, stable IDs, random-nonce cursors, `key`, `tag`, `codec`). Works as `cursor_encoder` and inside `object_from_id`; an ID it refuses in `loads:` is answered like a missing record. See `docs/encrypted-ids.md`.
+
 ## 0.1.0.pre2 (2026-10-29)
 
 Closes the known gaps of the authorization module.
