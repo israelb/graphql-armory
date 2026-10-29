@@ -17,7 +17,9 @@ module IntegrationSchema
     end
   end
 
-  def self.build(adapter: :pundit, on_unauthorized: :null, type_action: :read, sinks: [], plugin: true)
+  # `flawed: false` leaves out what an audit must report: a type nobody protected, a type without
+  # policy, a field with no rule on a bypassed type, and a `loads:` that skips the scope.
+  def self.build(adapter: :pundit, on_unauthorized: :null, type_action: :read, sinks: [], plugin: true, flawed: true)
     armory = GraphQL::Armory::Authorization
 
     base_field = Class.new(GraphQL::Schema::Field) { include armory::Base }
@@ -46,12 +48,17 @@ module IntegrationSchema
 
     admin_invoice = Class.new(base_object) do
       graphql_name "AdminInvoice"
-      authorize :manage
+      authorize :manage, model: Invoice
       field :number, String, null: false
     end
 
+    forgotten = Class.new(GraphQL::Schema::Object) do
+      graphql_name "Forgotten"
+      field :secret, String, null: false
+    end
+
     ghost = Class.new(base_object) do
-      graphql_name "GhostThing"
+      graphql_name "Ghost"
       field :label, String, null: false, authorize: :none, reason: "no policy on purpose"
     end
 
@@ -61,7 +68,14 @@ module IntegrationSchema
       field :my_invoice, invoice, authorize: :none, reason: "test root field"
       field :my_admin_invoice, admin_invoice, authorize: :none, reason: "test root field"
       field :invoices, [invoice, { null: true }], null: false, authorize: :none, reason: "test root field"
-      field :ghost, ghost, authorize: :none, reason: "test root field"
+      if flawed
+        field :ghost, ghost, authorize: :none, reason: "test root field"
+        field :forgotten, forgotten, authorize: :none, reason: "test root field"
+        field :invoice_unscoped, invoice, authorize: :none, reason: "test root field", load_through_scope: false do
+          argument :invoice_id, "GraphQL::Types::ID", loads: invoice
+        end
+        field :no_rule, String, null: false
+      end
       field :invoices_connection, invoice.connection_type, null: false, authorize: :none, reason: "test root field"
       field :invoice, invoice, authorize: :none, reason: "looked up through the scope", find_by: :id do
         argument :id, "GraphQL::Types::ID"
@@ -70,7 +84,6 @@ module IntegrationSchema
         argument :invoice_id, "GraphQL::Types::ID", loads: invoice
       end
       field :ping, String, null: false, authorize: :none, reason: "health check"
-      field :no_rule, String, null: false
     end
 
     Class.new(ArmoryEngine.base_schema) do

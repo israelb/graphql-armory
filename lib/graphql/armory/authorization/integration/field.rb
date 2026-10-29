@@ -27,6 +27,12 @@ module GraphQL
             extension(Integration::FindBy, key: find_by) if find_by
           end
 
+          attr_reader :armory_declared, :armory_reason
+
+          def armory_load_through_scope?
+            @armory_load_through_scope
+          end
+
           def object_from_id(type, id, context)
             return super unless @armory_load_through_scope
 

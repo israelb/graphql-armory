@@ -1,0 +1,36 @@
+# frozen_string_literal: true
+
+module GraphQL
+  module Armory
+    module Authorization
+      class Audit
+        # What `rake graphql_armory:audit[YourSchema]` runs: prints the report and answers an exit status.
+        class Command
+          def initialize(out: $stdout)
+            @out = out
+          end
+
+          def call(schema_name)
+            return fail_with("Name the schema: rake graphql_armory:audit[YourSchema]") if schema_name.to_s.empty?
+
+            schema = Object.const_get(schema_name)
+            report = Audit.(schema)
+            @out.print(report)
+            report.ok? ? 0 : 1
+          rescue NameError => error
+            raise unless error.name.to_s == schema_name.to_s.split("::").last
+
+            fail_with("No schema named #{schema_name}")
+          end
+
+          private
+
+          def fail_with(message)
+            @out.puts(message)
+            1
+          end
+        end
+      end
+    end
+  end
+end
