@@ -2,6 +2,7 @@
 
 require "graphql/armory/authorization/integration/schema"
 require "graphql/armory/authorization/integration/object"
+require "graphql/armory/authorization/integration/find_by"
 require "graphql/armory/authorization/integration/field"
 require "graphql/armory/authorization/integration/base"
 
@@ -30,6 +31,27 @@ module GraphQL
           raise ConfigurationError,
                 "Execution::Next needs graphql >= #{NEXT_MINIMUM} (running #{GraphQL::VERSION}): " \
                 "a denied field crashes it in earlier versions"
+        end
+
+        # Narrows a list to what the user may see. Without a rule nothing is visible.
+        def self.scoped(items, rule, context)
+          return Adapters::Null.new.scope(nil, items, rule) if rule.nil?
+
+          configuration = configuration(context)
+          Scope.(items, rule, context, adapter: configuration.adapter, sinks: configuration.sinks)
+        end
+
+        # Looks an object up inside the user's scope, by primary key unless a key is given.
+        # What is out of scope and what does not exist look the same: nil.
+        def self.find(type, key, value, context)
+          unless type.respond_to?(:armory_model)
+            raise ConfigurationError,
+                  "#{type.graphql_name} cannot be looked up through a scope: " \
+                  "include GraphQL::Armory::Authorization::Base in its base class"
+          end
+
+          model = type.armory_model
+          scoped(model.all, type.armory_rule, context).find_by((key || model.primary_key) => value)
         end
 
         def self.allowed?(subject, rule, context)

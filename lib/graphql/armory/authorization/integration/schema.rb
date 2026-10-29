@@ -16,6 +16,16 @@ module GraphQL
               (superclass.armory_configuration if superclass.respond_to?(:armory_configuration))
           end
 
+          # `loads:` asks the schema which type an object is. For an object type the answer is known:
+          # the lookup went through that type's model. Abstract types and foreign objects are the app's call.
+          def resolve_type(type, object, context)
+            if !type.kind.abstract? && type.respond_to?(:armory_model) && object.is_a?(type.armory_model)
+              type
+            else
+              super
+            end
+          end
+
           def unauthorized_object(error)
             raise_denial(error)
             nil

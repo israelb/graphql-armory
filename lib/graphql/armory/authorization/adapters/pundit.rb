@@ -27,9 +27,9 @@ module GraphQL
           end
 
           def scope(user, items, rule)
-            return items if items.is_a?(Array) && items.empty? && rule.model.nil? && rule.policy.nil?
+            return items.select { |item| authorized?(user, item, rule) == true } if items.is_a?(Array)
 
-            policy = policy_class(rule, rule.model || sample(items))
+            policy = policy_class(rule, rule.model || items)
             scope_class = scope_constant(policy)
             raise MissingScopeError, "#{policy} has no Scope class" if scope_class.nil?
 
@@ -67,10 +67,6 @@ module GraphQL
           # Pundit reads a Symbol as a model name but a String as a plain object.
           def normalize(subject)
             subject.is_a?(String) ? subject.to_sym : subject
-          end
-
-          def sample(items)
-            items.is_a?(Array) ? items.first : items
           end
 
           # Looks the Scope up through the policy's ancestors but never in Object, so a

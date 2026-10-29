@@ -96,6 +96,10 @@ RSpec.describe GraphQL::Armory::Authorization::Adapters::Pundit do
       expect { adapter.scope(world.alice, [Ghost.new], read) }.to raise_error(Pundit::NotDefinedError)
     end
 
+    it "filters an array by authorizing each element" do
+      expect(adapter.scope(world.alice, [world.a1, world.b1, world.a2], read)).to eq([world.a1, world.a2])
+    end
+
     it "leaves an empty array empty" do
       expect(adapter.scope(world.alice, [], read)).to eq([])
     end

@@ -16,11 +16,28 @@ module GraphQL
         # graphql-ruby hands `authorized?` the application object, not the type instance, so the type
         # whose rule applies is the one that owns the field.
         module Field
-          def initialize(*args, authorize: nil, reason: nil, **kwargs, &block)
+          # `find_by: :id` looks the object up inside the user's scope instead of calling the resolver.
+          # `loads:` arguments also load through the scope unless `load_through_scope: false`.
+          def initialize(*args, authorize: nil, reason: nil, find_by: nil, load_through_scope: true, **kwargs, &block)
             @armory_declared = authorize
             @armory_reason = reason
+            @armory_load_through_scope = load_through_scope
             Rule.none(reason: reason) if authorize == :none
             super(*args, **kwargs, &block)
+            extension(Integration::FindBy, key: find_by) if find_by
+          end
+
+          def object_from_id(type, id, context)
+            return super unless @armory_load_through_scope
+
+            Integration.find(type, nil, id, context)
+          end
+
+          # A `loads:` id that is not found is answered like a denial, so the client cannot tell the two apart.
+          def load_application_object_failed(error)
+            return super unless @armory_load_through_scope
+
+            raise GraphQL::UnauthorizedError.new(object: nil, type: error.argument.loads, context: error.context)
           end
 
           def authorized?(object, args, context)

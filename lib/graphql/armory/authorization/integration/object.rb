@@ -28,6 +28,22 @@ module GraphQL
             Rule.new(action) if action
           end
 
+          # The model the type wraps: `authorize :read, model: Invoice`, else the constant named like the type.
+          def armory_model
+            declared = armory_rule&.model
+            return declared if declared.is_a?(Class)
+
+            Object.const_get(declared || name&.split("::")&.last || graphql_name)
+          rescue NameError
+            raise ConfigurationError,
+                  "cannot tell which model #{graphql_name} wraps: declare it with `authorize :read, model: YourModel`"
+          end
+
+          # Runs before pagination, so connections page and count the scoped list.
+          def scope_items(items, context)
+            super(Integration.scoped(items, armory_rule, context), context)
+          end
+
           def authorized?(object, context)
             rule = armory_rule
             return false if rule.nil?

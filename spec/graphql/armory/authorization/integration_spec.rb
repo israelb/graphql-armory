@@ -26,10 +26,10 @@ RSpec.describe "GraphQL::Armory::Authorization integration" do
       expect(result["errors"]).to be_nil
     end
 
-    it "authorizes every item of a list on its own" do
+    it "scopes a list before it authorizes each item" do
       result = run("{ invoices { number } }", user: world.alice, invoices: [world.a1, world.b1, world.a2])
 
-      expect(result["data"]["invoices"]).to eq([{ "number" => "A-1" }, nil, { "number" => "A-2" }])
+      expect(result["data"]["invoices"]).to eq([{ "number" => "A-1" }, { "number" => "A-2" }])
       expect(result["errors"]).to be_nil
     end
 
