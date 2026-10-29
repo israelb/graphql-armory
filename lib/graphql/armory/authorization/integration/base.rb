@@ -18,9 +18,11 @@ module GraphQL
             base.extend(Integration::Object)
           elsif base <= GraphQL::Schema::Field
             base.include(Integration::Field)
+          elsif base <= GraphQL::Schema::Argument
+            base.include(Integration::Argument)
           else
             raise ArgumentError,
-                  "GraphQL::Armory::Authorization::Base can only be included in a GraphQL object or field class, not #{base}"
+                  "GraphQL::Armory::Authorization::Base can only be included in a GraphQL object, field or argument class, not #{base}"
           end
         end
       end

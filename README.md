@@ -174,6 +174,29 @@ Things to know:
 
 Visibility is computed per query (and memoized inside it). Role-based profile caching across requests is graphql-ruby's `Schema::Visibility` feature and is not wrapped here.
 
+## Arguments
+
+An argument with no rule is **covered by its field**: the field already decides whether the user may call it. Declare a rule on the arguments that must be stricter, and they are checked when the client sends them:
+
+```ruby
+class BaseArgument < GraphQL::Schema::Argument
+  include GraphQL::Armory::Authorization::Base
+end
+# in your base field: argument_class BaseArgument
+
+field :invoices, [InvoiceType], authorize: :none, reason: "narrowed by the scope" do
+  argument :include_internal, Boolean, required: false, authorize: :manage, model: Invoice
+  argument :tag, String, required: false, visible_when: :export, model: Invoice
+  argument :status, String, required: false, authorize: :none, reason: "public filter"
+end
+```
+
+- **`authorize: :manage`** asks the policy about the parent object when it is an instance of the model, otherwise about the model's class (a root field has no record, so write the action from the user). The model is the one the field's type wraps, or `model:` when it wraps none, as on a root field. A denial denies the whole field, with the usual null or error.
+- **Defaults are skipped.** graphql-ruby does not check an argument the client left at its default; sending `false` explicitly counts as using it.
+- **`visible_when:`** hides the argument like it hides a field: it is absent from introspection and from suggestions, and a query that uses it fails like an argument that never existed.
+- **`authorize: :none, reason:`** only declares and documents: the audit lists it with its reason.
+- `authorize: true` is refused on an argument, and an argument with no model to ask about raises `ConfigurationError`.
+
 ## Telemetry
 
 Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypassed`; data holds only `type`, `action` and `reason`, never record attributes.
@@ -182,7 +205,7 @@ Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypass
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).
 
-Not covered yet: arguments, mutations, interfaces and unions, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
+Not covered yet: mutations, interfaces and unions, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
 
 ## Engines
 
@@ -221,7 +244,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: arguments, mutations, interfaces and unions, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: mutations, interfaces and unions, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |

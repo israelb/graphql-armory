@@ -94,6 +94,7 @@ module GraphQL
             audit_declaration(field, path, findings, model: model, bypassed: bypassed, reported: reported)
             audit_visibility(field, path, findings, model: model, reported: reported)
             audit_loads(field, path, findings)
+            audit_arguments(field, path, findings, reported: reported)
           end
         end
 
@@ -115,6 +116,26 @@ module GraphQL
           else
             check(path.split(".").first, model, Rule.new(declared), findings, reported) if model
           end
+        end
+
+        # An argument that declares a rule is listed (a bypass with its reason) or checked like a field's action.
+        def audit_arguments(field, path, findings, reported:)
+          field.all_argument_definitions.each do |argument|
+            next unless argument.respond_to?(:armory_declared)
+
+            apath = "#{path}(#{argument.keyword})"
+            declared = argument.armory_declared
+            findings.bypass(apath, argument.armory_reason) if declared == :none
+            [declared, argument.armory_visible_when].compact.reject { |action| action == :none }.each do |action|
+              audit_argument_action(argument, apath, action, findings, reported)
+            end
+          end
+        end
+
+        def audit_argument_action(argument, path, action, findings, reported)
+          check(path.split(".").first, argument.armory_model, Rule.new(action, attribute: argument.keyword), findings, reported)
+        rescue ConfigurationError => error
+          findings.problem(:model, path, error.message)
         end
 
         def audit_loads(field, path, findings)

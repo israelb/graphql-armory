@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Argument rules: `authorize: :action`, `visible_when:` and `authorize: :none, reason:` on arguments. An argument with no rule
+  is covered by its field; a declared rule is checked when the client sends it and a denial denies the field.
+
 - Visibility driven by the policy: `authorize :read, visible_when: :export` on a type and `visible_when:` on a field hide
   them from introspection and error suggestions. A schema dump needs `context: { armory_full_schema: true }`.
 

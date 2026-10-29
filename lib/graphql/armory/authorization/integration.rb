@@ -4,6 +4,7 @@ require "graphql/armory/authorization/integration/schema"
 require "graphql/armory/authorization/integration/object"
 require "graphql/armory/authorization/integration/find_by"
 require "graphql/armory/authorization/integration/field"
+require "graphql/armory/authorization/integration/argument"
 require "graphql/armory/authorization/integration/base"
 
 module GraphQL
