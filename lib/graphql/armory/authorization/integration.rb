@@ -51,7 +51,13 @@ module GraphQL
           end
 
           model = type.armory_model
-          scoped(model.all, type.armory_rule, context).find_by((key || model.primary_key) => value)
+          rule = type.armory_rule
+          conditions = { (key || model.primary_key) => value }
+          return scoped(model.all, rule, context).find_by(conditions) unless rule&.scope == :in_memory
+
+          # An in-memory scope yields an Array, which cannot look one record up: find it, then ask the rule.
+          record = model.find_by(conditions)
+          record if record && allowed?(record, rule, context)
         end
 
         # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.

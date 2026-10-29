@@ -125,4 +125,44 @@ RSpec.describe GraphQL::Armory::Authorization::Adapters::CanCan do
       expect(adapter.check(Invoice, authorization::Rule.none(reason: "public"))).to eq([])
     end
   end
+
+  describe "options it does not understand" do
+    let(:ability) { adapter.actor(context_for(world.alice)) }
+
+    it "refuses a policy: instead of ignoring it" do
+      rule = authorization::Rule.new(:read, policy: Object)
+
+      expect { adapter.authorized?(ability, world.a1, rule) }
+        .to raise_error(authorization::ConfigurationError, /policy:/)
+    end
+
+    it "refuses a scope: it does not support, such as a typo" do
+      rule = authorization::Rule.new(:read, scope: :inmemory)
+
+      expect { adapter.scope(ability, Invoice.all, rule) }
+        .to raise_error(authorization::ConfigurationError, /:inmemory/)
+    end
+
+    it "reports them in the audit" do
+      rule = authorization::Rule.new(:read, policy: Object, scope: :bogus)
+
+      expect(adapter.check(Invoice, rule).size).to eq(2)
+    end
+  end
+
+  describe "errors" do
+    it "does not describe the model's columns when a block-only rule cannot be scoped" do
+      ability = BlockAbility.new(world.alice)
+
+      expect { adapter.scope(ability, Invoice.all, read) }
+        .to raise_error(authorization::MissingScopeError) { |error| expect(error.message).not_to match(/integer|internal_notes/) }
+    end
+
+    it "does not turn an error raised inside an ability block into a scope problem" do
+      ability = Class.new { include CanCan::Ability }.new
+      ability.can(:read, Invoice) { |_invoice| raise CanCan::AccessDenied }
+
+      expect { adapter.scope(ability, [world.a1], read) }.to raise_error(CanCan::AccessDenied)
+    end
+  end
 end

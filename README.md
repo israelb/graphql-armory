@@ -127,15 +127,15 @@ Same schema, different adapter. Your types and fields do not change:
 use GraphQL::Armory::Authorization, adapter: :cancan
 ```
 
-The actor is `context[:current_ability]`, or `Ability.new(context[:current_user])` (pass `Adapters::CanCan.new(ability_class: MyAbility)` for another class). It is built once per query.
+The actor is `context[:current_ability]` (it wins over `current_user`), or `Ability.new(context[:current_user])` (pass `Adapters::CanCan.new(ability_class: MyAbility)` for another class). It is built once per query.
 
 | Question | CanCanCan call |
 |---|---|
 | Can this object be seen? | `ability.can?(:read, object)` |
-| Can this field be seen? | `ability.can?(:manage, object, :internal_notes)`: the attribute is passed, because `can :read, User, [:username]` makes `can?(:read, user)` true for the whole object |
+| Can this field be seen? | `ability.can?(:manage, object, :internal_notes)` for a field that declares `authorize: :manage`: the attribute is passed, because `can :read, User, [:username]` makes `can?(:read, user)` true for the whole object |
 | Which items of a list? | `Model.accessible_by(ability, :read)`, still a paginable relation; Arrays are filtered with `can?` |
 
-**Block-only rules.** `can(:read, Invoice) { |i| ... }` cannot be turned into SQL, so `accessible_by` fails. The adapter raises `MissingScopeError` instead of guessing. To accept the cost, declare it on the type: `authorize :read, scope: :in_memory`. Lists are then filtered with `can?` one by one and efficient pagination is lost.
+**Block-only rules.** `can(:read, Invoice) { |i| ... }` cannot be turned into SQL, so `accessible_by` fails. The adapter raises `MissingScopeError` instead of guessing. To accept the cost, declare it on the type: `authorize :read, scope: :in_memory`. Lists are then filtered with `can?` one by one and efficient pagination is lost; `find_by:` and `loads:` find the record and then ask `can?`. Fields covered by the type's rule are not asked about their attribute: give the ones an attribute rule must hide their own `authorize: :action`. Options the adapter does not understand (`policy:`, another `scope:`) raise `ConfigurationError`.
 
 **The audit covers less.** It still reports missing rules, bypasses and unscoped `loads:`, but not whether the `Ability` grants the action: abilities depend on the user.
 

@@ -67,4 +67,32 @@ RSpec.describe "Authorization with CanCanCan" do
       expect(result.dig("data", "invoices").map { |invoice| invoice["number"] }).to eq(%w[A-1])
     end
   end
+
+  describe "a block-only rule on a type that opted in to scope: :in_memory" do
+    let(:schema) do
+      built = IntegrationSchema.build(adapter: GraphQL::Armory::Authorization::Adapters::CanCan.new(ability_class: BlockAbility), flawed: false)
+      built.get_type("Invoice").authorize :read, scope: :in_memory
+      built
+    end
+
+    it "lists only the user's objects" do
+      result = ask(world.alice, "{ invoices { number } }", schema: schema, invoices: Invoice.order(:id))
+
+      expect(result.dig("data", "invoices").map { |invoice| invoice["number"] }).to eq(%w[A-1 A-2])
+    end
+
+    it "looks an object up with find_by: a foreign id answers like a missing one" do
+      query = "query($id: ID!) { invoice(id: $id) { number } }"
+      answer = ->(id) { ask(world.alice, query, schema: schema, variables: { "id" => id.to_s }) }
+
+      expect([answer.(world.a1.id).dig("data", "invoice", "number"), answer.(world.b1.id)]).to eq(["A-1", answer.(999_999)])
+    end
+
+    it "loads an argument: a foreign id answers like a missing one" do
+      query = "query($id: ID!) { invoiceViaRef(invoiceId: $id) { number } }"
+      answer = ->(id) { ask(world.alice, query, schema: schema, variables: { "id" => id.to_s }) }
+
+      expect([answer.(world.a1.id).dig("data", "invoiceViaRef", "number"), answer.(world.b1.id)]).to eq(["A-1", answer.(999_999)])
+    end
+  end
 end
