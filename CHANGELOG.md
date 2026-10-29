@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `loads:` inside input objects: `include GraphQL::Armory::Authorization::Base` in the base input object loads them through
+  the user's scope; the audit reports input objects whose `loads:` skip it.
+
 - Audit of interfaces: an interface field is reported once, on the interface that declares it; `authorize: true` on an
   interface field and interface fields whose field class lacks `Base` (such as Relay `Node.id`) on a bypassed implementer
   are reported.

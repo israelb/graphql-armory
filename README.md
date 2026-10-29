@@ -97,7 +97,7 @@ field :invoice_via_ref, InvoiceType, authorize: :none, reason: "loaded through t
 end
 ```
 
-`find_by:` and `loads:` look the record up **inside the user's scope**, so another tenant's ID answers exactly like a missing one. Opt out of the scope for a `loads:` only on purpose, with `load_through_scope: false`; the audit lists it.
+`find_by:` and `loads:` (also inside input objects whose base class includes `Base`) look the record up **inside the user's scope**, so another tenant's ID answers exactly like a missing one. Opt out of the scope for a `loads:` only on purpose, with `load_through_scope: false`; the audit lists it.
 
 **Global IDs.** When your schema defines `object_from_id` (Relay global IDs), `loads:` decodes the id with it, refuses a record of another model, and looks the record up again inside the scope (one extra query per load). Without `object_from_id`, the id is the primary key. `object_from_id` must return the record itself, not a lazy value: a lazy value is denied. A decoder that raises `ActiveRecord::RecordNotFound` (like `GlobalID.find`) or `ArgumentError` (a malformed id) is answered like a missing record; other errors propagate. `loads:` of an interface or union (for example `Types::Node`) raises `ConfigurationError`: load a concrete type. Composite primary keys are not supported.
 
@@ -226,7 +226,7 @@ end
 - An unknown `on_denied:` raises `ArgumentError`; a mutation with a rule but no model raises `ConfigurationError`.
 - **Class-level answers are weak.** With no loaded record of the model (no `loads:`, an empty `loads: [ID]`, or a `loads:` of another type) the rule is asked about the model's class: CanCan answers true for anyone holding the right, and a Pundit policy that reads `record` attributes raises. Load the record you are authorizing.
 - **`ready?` runs before authorization** (and, on the interpreter, before a failing `loads:`). Keep it free of side effects.
-- **`loads:` works on top-level arguments only.** Inside an input object it is not scoped, and the engines disagree (the interpreter raises, `Execution::Next` yields nil).
+- **`loads:` inside an input object** goes through the scope only when your base input object includes `Base` (`class Types::BaseInputObject < GraphQL::Schema::InputObject; include GraphQL::Armory::Authorization::Base; end`); otherwise the audit reports it as `:unscoped_load`.
 - **Do not put `authorize:` on a mutation field or on payload fields**; the mutation's own rule is the one that counts. A subclass that redeclares `authorize :none` is open to everyone, on purpose.
 
 ## Interfaces and unions
@@ -288,7 +288,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Global IDs in `loads:` decoded through `object_from_id`. `Execution::Next` needs graphql >= 2.6.2. Published as 0.1.0.pre (prerelease). |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Global IDs in `loads:` decoded through `object_from_id`; `loads:` inside input objects scoped with `include Base`. All known gaps closed; ✅ with the next release. `Execution::Next` needs graphql >= 2.6.2. Published as 0.1.0.pre (prerelease). |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |

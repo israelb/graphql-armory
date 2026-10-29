@@ -21,11 +21,13 @@ module GraphQL
           elsif base <= GraphQL::Schema::Resolver
             base.extend(Integration::ResolverClass)
             base.include(Integration::Resolver)
+          elsif base <= GraphQL::Schema::InputObject
+            base.extend(Integration::InputObject)
           elsif base <= GraphQL::Schema::Argument
             base.include(Integration::Argument)
           else
             raise ArgumentError,
-                  "GraphQL::Armory::Authorization::Base can only be included in a GraphQL object, field, argument, resolver or mutation class, not #{base}. Interfaces and unions are not authorized themselves: declare the rule on their possible types"
+                  "GraphQL::Armory::Authorization::Base can only be included in a GraphQL object, field, argument, input object, resolver or mutation class, not #{base}. Interfaces and unions are not authorized themselves: declare the rule on their possible types"
           end
         end
       end

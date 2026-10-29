@@ -38,6 +38,7 @@ module GraphQL
 
           audited_types(schema).each { |type| audit_type(type, findings) }
           schema.types.each_value { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
+          schema.types.each_value { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
           findings.report
         end
 
@@ -189,6 +190,17 @@ module GraphQL
           field.all_argument_definitions.select(&:loads).each do |argument|
             name = GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)
             findings.problem(:unscoped_load, "#{path}(#{name})", "loads through the app's object_from_id, not through the user's scope")
+          end
+        end
+
+        # An input object loads its own `loads:` arguments; without Base they skip the user's scope.
+        def audit_input_loads(input, findings)
+          return if input.respond_to?(:armory_scoped_loads?)
+
+          input.all_argument_definitions.select(&:loads).each do |argument|
+            name = GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)
+            findings.problem(:unscoped_load, "#{input.graphql_name}(#{name})",
+                             "its input object class does not include Base, so it loads through the app's object_from_id, not the user's scope")
           end
         end
 
