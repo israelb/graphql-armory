@@ -187,9 +187,22 @@ module GraphQL
         def audit_loads(field, path, findings)
           return if field.armory_load_through_scope?
 
-          field.all_argument_definitions.select(&:loads).each do |argument|
-            name = GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)
+          opted_out_loads(field.all_argument_definitions, Set.new).each do |name|
             findings.problem(:unscoped_load, "#{path}(#{name})", "loads through the app's object_from_id, not through the user's scope")
+          end
+        end
+
+        # Execution::Next loads `loads:` nested in input objects with the field's loader, so a field's opt-out
+        # reaches them too: list them as `filter.invoice_id`. `seen` stops recursive input types.
+        def opted_out_loads(arguments, seen, prefix = nil)
+          arguments.flat_map do |argument|
+            name = [prefix, GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)].compact.join(".")
+            next [name] if argument.loads
+
+            input = argument.type.unwrap
+            next [] unless input.kind.input_object? && seen.add?(input)
+
+            opted_out_loads(input.all_argument_definitions, seen, name)
           end
         end
 
@@ -197,7 +210,8 @@ module GraphQL
         def audit_input_loads(input, findings)
           return if input.respond_to?(:armory_scoped_loads?)
 
-          input.all_argument_definitions.select(&:loads).each do |argument|
+          # A mutation's generated input (`from_resolver`) is loaded, scoped, by the mutation itself.
+          input.all_argument_definitions.select(&:loads).reject(&:from_resolver?).each do |argument|
             name = GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)
             findings.problem(:unscoped_load, "#{input.graphql_name}(#{name})",
                              "its input object class does not include Base, so it loads through the app's object_from_id, not the user's scope")

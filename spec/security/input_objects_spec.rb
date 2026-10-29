@@ -5,7 +5,7 @@
 RSpec.describe "loads: inside input objects" do
   let(:world) { Dummy::World.build }
 
-  def schema_for(adapter, scoped: true, on_unauthorized: :null)
+  def schema_for(adapter, scoped: true, on_unauthorized: :null, opt_out: false, mutation: false)
     armory = GraphQL::Armory::Authorization
     base_field = Class.new(GraphQL::Schema::Field) { include armory::Base }
     base_object = Class.new(GraphQL::Schema::Object) do
@@ -26,6 +26,11 @@ RSpec.describe "loads: inside input objects" do
     query = Class.new(base_object) do
       graphql_name "Query"
       authorize :none, reason: "root type; each field declares its own rule"
+      if opt_out
+        field :opt_out, invoice, authorize: :none, reason: "test", load_through_scope: false do
+          argument :filter, filter
+        end
+      end
       field :invoice_by_filter, invoice, authorize: :none, reason: "loads through the scope" do
         argument :filter, filter
       end
@@ -33,6 +38,24 @@ RSpec.describe "loads: inside input objects" do
     Class.new(ArmoryEngine.base_schema) do
       query query
       use armory, adapter: adapter, on_unauthorized: on_unauthorized
+      if mutation
+        base_argument = Class.new(GraphQL::Schema::Argument) { include armory::Base }
+        approve = Class.new(GraphQL::Schema::RelayClassicMutation) do
+          include armory::Base
+          graphql_name "ApproveInvoice"
+          argument_class base_argument
+          field_class base_field
+          object_class Class.new(base_object) { authorize :none, reason: "payload", covers_fields: true }
+          authorize :approve, model: Invoice
+          argument :invoice_id, GraphQL::Types::ID, loads: invoice
+          field :ok, GraphQL::Types::Boolean, null: false
+        end
+        mutation(Class.new(base_object) do
+          graphql_name "Mutation"
+          authorize :none, reason: "root type"
+          field :approve_invoice, mutation: approve
+        end)
+      end
     end
   end
 
@@ -78,6 +101,19 @@ RSpec.describe "loads: inside input objects" do
 
   it "reports nothing for an input object that includes Base" do
     schema = schema_for(:pundit)
+    problems = GraphQL::Armory::Authorization::Audit.build(schema).call(schema).problems
+
+    expect(problems).to eq([])
+  end
+  it "reports loads nested in an input object of a field that opts out of the scope" do
+    schema = schema_for(:pundit, opt_out: true)
+    problems = GraphQL::Armory::Authorization::Audit.build(schema).call(schema).problems
+
+    expect(problems.map { |p| [p.kind, p.path] }).to include([:unscoped_load, "Query.opt_out(filter.invoice_id)"])
+  end
+
+  it "does not report a mutation's generated input, which the mutation itself loads through the scope" do
+    schema = schema_for(:pundit, mutation: true)
     problems = GraphQL::Armory::Authorization::Audit.build(schema).call(schema).problems
 
     expect(problems).to eq([])
