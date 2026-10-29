@@ -7,7 +7,7 @@ RSpec.describe "Visibility driven by the policy" do
 
   let(:world) { Dummy::World.build }
 
-  def schema_for(adapter, visible_when: :export)
+  def schema_for(adapter, visible_when: :export, visibility: false)
     armory = GraphQL::Armory::Authorization
     base_field = Class.new(GraphQL::Schema::Field) { include armory::Base }
     base = Class.new(GraphQL::Schema::Object) do
@@ -34,6 +34,7 @@ RSpec.describe "Visibility driven by the policy" do
 
     Class.new(ArmoryEngine.base_schema) do
       query query
+      use GraphQL::Schema::Visibility, dynamic: true if visibility
       use armory, adapter: adapter
     end
   end
@@ -98,5 +99,41 @@ RSpec.describe "Visibility driven by the policy" do
     definition = schema.to_definition(context: {})
 
     expect([definition.include?("internalNotes"), definition.include?("InvoiceExport")]).to eq([false, false])
+  end
+
+  # Regression cases from the independent verification of this feature.
+  describe "what a client cannot do" do
+    let(:schema) { schema_for(:pundit) }
+
+    it "cannot unlock hidden members with a truthy value that is not true" do
+      ["yes", "1", 1, :true].each do |value| # rubocop:disable Lint/BooleanSymbol
+        definition = schema.to_definition(context: { armory_full_schema: value, current_user: world.alice })
+
+        expect(definition).not_to include("internalNotes")
+      end
+    end
+
+    it "gets the same error for a hidden field however it asks: direct, aliased or in a fragment" do
+      queries = ["{ myInvoice { internalNotes } }", "{ myInvoice { x: internalNotes } }",
+                 "{ myInvoice { ...F } } fragment F on Invoice { internalNotes }"]
+
+      messages = queries.map { |query| run(schema, world.alice, query)["errors"].map { |e| e["message"] } }
+
+      expect(messages.flatten.uniq).to eq(["Field 'internalNotes' doesn't exist on type 'Invoice'"])
+    end
+
+    it "gets an error that names no hidden type when it spreads a fragment on one" do
+      result = run(schema, world.alice, "{ myInvoice { ... on InvoiceExport { number } } }")
+
+      expect(result["errors"].map { |e| e["message"] }.join).not_to include("Export is hidden")
+      expect(result["data"]).to be_nil
+    end
+
+    it "keeps hiding when the schema uses graphql-ruby's dynamic visibility" do
+      dynamic = schema_for(:pundit, visibility: true)
+      names = ->(user) { run(dynamic, user, '{ __type(name: "Invoice") { fields { name } } }').dig("data", "__type", "fields").map { |f| f["name"] }.sort }
+
+      expect([names.(world.alice), names.(world.carol), names.(world.alice)]).to eq([%w[number], %w[internalNotes number], %w[number]])
+    end
   end
 end

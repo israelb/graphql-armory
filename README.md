@@ -163,6 +163,15 @@ A hidden member also hides what leads only to it: a root field that returns a hi
 AppSchema.to_definition(context: { armory_full_schema: true })
 ```
 
+Things to know:
+
+- **Hiding is not authorization.** A hidden field is absent from the schema, so a query for it fails like a field that never existed. What the user may *read* is still decided by `authorize`.
+- **The policy receives the class.** A policy that reads the record (`record.account_id`) raises `NoMethodError` for a `visible_when:` action; write that action from the user. The error propagates out of `execute`, so make sure your error handler does not echo it.
+- **CanCanCan conditions are not applied to a class.** `can :export, Invoice, account_id: 1` makes the member visible to anyone who holds the rule. For a field, the attribute is passed: `can?(:export, Invoice, :internal_notes)`.
+- **A subclass that redeclares `authorize` replaces the rule**, `visible_when:` included: repeat it.
+- **`visible_when:` on a field needs a type that includes `Base`** (not an interface or a plain type); otherwise it raises `ConfigurationError` when a query selects it.
+- **Static `Schema::Visibility` profiles are not supported** and raise `ConfigurationError`; plain `use Schema::Visibility`, `dynamic: true` and the default warden work.
+
 Visibility is computed per query (and memoized inside it). Role-based profile caching across requests is graphql-ruby's `Schema::Visibility` feature and is not wrapped here.
 
 ## Telemetry

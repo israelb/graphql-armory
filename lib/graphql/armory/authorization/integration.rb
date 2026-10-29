@@ -77,6 +77,12 @@ module GraphQL
         # `to_definition(context: { armory_full_schema: true })`: graphql 2.6 builds an ordinary context for it,
         # which cannot be told from an anonymous request, and an anonymous request must not see hidden members.
         def self.visible?(model, rule, context)
+          unless context.respond_to?(:namespace)
+            raise ConfigurationError,
+                  "visible_when: needs a per-query context; static Schema::Visibility profiles are not supported, " \
+                  "use `dynamic: true` or no profiles"
+          end
+
           return true if context.is_a?(GraphQL::Query::NullContext) || context[:armory_full_schema] == true
 
           allowed?(model, rule, context)
