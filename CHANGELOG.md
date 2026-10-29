@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Audit of interfaces: an interface field is reported once, on the interface that declares it; `authorize: true` on an
+  interface field and interface fields whose field class lacks `Base` (such as Relay `Node.id`) on a bypassed implementer
+  are reported.
+
 - Global IDs in `loads:`: when the schema defines `object_from_id`, the id is decoded with it, a record of another model is
   refused, and the record is looked up again inside the user's scope.
 

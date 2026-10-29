@@ -72,16 +72,30 @@ module GraphQL
           end
         end
 
-        # An interface field with no rule is denied when any implementer is a bypass; the fix is to declare it.
+        # Interface fields are reported once, on the interface that declares them, not on every implementer.
+        # Undeclared ones are denied when an implementer is a bypass; ones whose field class lacks Base are
+        # never checked, so on a bypassed implementer they are open; `authorize: true` names no action.
         def audit_interface(interface, schema, findings)
-          return unless Integration.bypassed_implementer?(interface, schema)
+          bypassed = Integration.bypassed_implementer?(interface, schema)
+          interface.own_fields.each_value do |field|
+            path = "#{interface.graphql_name}.#{field.original_name}"
+            unless field.respond_to?(:armory_declared)
+              findings.problem(:unprotected, path, "its field class does not include Base, so it is not checked on a bypassed implementer") if bypassed
+              next
+            end
 
-          interface.fields.each_value do |field|
-            next unless field.respond_to?(:armory_declared) && field.armory_declared.nil?
-
-            findings.problem(:field_without_rule, "#{interface.graphql_name}.#{field.original_name}",
-                             "declares no rule and an implementing type is bypassed, so it is denied")
+            case field.armory_declared
+            when true
+              findings.problem(:field_without_rule, path, "uses authorize: true, but an interface has no action of its own, so it is always denied")
+            when nil
+              findings.problem(:field_without_rule, path, "declares no rule and an implementing type is bypassed, so it is denied") if bypassed
+            end
           end
+        end
+
+        # A field an implementer inherits from an interface is reported on the interface.
+        def interface_field?(field)
+          field.owner.respond_to?(:kind) && field.owner.kind.interface?
         end
 
         def model_of(type, path, findings)
@@ -101,6 +115,7 @@ module GraphQL
         def audit_fields(type, findings, model:, bypassed:, reported:)
           type.all_field_definitions.each do |field|
             path = "#{type.graphql_name}.#{field.original_name}"
+            next if bypassed && interface_field?(field)
             next findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !field.respond_to?(:armory_declared)
             next unless field.respond_to?(:armory_declared)
             next audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)

@@ -108,6 +108,72 @@ RSpec.describe "Authorization of interfaces and unions" do
     end
   end
 
+  describe "the audit of interface fields" do
+    # A bypassed type implementing `interfaces`; `number_rule` is the kwargs of the interface field.
+    def audit_of(number_rule: {}, nested: false, node: false)
+      armory = GraphQL::Armory::Authorization
+      base_field = Class.new(GraphQL::Schema::Field) { include armory::Base }
+      base_object = Class.new(GraphQL::Schema::Object) do
+        include armory::Base
+        field_class base_field
+        default_action :read
+      end
+      numbered = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Numbered"
+        field_class base_field
+        field :number, String, null: false, **number_rule
+      end
+      document = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Document"
+        field_class base_field
+        if nested
+          implements numbered
+        else
+          field :number, String, null: false, **number_rule
+        end
+      end
+      public_note = Class.new(base_object) do
+        graphql_name "PublicNote"
+        authorize :none, reason: "anyone may read public notes"
+        implements document
+        implements GraphQL::Types::Relay::Node if node
+      end
+      query = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :none, reason: "root type"
+        field :note, public_note, authorize: :none, reason: "test"
+      end
+      schema = Class.new(GraphQL::Schema) do
+        query query
+        use armory, adapter: :pundit
+        define_singleton_method(:resolve_type) { |*| public_note }
+      end
+      GraphQL::Armory::Authorization::Audit.build(schema).call(schema).problems
+    end
+
+    it "reports an undeclared field once, on the interface, not again on each implementer" do
+      expect(audit_of.map { |p| [p.kind, p.path] }).to eq([[:field_without_rule, "Document.number"]])
+    end
+
+    it "reports a field inherited from a nested interface once, where it is declared" do
+      expect(audit_of(nested: true).map { |p| [p.kind, p.path] }).to eq([[:field_without_rule, "Numbered.number"]])
+    end
+
+    it "reports `authorize: true` on an interface field, which is always denied" do
+      problems = audit_of(number_rule: { authorize: true }).map { |p| [p.kind, p.path, p.message] }
+
+      expect(problems).to match([[:field_without_rule, "Document.number", /authorize: true/]])
+    end
+
+    it "reports an interface field that is never checked because its field class lacks Base, like Relay's Node.id" do
+      problems = audit_of(number_rule: { authorize: :none, reason: "public" }, node: true).map { |p| [p.kind, p.path, p.message] }
+
+      expect(problems).to match([[:unprotected, "Node.id", /not checked/]])
+    end
+  end
+
   it "refuses a rule on an interface or a union, which would look protective and protect nothing" do
     armory = GraphQL::Armory::Authorization
     expect { Class.new(GraphQL::Schema::Union) { include armory::Base } }
