@@ -55,7 +55,7 @@ module GraphQL
 
           # `loads:` arguments are looked up inside the user's scope, so a foreign id answers like a missing one.
           def object_from_id(type, id, context)
-            Integration.find(type, nil, id, context)
+            Integration.load(type, id, context)
           end
 
           def load_application_object_failed(error)

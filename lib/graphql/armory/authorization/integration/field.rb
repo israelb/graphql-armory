@@ -38,7 +38,7 @@ module GraphQL
           def object_from_id(type, id, context)
             return super unless @armory_load_through_scope
 
-            Integration.find(type, nil, id, context)
+            Integration.load(type, id, context)
           end
 
           # A `loads:` id that is not found is answered like a denial, so the client cannot tell the two apart.

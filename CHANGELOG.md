@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Global IDs in `loads:`: when the schema defines `object_from_id`, the id is decoded with it, a record of another model is
+  refused, and the record is looked up again inside the user's scope.
+
 ## 0.1.0.pre (2026-10-29)
 
 First prerelease on RubyGems: Pundit and CanCanCan adapters, deny-by-default coverage, scoped lists and lookups, schema audit,

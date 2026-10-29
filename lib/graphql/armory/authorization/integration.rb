@@ -62,6 +62,26 @@ module GraphQL
           record if record && allowed?(record, rule, context)
         end
 
+        # Loads a `loads:` argument inside the user's scope. When the schema defines `object_from_id` (global
+        # IDs), it decodes the id; the record must be of the type's model, and is then looked up again
+        # through the scope, so a foreign id still looks like a missing one. Otherwise the id is the primary key.
+        def self.load(type, id, context)
+          schema = context.schema
+          return find(type, nil, id, context) unless decodes_ids?(schema)
+
+          record = schema.object_from_id(id, context)
+          model = type.respond_to?(:armory_model) ? type.armory_model : nil
+          return find(type, nil, id, context) if model.nil?
+          return nil unless record.is_a?(model)
+
+          find(type, nil, record.public_send(model.primary_key), context)
+        end
+
+        # graphql-ruby's default `object_from_id` only raises, so an override is the app decoding its IDs.
+        def self.decodes_ids?(schema)
+          schema.method(:object_from_id).owner != GraphQL::Schema.singleton_class
+        end
+
         # An interface field with no rule of its own cannot name the type it is resolved on, so it is only
         # covered when no implementer is a bypass: a field on a bypassed type is denied, and so is this one.
         def self.bypassed_implementer?(interface, schema)
