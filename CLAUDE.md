@@ -31,6 +31,7 @@ Rules for the verifier's brief:
 
 - Branch, PR number and the diff to read (`git diff origin/main <branch>`).
 - Read-only on the repo and on the graphql-ruby clone. Probes only in a scratch copy made with `mktemp -d` under the system temp dir (`git archive <branch>` into it), never in the workspace or `C:\tmp`. It removes that exact directory at the end and reports whether it is gone.
+- Never run `docker compose down -v`: the bundle volumes are shared with the workspace by name.
 - Run specs only through `docker compose run --rm test bash bin/test <spec>`, with `GRAPHQL_ARMORY_ENGINE=interpreter|next` and `GRAPHQL_VERSION="~> 2.6.0"`, always `cd` explicitly into the scratch copy.
 - What the feature must guarantee, in the user's security terms, plus the documented limits that are out of scope.
 - A list of concrete ideas for breaking it, never "check it works".

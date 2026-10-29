@@ -99,7 +99,7 @@ end
 
 `find_by:` and `loads:` look the record up **inside the user's scope**, so another tenant's ID answers exactly like a missing one. Opt out of the scope for a `loads:` only on purpose, with `load_through_scope: false`; the audit lists it.
 
-**Global IDs.** When your schema defines `object_from_id` (Relay global IDs), `loads:` decodes the id with it, refuses a record of another model, and looks the record up again inside the scope (one extra query per load). Without `object_from_id`, the id is the primary key. `object_from_id` must return the record itself, not a lazy value: a lazy value is denied.
+**Global IDs.** When your schema defines `object_from_id` (Relay global IDs), `loads:` decodes the id with it, refuses a record of another model, and looks the record up again inside the scope (one extra query per load). Without `object_from_id`, the id is the primary key. `object_from_id` must return the record itself, not a lazy value: a lazy value is denied. A decoder that raises `ActiveRecord::RecordNotFound` (like `GlobalID.find`) or `ArgumentError` (a malformed id) is answered like a missing record; other errors propagate. `loads:` of an interface or union (for example `Types::Node`) raises `ConfigurationError`: load a concrete type. Composite primary keys are not supported.
 
 ## The audit
 

@@ -67,15 +67,25 @@ module GraphQL
         # through the scope, so a foreign id still looks like a missing one. Otherwise the id is the primary key.
         def self.load(type, id, context)
           schema = context.schema
-          return find(type, nil, id, context) unless decodes_ids?(schema)
+          return find(type, nil, id, context) unless decodes_ids?(schema) && type.respond_to?(:armory_model)
 
-          record = schema.object_from_id(id, context)
-          model = type.respond_to?(:armory_model) ? type.armory_model : nil
-          return find(type, nil, id, context) if model.nil?
+          model = type.armory_model
+          record = decode(schema, id, context)
           return nil unless record.is_a?(model)
 
           find(type, nil, record.public_send(model.primary_key), context)
         end
+
+        # `GlobalID.find`, graphql-ruby's documented `object_from_id`, raises for a missing record, and a
+        # decoder may raise for a malformed id. Both must answer like a record out of scope: nil.
+        def self.decode(schema, id, context)
+          schema.object_from_id(id, context)
+        rescue StandardError => error
+          raise unless error.is_a?(ArgumentError) || error.class.name == "ActiveRecord::RecordNotFound"
+
+          nil
+        end
+        private_class_method :decode
 
         # graphql-ruby's default `object_from_id` only raises, so an override is the app decoding its IDs.
         def self.decodes_ids?(schema)

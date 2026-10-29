@@ -11,7 +11,7 @@ RSpec.describe "Global IDs in loads:" do
     Base64.urlsafe_encode64("#{model_name}/#{id}", padding: false)
   end
 
-  def schema_for(adapter, decodes: true)
+  def schema_for(adapter, decodes: true, raising: false, on_unauthorized: :null)
     armory = GraphQL::Armory::Authorization
     base_argument = Class.new(GraphQL::Schema::Argument) { include armory::Base }
     base_field = Class.new(GraphQL::Schema::Field) do
@@ -36,12 +36,13 @@ RSpec.describe "Global IDs in loads:" do
     end
     Class.new(ArmoryEngine.base_schema) do
       query query
-      use armory, adapter: adapter
+      use armory, adapter: adapter, on_unauthorized: on_unauthorized
       define_singleton_method(:resolve_type) { |_abstract, _obj, _ctx| invoice }
       if decodes
+        # `raising:` is graphql-ruby's documented decoder, `GlobalID.find`: it raises for a missing record.
         define_singleton_method(:object_from_id) do |id, _context|
           model_name, key = Base64.urlsafe_decode64(id).split("/", 2)
-          Object.const_get(model_name).find_by(id: key)
+          raising ? Object.const_get(model_name).find(key) : Object.const_get(model_name).find_by(id: key)
         end
       end
     end
@@ -83,6 +84,21 @@ RSpec.describe "Global IDs in loads:" do
         result = lookup(schema, global_id("Account", world.account_a.id), world.alice)
 
         expect(result.to_h["data"]).to eq("invoiceByRef" => nil)
+      end
+
+      it "answers a foreign and a missing ID identically when the decoder raises for a missing record" do
+        schema = schema_for(adapter, raising: true, on_unauthorized: :error)
+        foreign = lookup(schema, global_id("Invoice", world.b1.id), world.alice)
+        missing = lookup(schema, global_id("Invoice", 0), world.alice)
+
+        expect([foreign.to_h, foreign.to_h["data"]]).to eq([missing.to_h, { "invoiceByRef" => nil }])
+      end
+
+      it "denies a malformed ID like a missing one instead of raising" do
+        malformed = lookup(schema, "%%%", world.alice)
+        missing = lookup(schema, global_id("Invoice", 0), world.alice)
+
+        expect(malformed.to_h).to eq(missing.to_h)
       end
 
       it "still uses the id as the primary key when the schema decodes nothing" do
