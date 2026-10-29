@@ -1,17 +1,20 @@
 # frozen_string_literal: true
 
-require "active_support/key_generator"
+require "openssl"
 
-# The default encoder never ships a key: it takes one from the app's environment, or from Rails' secret_key_base
-# through a purpose of its own, and refuses to start without one instead of serving unencrypted IDs.
+# The default encoder never ships a key: it takes one from the app's environment, or derives one from Rails'
+# secret_key_base for this purpose alone, and refuses to start without one instead of serving unencrypted IDs.
 RSpec.describe "The default encoder" do
   let(:encoder_class) { GraphQL::Armory::Encoder }
   let(:env_key) { "e" * 32 }
   let(:secret_key_base) { "s" * 64 }
 
-  # What the default encoder needs from a Rails application: its key generator.
+  # What the default encoder reads from a Rails application: its secret_key_base, and nothing else. A
+  # `key_generator` that raises proves it is never asked (its digest depends on when it is first built).
   def rails_app(secret)
-    Struct.new(:key_generator).new(ActiveSupport::KeyGenerator.new(secret))
+    Struct.new(:secret_key_base) do
+      def key_generator = raise("the default encoder must not use Rails' key generator")
+    end.new(secret)
   end
 
   def default(env: {}, rails: nil)
@@ -32,8 +35,8 @@ RSpec.describe "The default encoder" do
     expect(encoder.encode("Invoice/42")).to eq(with_key(env_key).encode("Invoice/42"))
   end
 
-  it "derives a key of its own from Rails' secret_key_base, never the secret itself" do
-    derived = ActiveSupport::KeyGenerator.new(secret_key_base).generate_key("graphql-armory/ids", 32)
+  it "derives a key of its own from secret_key_base with HKDF, never the secret itself, nor Rails' key generator" do
+    derived = OpenSSL::KDF.hkdf(secret_key_base, salt: "graphql-armory", info: "graphql-armory/ids", length: 32, hash: "SHA256")
     id = default(rails: rails_app(secret_key_base)).encode("Invoice/42")
 
     expect([id == with_key(derived).encode("Invoice/42"), id == with_key(secret_key_base).encode("Invoice/42")]).to eq([true, false])
@@ -51,6 +54,12 @@ RSpec.describe "The default encoder" do
     expect(encoder.encode("Invoice/42")).to eq(default(rails: rails_app(secret_key_base)).encode("Invoice/42"))
   end
 
+  it "refuses a GRAPHQL_ARMORY_KEY with surrounding or only whitespace, which other processes may strip" do
+    ["#{env_key}\n", " #{env_key}", " " * 32].each do |value|
+      expect { default(env: { "GRAPHQL_ARMORY_KEY" => value }) }.to raise_error(encoder_class::ConfigurationError, /whitespace/)
+    end
+  end
+
   it "refuses to start without a key, naming both ways to give one" do
     expect { default }.to raise_error(encoder_class::ConfigurationError, /GRAPHQL_ARMORY_KEY.*secret_key_base/m)
   end
@@ -59,9 +68,13 @@ RSpec.describe "The default encoder" do
     expect { default(env: { "GRAPHQL_ARMORY_KEY" => "short" }) }.to raise_error(encoder_class::ConfigurationError, /32 bytes/)
   end
 
-  it "refuses to start when Rails cannot give a secret_key_base" do
-    broken = Struct.new(:key_generator).new(Object.new.tap { |generator| def generator.generate_key(*) = raise(ArgumentError, "Missing secret_key_base") })
+  it "refuses a Rails app with no secret_key_base" do
+    expect { default(rails: rails_app(nil)) }.to raise_error(encoder_class::ConfigurationError, /no secret_key_base/)
+  end
 
-    expect { default(rails: broken) }.to raise_error(encoder_class::ConfigurationError, /secret_key_base/)
+  it "refuses to start when Rails cannot give a secret_key_base, without echoing its message" do
+    broken = Object.new.tap { |app| def app.secret_key_base = raise(ArgumentError, "secret=SUPERSECRET") }
+
+    expect { default(rails: broken) }.to raise_error(encoder_class::ConfigurationError) { |error| expect(error.message).not_to include("SUPERSECRET") }
   end
 end
