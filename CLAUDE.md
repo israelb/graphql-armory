@@ -20,7 +20,7 @@ Open-source extensions for graphql-ruby (authorization first). Read `README.md` 
    GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test bash bin/test
    ```
    Always go through `bin/test`: calling `bundle exec rspec` directly skips `bundle install` and fails on new gems. Ruby is not installed on the host.
-3. **Independent verification before every merge, always.** See below. Record the verdict in the PR and in the task log.
+3. **Independent verification before every merge, always.** See below. Record the verdict in the PR and in the task log, and save the full report outside the repo in `../graphql-armory-docs/verification/NN-name.md` (add it to the index `README.md` there; one file per verification: what was verified, how, verdict per requirement, blockers, advisories, what was done, what was not verified, key learnings).
 4. Close with a Risk line (`Risk: item N (reason)` or `Risk: none`) and tell the user how to verify it themselves.
 
 ## Independent verification (mandatory before every merge)
