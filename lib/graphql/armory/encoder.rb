@@ -100,7 +100,7 @@ module GraphQL
           raise InvalidError if !nonce && !OpenSSL.fixed_length_secure_compare(iv, derived_nonce(plain))
 
           plain.force_encoding(Encoding::UTF_8)
-        rescue ConfigurationError, InvalidError
+        rescue ConfigurationError
           raise
         rescue StandardError
           # Whatever the codec, OpenSSL or the input raise, the client learns only that it did not decode.
