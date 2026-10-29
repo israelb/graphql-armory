@@ -29,6 +29,9 @@ end
 
 # No policy exists for it.
 class Ghost
+  def label
+    "ghost"
+  end
 end
 
 # Its policy answers with something that is not a boolean.
