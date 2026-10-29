@@ -3,6 +3,11 @@
 class Account < ActiveRecord::Base
   has_many :users
   has_many :invoices
+
+  # A deliberately careless association: it returns every account's invoices.
+  def all_invoices
+    Invoice.all
+  end
 end
 
 class User < ActiveRecord::Base

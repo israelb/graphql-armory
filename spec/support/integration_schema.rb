@@ -3,7 +3,7 @@
 # Builds a small schema over the dummy app, with the armory integration wired in.
 # Fields resolve from the application objects (the root value), so it runs on both engines.
 module IntegrationSchema
-  Root = Struct.new(:my_invoice, :my_admin_invoice, :invoices, :invoices_connection, :ghost, keyword_init: true) do
+  Root = Struct.new(:my_invoice, :my_admin_invoice, :my_account, :forgotten, :invoices, :invoices_connection, :ghost, keyword_init: true) do
     def invoice_via_ref(invoice:)
       invoice
     end
@@ -37,6 +37,14 @@ module IntegrationSchema
       field :internal_notes, String, authorize: :manage
     end
 
+    account = Class.new(base_object) do
+      graphql_name "Account"
+      field :name, String, null: false
+      field :invoices, [invoice, { null: true }], null: false
+      field :all_invoices, [invoice, { null: true }], null: false
+    end
+    invoice.field :account, account, null: false
+
     connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
       field :total_count, Integer, null: false, **(ArmoryEngine.supported? ? { resolve_legacy_instance_method: true } : {})
 
@@ -67,6 +75,10 @@ module IntegrationSchema
       authorize :none, reason: "root type; each field declares its own rule"
       field :my_invoice, invoice, authorize: :none, reason: "test root field"
       field :my_admin_invoice, admin_invoice, authorize: :none, reason: "test root field"
+      field :my_account, account, authorize: :none, reason: "test root field"
+      field :account, account, authorize: :none, reason: "looked up through the scope", find_by: :id do
+        argument :id, "GraphQL::Types::ID"
+      end
       field :invoices, [invoice, { null: true }], null: false, authorize: :none, reason: "test root field"
       if flawed
         field :ghost, ghost, authorize: :none, reason: "test root field"
