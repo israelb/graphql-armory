@@ -120,5 +120,12 @@ RSpec.describe "Versioned encoders" do
       expect([names_after(rotated, older.encode("2", nonce: true)), names_after(encrypted, GraphQL::Schema::Base64Encoder.encode("2"))])
         .to eq([%w[c d], %w[c d]])
     end
+
+    it "answers a padding-only cursor with the armory error, not graphql-ruby's" do
+      schema = schema_with(armory::Encoder.versioned(newest, armory::Encoder::Legacy))
+      result = execute_query(schema, '{ items(first: 2, after: "=") { nodes { name } } }', root_value: { items: [{ name: "a" }] }).to_h
+
+      expect([result.dig("data", "items", "nodes"), result["errors"].map { |error| error["message"] }.uniq]).to eq([nil, ["Invalid ID or cursor"]])
+    end
   end
 end
