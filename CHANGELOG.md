@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.0.pre2 (2026-10-29)
+
+Closes the known gaps of the authorization module.
+
 - `loads:` inside input objects: `include GraphQL::Armory::Authorization::Base` in the base input object loads them through
   the user's scope; the audit reports input objects whose `loads:` skip it.
 
