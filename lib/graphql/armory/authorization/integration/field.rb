@@ -70,6 +70,11 @@ module GraphQL
 
           private
 
+          # A resolver or mutation that includes Base enforces its own rule, so the field is covered by it.
+          def armory_resolver?
+            resolver.respond_to?(:armory_rule)
+          end
+
           # A Rule to check on the parent object, :covered when the type's own check already did it,
           # or nil to deny.
           def armory_rule_for(type)
@@ -77,9 +82,9 @@ module GraphQL
 
             case @armory_declared
             when nil
-              return :covered if !type.respond_to?(:armory_rule)
+              return :covered if !type.respond_to?(:armory_rule) || armory_resolver?
 
-              type_rule && !type_rule.none? ? :covered : nil
+              type_rule && (!type_rule.none? || type_rule.covers_fields?) ? :covered : nil
             when true
               type_rule unless type_rule&.none?
             when :none

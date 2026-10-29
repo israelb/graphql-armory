@@ -8,6 +8,7 @@ class Ability
     can :read, Invoice, account_id: user.account_id
     can :manage, Invoice, account_id: user.account_id if user.admin?
     can :export, Invoice if user.admin?
+    can :approve, Invoice, account_id: user.account_id if user.admin?
     can :read, Account, id: user.account_id
   end
 end

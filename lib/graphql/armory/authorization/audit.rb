@@ -61,7 +61,7 @@ module GraphQL
             findings.problem(:no_rule, path, "has no rule and no default_action, so it is denied")
           elsif rule.none?
             findings.bypass(path, rule.reason)
-            audit_fields(type, findings, model: nil, bypassed: true, reported: Set.new)
+            audit_fields(type, findings, model: nil, bypassed: !rule.covers_fields?, reported: Set.new)
           else
             model = model_of(type, path, findings)
             reported = Set.new
@@ -90,12 +90,28 @@ module GraphQL
             path = "#{type.graphql_name}.#{field.original_name}"
             next findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !field.respond_to?(:armory_declared)
             next unless field.respond_to?(:armory_declared)
+            next audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)
 
             audit_declaration(field, path, findings, model: model, bypassed: bypassed, reported: reported)
             audit_visibility(field, path, findings, model: model, reported: reported)
             audit_loads(field, path, findings)
             audit_arguments(field, path, findings, reported: reported)
           end
+        end
+
+        # A resolver or mutation carries its own rule: no rule is denied, `:none` is listed, an action is checked.
+        def audit_resolver(field, path, findings)
+          resolver = field.resolver
+          rule = resolver.armory_rule
+          return findings.problem(:no_rule, path, "its mutation or resolver declares no `authorize`, so it is denied") if rule.nil?
+          return findings.bypass(path, rule.reason) if rule.none?
+
+          model = begin
+            resolver.armory_model
+          rescue ConfigurationError => error
+            return findings.problem(:model, path, error.message)
+          end
+          check(path, model, rule, findings, Set.new)
         end
 
         # The action a field is hidden with is asked of the policy like any other, so it must exist.

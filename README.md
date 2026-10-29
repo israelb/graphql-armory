@@ -198,6 +198,31 @@ end
 - **`authorize: :none, reason:`** only declares and documents: the audit lists it with its reason.
 - `authorize: true` is refused on an argument, and an argument with no model to ask about raises `ConfigurationError`.
 
+## Mutations and resolvers
+
+Include `Base` in your base mutation (or resolver) and declare what each one needs. A mutation is an action, not a read, so `default_action` does not apply and **a mutation with no `authorize` is denied**.
+
+```ruby
+class Mutations::BaseMutation < GraphQL::Schema::RelayClassicMutation
+  include GraphQL::Armory::Authorization::Base
+  argument_class Types::BaseArgument
+  field_class Types::BaseField
+  object_class Types::BaseObject
+end
+
+class Mutations::ApproveInvoice < Mutations::BaseMutation
+  authorize :approve, model: Invoice            # InvoicePolicy#approve?(invoice) / can?(:approve, invoice)
+  argument :invoice_id, ID, loads: Types::Invoice
+  field :invoice, Types::Invoice, null: true
+end
+```
+
+- **The record is the loaded one.** The rule runs after `loads:`, once per loaded record of the model (with none loaded, the model's class is asked). `loads:` goes through the user's scope, so a foreign id answers like a missing one.
+- **Denial** follows the schema's `on_unauthorized` mode, like a field (`null`, `"Not found"`, or raise). With `on_denied: :errors` the mutation does not run and answers `{ errors: [{ message: "Not allowed", code: "FORBIDDEN" }] }` as data, so the payload needs an `errors` field.
+- **Payload types** are ordinary objects: declare `authorize :none, reason: "...", covers_fields: true` so their fields are covered by the mutation instead of denied.
+- **`authorize :none, reason:`** documents a mutation anyone may call; the audit lists it with its reason. A mutation with no rule appears as `:no_rule` (for example `Mutation.forgotten`), and a rule the policy does not define as `:adapter`.
+- An unknown `on_denied:` raises `ArgumentError`; a mutation with a rule but no model raises `ConfigurationError`.
+
 ## Telemetry
 
 Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypassed`; data holds only `type`, `action` and `reason`, never record attributes.
@@ -206,7 +231,7 @@ Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypass
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).
 
-Not covered yet: mutations, interfaces and unions, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
+Not covered yet: interfaces and unions, decoding global IDs in `loads:`. Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
 
 ## Engines
 
@@ -245,7 +270,7 @@ Status: ✅ done, 🚧 in progress, ⬜ not started. Update this table in the sa
 
 | Order | Module | Status | Current limits |
 |---|---|---|---|
-| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: mutations, interfaces and unions, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
+| 1 | Authorization (Pundit, CanCanCan) | 🚧 | Pundit and CanCanCan done (the audit checks less with CanCanCan). Not covered yet: interfaces and unions, decoding global IDs in `loads:`. `Execution::Next` needs graphql >= 2.6.2. Unreleased. |
 | 2 | Encrypted, versioned IDs and cursors | ⬜ | Research not started. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | Research not started. |
 | 4 | Rate limiting | ⬜ | Research not started. |

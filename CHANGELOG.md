@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Mutations and resolvers: `authorize :action, model:, on_denied:` on a mutation or resolver that includes `Base`. Denied by
+  default when it declares no rule; the rule runs on the loaded records; `on_denied: :errors` answers as data;
+  `covers_fields: true` lets a payload type be covered by its mutation. The audit lists mutations with no rule.
+
 - Argument rules: `authorize: :action`, `visible_when:` and `authorize: :none, reason:` on arguments. An argument with no rule
   is covered by its field; a declared rule is checked when the client sends it and a denial denies the field.
 
