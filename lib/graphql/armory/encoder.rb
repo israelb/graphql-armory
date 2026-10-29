@@ -134,3 +134,4 @@ end
 
 require "graphql/armory/encoder/versioned"
 require "graphql/armory/encoder/legacy"
+require "graphql/armory/encoder/default"
