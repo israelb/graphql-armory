@@ -5,10 +5,21 @@ name: CI
 #   gh variable set CI_FULL_MATRIX --body true
 # and back to minimal:
 #   gh variable delete CI_FULL_MATRIX
+# Changes that only touch docs paths do not run the specs.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "assets/**"
+      - "odd/**"
+      - "LICENSE"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "assets/**"
+      - "odd/**"
+      - "LICENSE"
 
 jobs:
   spec-minimal:
