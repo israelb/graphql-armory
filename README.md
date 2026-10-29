@@ -77,7 +77,7 @@ use GraphQL::Armory::Authorization, adapter: :pundit, on_unauthorized: :null # d
 | `:error` | `"Not found"`, code `NOT_FOUND`, identical on every path | When clients need to tell. |
 | `:raise` | `NotAuthorizedError` naming only the type | When your app rescues it. |
 
-Denied non-null fields raise the generic "Not found" error, because GraphQL cannot return `null` there.
+Denied non-null fields raise the generic "Not found" error, because GraphQL cannot return `null` there (on Execution::Next a denied object in a non-null position answers graphql-ruby's own "Cannot return null for non-nullable field", and `:raise` messages are prefixed with the field path). `find_by:` lookups always answer `null` in every mode: a missing ID cannot raise, and a foreign ID must look the same.
 
 ### Lists, connections and lookups
 
