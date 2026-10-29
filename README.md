@@ -233,8 +233,10 @@ They are never authorized themselves: graphql-ruby only runs `authorized?` on th
 
 What an interface adds is its fields, declared once and resolved on many types:
 
-- A field with no rule is **covered** by the types that implement the interface, unless one of them is a bypass (`authorize :none`). Then the field is **denied for every implementer**, because it cannot tell which type it runs on, and the audit reports it (`:field_without_rule`, for example `Document.number`). Declare it (`authorize: :none, reason:` or an action) to fix it.
+- A field with no rule is **covered** by the rule of the Base types that implement the interface (a plain implementer runs no check at all), unless one of them is a bypass (`authorize :none`). Then the field is **denied for every implementer**, because it cannot tell which type it runs on, and the audit reports it (`:field_without_rule`, for example `Document.number`). Declare it (`authorize: :none, reason:` or an action) to fix it.
 - `visible_when:` is not supported on an interface field; put it on the concrete types' fields.
+- `authorize: true` is not valid on an interface field: it is always denied, and the audit does not flag it. Use an action or `:none`.
+- An interface whose field class does not include `Base`, such as graphql-ruby's built-in Relay `Node`, runs no field check, so its `id` stays readable on a bypassed implementer. Give your own `Node` interface a Base field class if that matters.
 
 ## Telemetry
 
