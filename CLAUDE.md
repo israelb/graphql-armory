@@ -1,6 +1,6 @@
 # graphql-armory: working rules
 
-Open-source extensions for graphql-ruby (authorization first). Read `README.md` for what the gem does and `odd/tasks/graphql-armory-mvp.md` (git-ignored, never committed) for the specs, tasks and decisions log.
+Open-source extensions for graphql-ruby (authorization first). Read `README.md` for what the gem does.
 
 ## Hard rules
 
@@ -12,7 +12,7 @@ Open-source extensions for graphql-ruby (authorization first). Read `README.md` 
 
 ## Workflow per increment
 
-1. One branch off `main` (`feat/<name>`), one PR against `main`. Tests first (observe RED), then code, then docs (README, CHANGELOG, roadmap table, this task log).
+1. One branch off `main` (`feat/<name>`), one PR against `main`. Tests first (observe RED), then code, then docs (README, CHANGELOG, roadmap table).
 2. Run the suite on both engines and an older graphql before opening the PR:
    ```
    docker compose run --rm test bash bin/test                                              # interpreter, graphql 2.6
@@ -20,7 +20,7 @@ Open-source extensions for graphql-ruby (authorization first). Read `README.md` 
    GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test bash bin/test
    ```
    Always go through `bin/test`: calling `bundle exec rspec` directly skips `bundle install` and fails on new gems. Ruby is not installed on the host.
-3. **Independent verification before every merge, always.** See below. Record the verdict in the PR and in the task log, and save the full report outside the repo in `../graphql-armory-docs/verification/NN-name.md` (add it to the index `README.md` there; one file per verification: what was verified, how, verdict per requirement, blockers, advisories, what was done, what was not verified, key learnings).
+3. **Independent verification before every merge, always.** See below. Record the verdict in the PR, and keep the full report in the maintainers' private notes, outside the repo (one report per verification: what was verified, how, verdict per requirement, blockers, advisories, what was done, what was not verified, key learnings).
 4. Close with a Risk line (`Risk: item N (reason)` or `Risk: none`) and tell the user how to verify it themselves.
 
 ## Independent verification (mandatory before every merge)
@@ -68,4 +68,3 @@ Correction bounds: one batch fixes every reported blocker, then one recheck limi
 - Policies and abilities must answer `true`, `false` or `nil`. Anything else raises `AdapterError`.
 - A `loads:` or `find_by:` lookup always goes through the user's scope: a foreign id and a missing id must look identical.
 - `to_definition` builds an ordinary context, not `NullContext`: a full-schema dump needs `context: { armory_full_schema: true }`.
-- The task log in `odd/tasks/graphql-armory-mvp.md` is the source of truth for decisions that differ from the design proposal. It lives in the working directory, where the ODD workflow expects it, but `odd/` is git-ignored: never commit it. Its backup is the Engram mirror `odd/graphql-armory-mvp/tasks`. The other internal documents (design, research, verification reports) stay in `../graphql-armory-docs`.
