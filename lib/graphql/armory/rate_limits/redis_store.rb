@@ -27,7 +27,9 @@ module GraphQL
         LUA
 
         # Same token bucket as MemoryStore#take. The bucket expires once a whole window has passed: it is full
-        # again by then, the same as no bucket at all.
+        # again by then, the same as no bucket at all. An expiry is only ever pushed later, never brought closer, so
+        # a limiter with a shorter window sharing the key cannot cut it short. The points left go back as a string:
+        # Redis would truncate a Lua number past 2**63.
         TAKE = <<~LUA
           #{CLOCK}
           local cost, limit, window = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
@@ -40,12 +42,14 @@ module GraphQL
           local taken = cost <= level
           if taken or force then level = math.max(level - cost, 0) end
           redis.call("HSET", KEYS[1], "level", string.format("%.17g", level), "at", string.format("%.17g", math.max(now, at)))
-          redis.call("PEXPIRE", KEYS[1], math.ceil(window * 1000) + 1000)
+          local keep = math.ceil(window * 1000) + 1000
+          if redis.call("PTTL", KEYS[1]) < keep then redis.call("PEXPIRE", KEYS[1], keep) end
 
-          return { taken and 1 or 0, math.floor(level) }
+          return { taken and 1 or 0, string.format("%.0f", math.floor(level)) }
         LUA
 
-        # Same slots as MemoryStore#acquire: a sorted set of tokens scored by when they expire.
+        # Same slots as MemoryStore#acquire: a sorted set of tokens scored by when they expire. The key lives as long
+        # as its latest slot, whatever ttl each acquire passed.
         ACQUIRE = <<~LUA
           #{CLOCK}
           local token, limit, ttl = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3])
@@ -55,7 +59,8 @@ module GraphQL
           local acquired = redis.call("ZCARD", KEYS[1]) < limit
           if acquired or force then
             redis.call("ZADD", KEYS[1], string.format("%.17g", now + ttl), token)
-            redis.call("PEXPIRE", KEYS[1], math.ceil(ttl * 1000) + 1000)
+            local latest = tonumber(redis.call("ZRANGE", KEYS[1], -1, -1, "WITHSCORES")[2])
+            redis.call("PEXPIRE", KEYS[1], math.ceil((latest - now) * 1000) + 1000)
           end
 
           return { acquired and 1 or 0, redis.call("ZCARD", KEYS[1]) }
@@ -78,12 +83,12 @@ module GraphQL
         end
 
         def take(key, cost:, limit:, window:, force: false)
-          taken, level = script(TAKE, "#{@prefix}points:#{key}", cost, limit, window, flag(force), now)
-          [taken == 1, level]
+          taken, level = script(TAKE, "#{@prefix}points:#{key}", cost, limit, seconds(window), flag(force), now)
+          [taken == 1, Integer(level, 10)]
         end
 
         def acquire(key, token:, limit:, ttl:, force: false)
-          acquired, held = script(ACQUIRE, "#{@prefix}slots:#{key}", token, limit, ttl, flag(force), now)
+          acquired, held = script(ACQUIRE, "#{@prefix}slots:#{key}", token, limit, seconds(ttl), flag(force), now)
           [acquired == 1, held]
         end
 
@@ -98,8 +103,13 @@ module GraphQL
           value ? "1" : "0"
         end
 
+        # Lua reads decimal numbers only: not "1/2" (a Rational) nor a Time.
+        def seconds(value)
+          Float(value).to_s
+        end
+
         def now
-          @clock ? @clock.call.to_s : ""
+          @clock ? seconds(@clock.call.to_f) : ""
         end
 
         # EVALSHA sends only the script's digest; Redis forgets scripts on restart or SCRIPT FLUSH, and then EVAL

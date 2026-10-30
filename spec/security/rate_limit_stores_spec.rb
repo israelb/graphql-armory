@@ -51,6 +51,30 @@ RSpec.describe "rate limit stores" do
       expect(keys.map { |key| redis.ttl(key) }).to all(be_between(1, 61))
     end
 
+    it "never lets a shorter ttl or window cut short a key that still holds live slots or points" do
+      store.acquire("user:1", token: "long", limit: 2, ttl: 600)
+      store.acquire("user:1", token: "short", limit: 2, ttl: 1)
+      store.take("user:1", cost: 1, limit: 100, window: 600)
+      store.take("user:1", cost: 1, limit: 100, window: 0.5)
+
+      expect([redis.pttl("#{prefix}slots:user:1"), redis.pttl("#{prefix}points:user:1")]).to all(be > 599_000)
+    end
+
+    it "answers as MemoryStore does for a Rational window or ttl, a Time clock and a huge limit" do
+      memory = GraphQL::Armory::RateLimits::MemoryStore.new(clock: -> { Time.at(now[0]) })
+      redis_store = GraphQL::Armory::RateLimits::RedisStore.new(redis: redis, prefix: prefix, clock: -> { Time.at(now[0]) })
+      calls = lambda do |each|
+        answers = [each.take("a", cost: 1, limit: 10, window: 1/2r), each.acquire("a", token: "t", limit: 1, ttl: 3/2r)]
+        now[0] += 1
+        answers + [each.take("a", cost: 1, limit: 10, window: 1/2r), each.acquire("a", token: "u", limit: 1, ttl: 3/2r),
+                   each.take("huge", cost: 1, limit: 10**19, window: 60)]
+      end
+
+      first = calls.call(memory)
+      now[0] -= 1
+      expect(calls.call(redis_store)).to eq(first)
+    end
+
     it "reads Redis's own clock when no clock is given, so every process agrees on the time" do
       store = GraphQL::Armory::RateLimits::RedisStore.new(redis: redis, prefix: prefix)
 
