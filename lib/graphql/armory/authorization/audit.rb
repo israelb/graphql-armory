@@ -14,7 +14,8 @@ module GraphQL
         RELAY_TYPES = [GraphQL::Types::Relay::BaseConnection, GraphQL::Types::Relay::BaseEdge,
                        GraphQL::Types::Relay::PageInfo].freeze
 
-        # Where a method is defined tells a library's from an app's: a name can be placed under `GraphQL::` by anyone.
+        # A library's method is defined in its files and held by a class it names. Either alone misleads: anyone can name
+        # a module under `GraphQL::`, and an alias keeps graphql-ruby's location on an app's class.
         GRAPHQL_RUBY_PATH = "#{File.dirname(GraphQL::Schema.method(:from_definition).source_location.first)}/"
         ARMORY_PATH = "#{File.expand_path('..', __dir__)}/"
 
@@ -44,7 +45,7 @@ module GraphQL
           end
 
           audited_types(schema).each { |type| audit_type(type, findings) }
-          schema.types.each_value { |type| audit_edge_rule(type, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
+          schema.types.each_value { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
           schema.types.each_value { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
           schema.types.each_value { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
           findings.report
@@ -119,10 +120,9 @@ module GraphQL
         end
 
         def note_own_check(found, klass, method, name, separator)
-          return if defined_in?(method, GRAPHQL_RUBY_PATH, ARMORY_PATH)
+          holder = holder_of(klass, method)
+          return if library_method?(method, holder, GRAPHQL_RUBY_PATH, ARMORY_PATH)
 
-          owner = method.owner
-          holder = klass.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
           found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}"
         end
 
@@ -167,15 +167,15 @@ module GraphQL
           rule = type.armory_rule
           if rule.nil?
             findings.problem(:no_rule, path, "has no rule and no default_action, so it is denied")
-          elsif rule.visible_when && answered_by_graphql_ruby?(type, :visible?)
-            findings.problem(:ignored_rule, path, "graphql-ruby's #{type.method(:visible?).owner} answers visible? here, so visible_when: never runs: remove it")
+          elsif rule.visible_when && (answer = graphql_ruby_answer(type, :visible?))
+            findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers visible? here, so visible_when: never runs: remove it")
           elsif rule.none?
             findings.bypass(path, rule.reason)
             audit_fields(type, findings, model: nil, bypassed: !rule.covers_fields?, reported: Set.new)
-          elsif answered_by_graphql_ruby?(type, :authorized?)
-            findings.problem(:ignored_rule, path, "graphql-ruby's #{type.method(:authorized?).owner} answers authorized? here, so this rule never runs: " \
-                                                  "put the rule on the field or resolver that returns it, and declare " \
-                                                  "`authorize :none, reason: \"...\", covers_fields: true` on this class")
+          elsif (answer = graphql_ruby_answer(type, :authorized?))
+            findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers authorized? here, so this rule never runs: " \
+                                                  "put the rule on the field that returns it (on a root field, on a resolver: a field rule asks " \
+                                                  "the parent's policy), and declare `authorize :none, reason: \"...\", covers_fields: true` on this class")
           else
             model = model_of(type, path, findings)
             reported = Set.new
@@ -186,23 +186,44 @@ module GraphQL
         end
 
         # ConnectionBehaviors and EdgeBehaviors, included after Base, bring an `authorized?` and a `visible?` that win
-        # over the plugin's.
-        def answered_by_graphql_ruby?(type, name)
-          defined_in?(type.method(name), GRAPHQL_RUBY_PATH)
+        # over the plugin's. An app's method may call super, so this follows the chain to the first library that answers.
+        def graphql_ruby_answer(type, name)
+          method = type.method(name)
+          until method.nil? || method.owner == Integration::Object
+            return method.owner if library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH)
+
+            method = method.super_method
+          end
         end
 
-        def defined_in?(method, *paths)
+        def holder_of(klass, method)
+          owner = method.owner
+          klass.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
+        end
+
+        def library_method?(method, holder, *paths)
           file = method.source_location&.first
-          !file.nil? && file.start_with?(*paths)
+          !file.nil? && file.start_with?(*paths) && holder.name&.start_with?("GraphQL::") == true
         end
 
         # A direct edge subclass runs the plugin's check, but only where an edge is built: `nodes` never builds one.
-        def audit_edge_rule(type, findings)
+        def audit_edge_rule(type, schema, findings)
           rule = type.armory_rule if type.respond_to?(:armory_rule)
-          return if rule.nil? || rule.none?
+          return if rule.nil? || rule.none? || !nodes_field_beside?(type, schema)
 
-          findings.problem(:ignored_rule, type.graphql_name, "the connection's nodes field returns the nodes without building an edge, so this rule " \
-                                                             "does not cover it: put the rule on the field or resolver that returns the connection")
+          findings.problem(:ignored_rule, type.graphql_name, "the connection's nodes field returns the nodes without building an edge, so this rule does not " \
+                                                             "cover it: put the rule on the field that returns the connection (on a root field, on a resolver: " \
+                                                             "a field rule asks the parent's policy), or remove the nodes field with has_nodes_field(false)")
+        end
+
+        def nodes_field_beside?(edge, schema)
+          schema.types.each_value.any? do |type|
+            next false unless type.kind.object? && !type.introspection?
+
+            fields = type.all_field_definitions
+            fields.any? { |field| field.graphql_name == "nodes" } &&
+              fields.any? { |field| field.graphql_name == "edges" && field.type.unwrap == edge }
+          end
         end
 
         # Interface fields are reported once, on the interface that declares them, not on every implementer.
