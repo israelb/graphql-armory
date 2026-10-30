@@ -67,7 +67,9 @@ Correction bounds: one batch fixes every reported blocker, then one recheck limi
 
 ## CI
 
-`spec-minimal` (Ruby 3.4, graphql 2.6, interpreter) runs by default to save Actions minutes while the repository is private. The full matrix runs when the repository variable `CI_FULL_MATRIX` is `true` (`gh variable set CI_FULL_MATRIX --body true`). Run the full matrix before any release: the minimal job does not cover `Execution::Next`. Docs-only changes skip CI.
+The repository is public, so the full matrix runs by default: the repository variable `CI_FULL_MATRIX` is `true`. `spec-minimal` (Ruby 3.4, graphql 2.6, interpreter) runs only when it is `false` (`gh variable set CI_FULL_MATRIX --body false`), to save Actions minutes. The minimal job does not cover `Execution::Next`, so keep the variable `true` before any release. Docs-only changes skip CI.
+
+Two rulesets protect the repository: `main` accepts changes only through a PR and cannot be deleted or force-pushed, and the `v*` tags cannot be deleted or moved (a tag push publishes the gem). The repository admin can bypass both, which is the only way to move a tag.
 
 ## Known traps
 
