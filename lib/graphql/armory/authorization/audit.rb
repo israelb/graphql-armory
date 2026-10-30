@@ -80,10 +80,15 @@ module GraphQL
           schema.types.each_value do |type|
             next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
 
-            %i[authorized? authorizes? authorized_new wrap scope_items].each { |name| note_class_check(found, type, name) }
-            note_reauthorization(found, type)
+            %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
             note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
+          end
+          schema.types.each_value do |type|
+            next if type.introspection? || !type.respond_to?(:scope_items)
+
+            note_class_check(found, type, :scope_items)
+            note_reauthorization(found, type)
           end
           schema.types.each_value do |type|
             next unless type.kind.input_object? && !type.introspection?
@@ -114,13 +119,24 @@ module GraphQL
         end
 
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
-        # Reported on the class that sets it. A bypassed type has no rule to skip.
+        # The interpreter asks the field's return type, Execution::Next the resolved object. Reported on what sets it.
         def note_reauthorization(found, type)
-          rule = type.armory_rule
-          return if rule.nil? || rule.none?
+          return unless type.reauthorize_scoped_objects == false && reauthorization_skips_a_rule?(type)
 
-          holder = type.ancestors.find { |ancestor| ancestor.instance_variable_get(:@reauthorize_scoped_objects) == false }
+          method = type.method(:reauthorize_scoped_objects)
+          holder = holder_of(type, method)
+          # graphql-ruby's reader: the nearest class that set the value. A connection with none takes it from its node type.
+          holder = type.ancestors.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? } if library_method?(method, holder, GRAPHQL_RUBY_PATH)
           found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects" if holder
+        end
+
+        # A connection or edge has the rule of its node. An interface or union only narrows, and so only skips, with
+        # its own scope_items. An object bypassed with `authorize :none` has no rule to skip.
+        def reauthorization_skips_a_rule?(type)
+          return true if type.respond_to?(:node_type)
+          return !library_method?(type.method(:scope_items), holder_of(type, type.method(:scope_items)), GRAPHQL_RUBY_PATH, ARMORY_PATH) unless type.kind.object?
+
+          type.respond_to?(:armory_rule) && !type.armory_rule&.none?
         end
 
         # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.

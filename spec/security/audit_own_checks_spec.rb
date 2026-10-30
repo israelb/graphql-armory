@@ -8,7 +8,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
   let(:ran) { [] }
 
   # Named classes, because the report and `own_checks:` speak in classes.
-  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, plain_class: GraphQL::Schema::Mutation, relay_template: false, **options)
+  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, plain_class: GraphQL::Schema::Mutation, relay_template: false, on_query: nil, **options)
     plugin = armory
     calls = ran
     base_argument = Class.new(GraphQL::Schema::Argument) { include plugin::Base }
@@ -83,6 +83,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
         end
       end
     end
+    on_query&.call(query_type, invoice_type)
     mutation_type = Class.new(base_object) do
       graphql_name "Mutation"
       authorize :none, reason: "the root holds nothing"
@@ -353,6 +354,113 @@ RSpec.describe "the audit and the app's own authorization checks" do
 
       expect(problems(on)).to eq([])
       expect(problems(bypassed)).to eq([])
+    end
+
+    # Verifier probes: what runs is the method, and on the interpreter it is asked of the field's return type.
+    let(:manage) { proc { authorize :manage, model: ::Invoice } }
+
+    it "reports the flag set as a method on a type, and lets it be declared" do
+      plugin = armory
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        def self.reauthorize_scoped_objects(*) = false
+      end)
+      type = @classes[:invoice]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { type => { reauthorize_scoped_objects: "as strict" } } }
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(numbers(schema)).to eq(2)
+      expect(problems(declared)).to eq([])
+    end
+
+    it "reports the flag set as a method on a base object through a module" do
+      own = Module.new { def reauthorize_scoped_objects(*) = false }
+
+      expect(problems(build(object: proc { extend own }, invoice: manage)).map(&:path).grep(/reauthorize/).size).to eq(1)
+    end
+
+    it "reports the flag on a generated connection, and pins that on the interpreter it serves what the node's rule refuses" do
+      schema = build(invoice: manage, on_query: lambda do |query, invoice|
+        connection = invoice.connection_type
+        connection.reauthorize_scoped_objects(false)
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      result = execute_query(schema, "{ things { nodes { id } } }", context: { current_user: world.alice },
+                                                                    root_value: Struct.new(:things).new(::Invoice.all)).to_h
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(result.dig("data", "things", "nodes").size).to eq(2) unless ArmoryEngine.next?
+    end
+
+    it "reports the flag and scope_items on a named connection that does not include Base" do
+      schema = build(on_query: lambda do |query, invoice|
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "NamedInvoiceConnection"
+          edge_type(invoice.edge_type)
+          reauthorize_scoped_objects(false)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "reports the flag and scope_items on a union" do
+      schema = build(on_query: lambda do |query, invoice|
+        union = Class.new(GraphQL::Schema::Union) do
+          graphql_name "Thing"
+          possible_types invoice
+          reauthorize_scoped_objects(false)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, [union], null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "reports the flag and scope_items an interface defines" do
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Thing"
+        field :id, String, null: false
+        definition_methods do
+          def reauthorize_scoped_objects(*) = false
+          def scope_items(items, _context) = items.where("1=1")
+        end
+      end
+      schema = build(invoice: proc { implements interface }, on_query: lambda do |query, _invoice|
+        query.field :things, [interface], null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to include(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "does not report a flag that a nearer class turns back on, which does run the rule" do
+      on_type = build(object: proc { reauthorize_scoped_objects(false) }, invoice: proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(true)
+      end)
+
+      expect(problems(on_type)).to eq([])
+      expect(numbers(on_type)).to be_nil
+    end
+
+    it "does not report a flag on an interface with no scope of its own, which skips nothing" do
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Thing"
+        field :id, String, null: false
+        reauthorize_scoped_objects(false)
+      end
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        implements interface
+      end)
+
+      expect(problems(schema)).to eq([])
+      expect(numbers(schema)).to be_nil
     end
 
     it "reports an own scope_items, and pins that with reauthorization off it serves another account's records" do
