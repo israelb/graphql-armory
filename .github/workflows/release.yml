@@ -18,6 +18,13 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     environment: release
+    services:
+      # For RedisStore's specs, which run before publishing (they fail without it).
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     permissions:
       contents: read # the tag already exists, so `rake release` never pushes to git
       id-token: write # Trusted Publishing: exchanges the GitHub identity for a short-lived RubyGems token
@@ -46,5 +53,7 @@ jobs:
             exit 1
           fi
       - name: Run the specs
+        env:
+          REDIS_URL: redis://localhost:6379/0
         run: bundle exec rspec
       - uses: rubygems/release-gem@7f9650160c1a4e7989fdc9855807bdbd421d8b6b # v1.4.1
