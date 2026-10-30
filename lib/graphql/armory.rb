@@ -12,3 +12,4 @@ end
 
 require "graphql/armory/encoder"
 require "graphql/armory/authorization"
+require "graphql/armory/ids"

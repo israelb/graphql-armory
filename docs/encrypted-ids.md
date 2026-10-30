@@ -19,11 +19,31 @@ graphql-ruby's IDs and cursors are base64, which is an encoding, not encryption.
 - **Stable IDs.** The same object always has the same ID, so client caches (Apollo, Relay) keep working. Its nonce is derived from the ID, so two different IDs do not share one (a collision needs around 2^48 IDs).
 - **Unpredictable cursors.** The same position gives a different cursor in every response.
 - **IDs and cursors are not interchangeable.** Each uses its own derived key.
+- **One line for the whole schema.** `use GraphQL::Armory::IDs` defines `id_from_object` and `object_from_id`, looking records up inside the user's scope.
 - **Keys can be rotated, and encryption added to an existing API**, without breaking the IDs and cursors clients already hold: a versioned chain reads old values and writes new ones.
 
 ## How to use it
 
-Generate a key once and keep it out of the code: `ruby -rsecurerandom -e 'puts SecureRandom.hex(32)'`.
+Generate a key once and keep it out of the code: `ruby -rsecurerandom -e 'puts SecureRandom.hex(32)'`, and set it as `GRAPHQL_ARMORY_KEY` (in a Rails app you can skip this: a key is derived from `secret_key_base`, see [the default encoder](#the-default-encoder)).
+
+```ruby
+class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::Authorization, adapter: :pundit   # optional, but recommended
+  use GraphQL::Armory::IDs                               # encrypted global IDs
+  cursor_encoder GraphQL::Armory::Encoder.default        # encrypted cursors
+end
+```
+
+`use GraphQL::Armory::IDs` defines `id_from_object` and `object_from_id` for you. An ID holds the type name and the record's id, encrypted. When the schema decodes one:
+
+- A type that includes the authorization module's `Base` is looked up **inside the user's scope**, so another tenant's ID answers `null`, like a missing record (in `node(id:)`, `loads:` and anything else that calls `object_from_id`).
+- A tampered ID, an ID made with another key, an unknown type, a type hidden from this user (`visible_when:`), or a type that is not an object type implementing `Node` (root types, payloads, introspection) answer `null` too, with no error.
+- A type without `Base` is loaded only if you say how: `use GraphQL::Armory::IDs, find: ->(type, key, context) { ... }`. Otherwise its IDs answer `null`. `find:` only sees `Node` types; return `nil` for a missing record (`find_by`, not `find`): an error it raises reaches the client.
+- A `Base` type named unlike its model (Rails' `Types::InvoiceType`) needs `authorize :read, model: Invoice`, or every lookup of it raises `ConfigurationError`.
+
+Pass your own encoder with `use GraphQL::Armory::IDs, encoder: AppEncoder` (or a versioned chain, below).
+
+### Your own encoder
 
 ```ruby
 class AppEncoder < GraphQL::Armory::Encoder
@@ -31,20 +51,12 @@ class AppEncoder < GraphQL::Armory::Encoder
 end
 
 class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::IDs, encoder: AppEncoder
   cursor_encoder AppEncoder                      # every built-in connection now uses encrypted cursors
-
-  def self.id_from_object(object, type, _context)
-    AppEncoder.encode("#{type.graphql_name}/#{object.id}")
-  end
-
-  def self.object_from_id(id, _context)
-    type_name, key = AppEncoder.decode(id).split("/", 2)
-    # look the record up from type_name and key
-  end
 end
 ```
 
-With the [authorization module](authorization.md), an ID the encoder refuses in a `loads:` argument is answered exactly like a missing record.
+Without the plugin, call the encoder from your own `id_from_object` and `object_from_id` (`AppEncoder.encode("#{type.graphql_name}/#{object.id}")` and `AppEncoder.decode(id)`). With the [authorization module](authorization.md), an ID the encoder refuses in a `loads:` argument is answered exactly like a missing record.
 
 ### The default encoder
 
@@ -106,17 +118,19 @@ log_legacy_id(id) if encoder == GraphQL::Armory::Encoder::Legacy
 | `decode(id)` / `decode(cursor, nonce: true)` | The text, or raises `GraphQL::Armory::Encoder::InvalidError` (a `GraphQL::ExecutionError`, so clients see `Invalid ID or cursor`). |
 | `Encoder.versioned(newest, ..., oldest)` | A chain with the same `encode` and `decode`; encodes with `newest`. |
 | `chain.decode_versioned(text, nonce: false)` | `[data, encoder]`, or `[nil, nil]` when no encoder accepts it. |
+| `use GraphQL::Armory::IDs, encoder: nil, find: nil` | Defines `id_from_object` and `object_from_id`; `encoder` defaults to `Encoder.default`; `find:` loads types without `Base`. |
 | `Encoder.default` | An encoder keyed by `GRAPHQL_ARMORY_KEY`, else by a key derived with HKDF from Rails' `secret_key_base`; raises `ConfigurationError` without either. |
 
 A subclass inherits `key`, `tag` and `codec`, and can override any of them. Passing `nil` to any of them raises `ConfigurationError`, so an unset environment variable fails at boot instead of being ignored.
 
 ## Guarantees and limits
 
-Covered by `spec/security/encoder_spec.rb`, `encoder_versioning_spec.rb` and `default_encoder_spec.rb` on both engines: round trips, tampering at several positions, another key, another tag, a cursor used as an ID and the reverse, malformed and truncated input, encrypted pagination and a tampered cursor, rotation and migration from base64 cursors, and where the default encoder takes its key.
+Covered by `spec/security/encoder_spec.rb`, `encoder_versioning_spec.rb`, `default_encoder_spec.rb` and `ids_plugin_spec.rb` on both engines: round trips, tampering at several positions, another key, another tag, a cursor used as an ID and the reverse, malformed and truncated input, encrypted pagination and a tampered cursor, rotation and migration from base64 cursors, where the default encoder takes its key, and the plugin answering every ID it cannot honour (foreign, tampered, unknown or non-object type, another model in `loads:`) like a missing one.
 
 - **Changing the key invalidates every ID and cursor already handed out**, unless the old encoder stays in a versioned chain.
 - **`Legacy` in a chain can be forged**, and it does not separate IDs from cursors. Keep it only while migrating.
 - **Encryption hides the ID; it does not authorize.** Whoever obtained a valid ID can still send it. What they may read is decided by the authorization module.
 - IDs are longer than base64 ones: 28 extra bytes (nonce and authentication tag) before encoding.
 - graphql-ruby decodes an `after:` cursor once per selection that uses it, so a tampered cursor can produce the same error more than once.
-- graphql-ruby's own `node(id:)` field does not rescue errors: a refused ID answers `Invalid ID or cursor` while a missing record answers `null`. Look IDs up through `loads:` (or rescue `InvalidError` in `object_from_id`) when that difference matters.
+- Without the plugin, graphql-ruby's own `node(id:)` field does not rescue errors: a refused ID answers `Invalid ID or cursor` while a missing record answers `null`. `use GraphQL::Armory::IDs` answers both with `null`.
+- The plugin builds IDs from `object.id` and looks them up by primary key: composite primary keys are not supported.
