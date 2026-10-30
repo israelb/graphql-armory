@@ -119,36 +119,29 @@ module GraphQL
         end
 
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
-        # The interpreter asks the field's return type, Execution::Next the resolved object. Reported on what sets it.
+        # The interpreter asks the field's return type, Execution::Next the resolved object, and each path differs, so it
+        # is reported wherever it is off, without judging whether it skips anything: declaring it takes one line.
         def note_reauthorization(found, type)
-          return if relay_connection?(type) && type.node_type.nil? # nothing to serve, and its reader would raise
-          return if type.reauthorize_scoped_objects || !reauthorization_skips_a_rule?(type)
+          return if unreadable_reauthorization?(type) || type.reauthorize_scoped_objects
 
           holder = reauthorization_holder(type)
-          found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects" if holder
-        end
-
-        # A connection has the rule of its node. An interface or union only narrows, and so only skips, with its own
-        # scope_items. An object or edge skips its own rule or its own `authorized?`: with neither there is nothing to skip.
-        def reauthorization_skips_a_rule?(type)
-          return true if relay_connection?(type)
-          return own_scope_items?(type) unless type.kind.object?
-
-          rule = type.armory_rule if type.respond_to?(:armory_rule)
-          return true if type.respond_to?(:armory_rule) && !rule&.none?
-
-          method = type.method(:authorized?)
-          !library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH, ARMORY_PATH)
+          found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects"
         end
 
         def relay_connection?(type)
-          type.kind.object? && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
+          type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
+        end
+
+        # A connection with no node and no value of its own has nothing to answer: graphql-ruby's reader would raise.
+        def unreadable_reauthorization?(type)
+          return false unless relay_connection?(type) && type.node_type.nil? && type.instance_variable_get(:@reauthorize_scoped_objects).nil?
+
+          method = type.method(:reauthorize_scoped_objects)
+          library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH)
         end
 
         # graphql-ruby's reader follows superclasses, not the interfaces a class implements, to the nearest that set the
-        # value. A connection reads only its own, then its node: an object node is reported on its own, and an abstract
-        # one only skips under a connection that narrows. With the reader off and nothing seen holding it, the type itself
-        # is reported: a flag is never dropped.
+        # value. A connection reads only its own, then its node's. With nothing seen holding it, the type itself is reported.
         def reauthorization_holder(type)
           method = type.method(:reauthorize_scoped_objects)
           holder = holder_of(type, method)
@@ -156,18 +149,12 @@ module GraphQL
 
           if relay_connection?(type)
             return type unless type.instance_variable_get(:@reauthorize_scoped_objects).nil?
-            return if type.node_type.kind.object?
 
-            return own_scope_items?(type) ? reauthorization_holder(type.node_type) : nil
+            return reauthorization_holder(type.node_type)
           end
 
           chain = type.is_a?(Class) ? type.ancestors.grep(Class) : type.ancestors
           chain.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? } || type
-        end
-
-        def own_scope_items?(type)
-          method = type.method(:scope_items)
-          !library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH, ARMORY_PATH)
         end
 
         # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.
