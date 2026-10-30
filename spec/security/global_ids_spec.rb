@@ -102,7 +102,7 @@ RSpec.describe "Global IDs in loads:" do
       end
 
       it "denies an ID the Encoder refuses like a missing one, in every mode" do
-        encoder = Class.new(GraphQL::Armory::Encoder) { key("k" * 32) }
+        encoder = GraphQL::Armory::IDs::Controls::Encoder.example
         tampered = encoder.encode("Invoice/#{world.a1.id}").reverse
 
         results = %i[null error].map do |mode|

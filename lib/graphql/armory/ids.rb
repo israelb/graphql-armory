@@ -17,7 +17,7 @@ module GraphQL
       SEPARATOR = "/"
 
       def self.use(schema, encoder: nil, find: nil)
-        lookup = Lookup.new(encoder: encoder || Encoder.default, find: find)
+        lookup = Lookup.build(encoder: encoder, find: find)
         schema.define_singleton_method(:id_from_object) { |object, type, _context| lookup.id_for(object, type) }
         schema.define_singleton_method(:object_from_id) { |id, context| lookup.object_for(id, context) }
       end
@@ -26,7 +26,18 @@ module GraphQL
       class Lookup
         attr_reader :encoder, :find
 
-        def initialize(encoder:, find: nil)
+        # Wires the default encoder unless one is given; `use` goes through here.
+        def self.build(encoder: nil, find: nil)
+          new(encoder: encoder || Encoder.default, find: find)
+        end
+
+        # `new` is inert: with no encoder wired it hands out no ID and honours none. It checks what it is given.
+        def initialize(encoder: Encoder::Null, find: nil)
+          unless %i[encode decode].all? { |name| encoder.respond_to?(name) }
+            raise Encoder::ConfigurationError, "encoder: must answer encode and decode, like an Encoder subclass"
+          end
+          raise Encoder::ConfigurationError, "find: must be nil or a callable taking the type, the key and the context" unless find.nil? || find.respond_to?(:call)
+
           @encoder = encoder
           @find = find
         end
@@ -74,3 +85,5 @@ module GraphQL
     end
   end
 end
+
+require "graphql/armory/ids/controls"

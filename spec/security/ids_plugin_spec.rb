@@ -6,7 +6,7 @@ require "base64"
 # tampered, of an unknown type, of another model, out of the user's scope — answers exactly like a missing one.
 RSpec.describe "use GraphQL::Armory::IDs" do
   let(:world) { Dummy::World.build }
-  let(:encoder) { Class.new(GraphQL::Armory::Encoder) { key("k" * 32) } }
+  let(:encoder) { GraphQL::Armory::IDs::Controls::Encoder.example }
 
   def schema_for(adapter, encoder:, find: nil, plain_account: false)
     armory = GraphQL::Armory
@@ -104,7 +104,7 @@ RSpec.describe "use GraphQL::Armory::IDs" do
           encoder.encode("__Type/1"),
           encoder.encode("InvoiceExport/#{world.a1.id}"),     # a type hidden from this user
           encoder.encode("no-separator"),
-          Class.new(GraphQL::Armory::Encoder) { key("x" * 32) }.encode("Invoice/#{world.a1.id}")
+          GraphQL::Armory::IDs::Controls::Encoder.example(key: "x" * 32).encode("Invoice/#{world.a1.id}")
         ]
 
         expect(refused.map { |id| node(schema, id, world.alice) }).to all(eq(missing))

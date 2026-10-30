@@ -40,18 +40,64 @@ module GraphQL
       # `store:` answers `fetch(id)` with an operation (`body` and `document`) or nil: a Manifest, or your own.
       # `strict: true` refuses raw queries unless the context holds `armory_allow_raw_query: true`.
       def self.use(schema, store:, strict: false)
-        if store.is_a?(Hash) || !store.respond_to?(:fetch)
-          raise ConfigurationError, "store: must answer fetch(id) with an operation or nil, like a Manifest"
-        end
-        raise ConfigurationError, "strict: must be true or false, got #{strict.inspect}" unless strict == true || strict == false
+        gate = Gate.build(store: store, strict: strict)
 
         if schema.singleton_class.include?(Guard)
           raise ConfigurationError, "#{schema} already uses PersistedQueries (here or in a parent schema): use it once"
         end
 
-        schema.instance_variable_set(:@armory_persisted_queries, [store, strict].freeze)
+        schema.instance_variable_set(:@armory_persisted_queries, gate)
         schema.singleton_class.prepend(Guard)
         schema.query_class(schema.query_class)
+      end
+
+      # Decides what a request runs: answers `[refusal, document]`, where a refusal is the error message, a
+      # document is the stored operation to run instead of the request's text, and `[nil, nil]` runs the request
+      # as it came.
+      class Gate
+        # Wires the app's store with `use`'s defaults; `use` goes through here.
+        def self.build(store:, strict: false)
+          new(store: store, strict: strict)
+        end
+
+        # `new` is inert: with no store wired it refuses every request. It checks what it is given, so it never
+        # lets raw queries through without a store either.
+        def initialize(store: Store::Null.new, strict: true)
+          if store.is_a?(Hash) || !store.respond_to?(:fetch)
+            raise ConfigurationError, "store: must answer fetch(id) with an operation or nil, like a Manifest"
+          end
+          raise ConfigurationError, "strict: must be true or false, got #{strict.inspect}" unless strict == true || strict == false
+          raise ConfigurationError, "strict: false needs a store: with the Null store only raw queries would run" if !strict && store.is_a?(Store::Null)
+
+          @store = store
+          @strict = strict
+        end
+
+        def call(context, text, document)
+          operation_id = context[:operation_id] if context.respond_to?(:[])
+
+          if !operation_id.nil?
+            operation = operation_id.is_a?(String) ? @store.fetch(operation_id) : nil
+            if operation.nil?
+              [UNKNOWN_OPERATION, nil]
+            elsif document || (text && !same_query?(text, operation))
+              [MISMATCH, nil]
+            else
+              [nil, operation.document]
+            end
+          elsif @strict && !(context.respond_to?(:[]) && context[:armory_allow_raw_query] == true)
+            [RAW_QUERY_REFUSED, nil]
+          else
+            [nil, nil]
+          end
+        end
+
+        private
+
+        # Apollo's clients may send the query with its id; graphql-ruby's subscriptions resend it printed.
+        def same_query?(text, operation)
+          text == operation.body || text == operation.document.to_query_string
+        end
       end
 
       # Keeps the lookup in every query class the schema uses, including one set after `use` or by a child schema.
@@ -101,25 +147,9 @@ module GraphQL
       # Swaps the request's query for the stored document, or for nothing with an error when it is refused.
       module Lookup
         def initialize(schema, query_string = nil, **options)
-          store, strict = schema.armory_persisted_queries
-          context = options[:context]
-          operation_id = context[:operation_id] if context.respond_to?(:[])
           text = query_string || options[:query]
           text = nil if text == ""
-
-          refusal, document =
-            if !operation_id.nil?
-              operation = operation_id.is_a?(String) ? store.fetch(operation_id) : nil
-              if operation.nil?
-                UNKNOWN_OPERATION
-              elsif options[:document] || (text && !same_query?(text, operation))
-                MISMATCH
-              else
-                [nil, operation.document]
-              end
-            elsif strict && !(context.respond_to?(:[]) && context[:armory_allow_raw_query] == true)
-              RAW_QUERY_REFUSED
-            end
+          refusal, document = schema.armory_persisted_queries.(options[:context], text, options[:document])
 
           return super if refusal.nil? && document.nil?
           return super(schema, nil, **options, query: nil, document: document) if refusal.nil?
@@ -129,16 +159,11 @@ module GraphQL
           # with its own validator.
           super(schema, nil, **options, query: nil, document: options[:document] || EMPTY_DOCUMENT, validate: true, static_validator: Refusal.new(schema, refusal))
         end
-
-        private
-
-        # Apollo's clients may send the query with its id; graphql-ruby's subscriptions resend it printed.
-        def same_query?(text, operation)
-          text == operation.body || text == operation.document.to_query_string
-        end
       end
     end
   end
 end
 
 require "graphql/armory/persisted_queries/manifest"
+require "graphql/armory/persisted_queries/store"
+require "graphql/armory/persisted_queries/controls"

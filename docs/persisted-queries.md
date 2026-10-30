@@ -136,6 +136,10 @@ Relay's example network layer sends the id as `doc_id`. Pass it yourself: `opera
 
 Deploy the server with the new manifest before, or with, the clients that use its new operations: until then they get `Unknown operation id`. Keep old operations in the file while old app versions are still in use.
 
+### Testing with persisted queries
+
+`PersistedQueries::Store::Substitute.new(*queries)` holds the given queries under their SHA-256, like an Apollo manifest, and records the ids it was asked for (`fetched`). `PersistedQueries::Controls::Operations`, `Query.example` and `Root.example` are a small schema and its operations to test against. The decision itself is `PersistedQueries::Gate`: `Gate.build(store:, strict:)` takes the same settings as `use`, and `gate.(context, query_text, document)` answers `[refusal, document]`. `Gate.new`, with nothing wired, refuses every request (`Store::Null`, strict).
+
 ## Reference
 
 `Manifest.new(data, digest: :sha256)`, `Manifest.load(path, digest: :sha256)`

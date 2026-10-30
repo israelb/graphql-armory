@@ -6,8 +6,8 @@ require "digest"
 # not hold, or a query that does not match its id, runs nothing. In strict mode a raw query runs only for a
 # request the app explicitly allows (staff, development).
 RSpec.describe "use GraphQL::Armory::PersistedQueries" do
-  let(:invoices) { "query Invoices { invoices }" }
-  let(:greeting) { "query Greeting($name: String!) { greeting(name: $name) }" }
+  let(:invoices) { GraphQL::Armory::PersistedQueries::Controls::Operations.invoices }
+  let(:greeting) { GraphQL::Armory::PersistedQueries::Controls::Operations.greeting }
   let(:store) do
     GraphQL::Armory::PersistedQueries::Manifest.new(
       { Digest::SHA256.hexdigest(invoices) => invoices, Digest::SHA256.hexdigest(greeting) => greeting }
@@ -15,24 +15,10 @@ RSpec.describe "use GraphQL::Armory::PersistedQueries" do
   end
   let(:resolved) { [] }
   # The root object answers the fields, so both engines resolve them the same way.
-  let(:root) do
-    log = resolved
-    Class.new do
-      define_method(:invoices) { log << :invoices; ["A-1"] }
-      define_method(:greeting) { |name:| log << :greeting; "Hello #{name}" }
-      define_method(:secret) { log << :secret; "s3cr3t" }
-    end.new
-  end
+  let(:root) { GraphQL::Armory::PersistedQueries::Controls::Root.example(resolved) }
 
   def schema_for(**options)
-    query = Class.new(GraphQL::Schema::Object) do
-      graphql_name "Query"
-      field :invoices, [String], null: false
-      field :greeting, String, null: false do
-        argument :name, String
-      end
-      field :secret, String, null: false
-    end
+    query = GraphQL::Armory::PersistedQueries::Controls::Query.example
     store = options.fetch(:store, self.store)
     Class.new(ArmoryEngine.base_schema) do
       query query
