@@ -110,6 +110,36 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
     expect(active).to eq(0)
   end
 
+  it "releases every slot when the queries of a multiplex share one context hash, as batched requests do" do
+    schema = schema_for(limit: 2)
+    context = { rate_limit_key: "user:1" }
+    queries = [{ query: "{ cheap }", context: context, root_value: root }] * 2
+    ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries)
+
+    expect(active).to eq(0)
+  end
+
+  it "refuses to take a slot for a query that brings its own trace, since it could never release it" do
+    expect { run(schema_for(limit: 1), trace: GraphQL::Tracing::Trace.new) }
+      .to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /trace/)
+    expect(active).to eq(0)
+  end
+
+  it "releases every slot of a multiplex even when the hook raises on one release" do
+    store = self.store
+    failing = Class.new do
+      define_method(:acquire) { |key, token:, limit:, ttl:, force:| store.acquire(key, token: token, limit: limit, ttl: ttl, force: force) }
+      define_method(:release) do |key, token:|
+        @failed ? store.release(key, token: token) : (@failed = true) && raise(IOError, "flaky")
+      end
+    end.new
+    schema = schema_for(store: failing, limit: 5, on_store_error: ->(error, _query) { raise error })
+    queries = 3.times.map { { query: "{ cheap }", context: { rate_limit_key: "user:1" }, root_value: root } }
+
+    expect { ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries) }.to raise_error(IOError, "flaky")
+    expect(active).to eq(1)
+  end
+
   describe "soft mode, the default" do
     it "runs operations over the limit and records them as limited" do
       query = schema_for.query
@@ -178,6 +208,9 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
       refused(/soft/) { schema_for(soft: nil) }
       refused(/store/) { schema_for(store: Object.new) }
       refused(/store/) { schema_for(store: Class.new { def acquire(_key, token:, limit:, ttl:, force:) = [true, 1] }.new) }
+      refused(/store/) do
+        schema_for(store: Class.new { def acquire(token:, limit:, ttl:, force:) = [true, 1]; def release(_key, token:) = nil }.new)
+      end
     end
   end
 end

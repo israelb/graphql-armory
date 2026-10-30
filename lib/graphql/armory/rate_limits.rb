@@ -66,6 +66,7 @@ module GraphQL
             next false unless store.respond_to?(name)
 
             parameters = store.method(name).parameters
+            next false unless parameters.any? { |type, _| %i[req opt rest].include?(type) } # the key
             next true if parameters.any? { |type, _| type == :keyrest }
 
             (keywords - parameters.select { |type, _| type == :key || type == :keyreq }.map(&:last)).empty?

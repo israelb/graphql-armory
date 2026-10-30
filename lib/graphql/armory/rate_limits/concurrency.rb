@@ -16,7 +16,7 @@ module GraphQL
       # nothing. What happened is in `context[:rate_limit_concurrency]`.
       class Concurrency
         CONTEXT_KEY = :rate_limit_concurrency
-        SLOT_KEY = :armory_concurrency_slot
+        NAMESPACE = :graphql_armory
 
         def self.use(schema, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil)
           concurrency = new(store: store, limit: limit, stale_after: stale_after, soft: soft, key: key, on_store_error: on_store_error)
@@ -39,6 +39,10 @@ module GraphQL
 
         # Takes a slot for the query: the refusal when none is free, or nil to let it run.
         def acquire(query)
+          unless query.current_trace.is_a?(Release)
+            raise ConfigurationError, "this query runs with its own trace (context[:trace]), so Concurrency could never release its slot: remove context[:trace] or add trace_with to that trace"
+          end
+
           key = Settings.key_for(@key, query)
           limit = Settings.limit_for(@limit, key, query)
           if limit.nil?
@@ -55,7 +59,8 @@ module GraphQL
           end
           acquired, active = Settings.checked(answer, :acquire, "the Integer slots held")
 
-          query.context[SLOT_KEY] = [self, key, token] if acquired || @soft
+          # Per query, not in the context hash: queries of a multiplex may share one hash.
+          query.context.namespace(NAMESPACE)[:concurrency_slot] = [self, key, token] if acquired || @soft
           record(query, key: key, limit: limit, active: active, limited: !acquired)
           refusal(limit, active) unless acquired || @soft
         end
@@ -92,13 +97,21 @@ module GraphQL
           def execute_multiplex(multiplex:)
             super
           ensure
+            # Every slot is released even if one release raises (an on_store_error that raises); the first such
+            # error is raised afterwards.
+            failure = nil
             multiplex.queries.each do |query|
-              concurrency, key, token = query.context[SLOT_KEY]
+              slots = query.context.namespace(NAMESPACE)
+              concurrency, key, token = slots.delete(:concurrency_slot)
               next unless concurrency
 
-              query.context[SLOT_KEY] = nil
-              concurrency.release(query, key, token)
+              begin
+                concurrency.release(query, key, token)
+              rescue StandardError => error
+                failure ||= error
+              end
             end
+            raise failure if failure
           end
         end
       end

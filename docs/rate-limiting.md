@@ -195,7 +195,11 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 
 - A query this limiter refuses resolves no field and is not charged. A query that fails validation is not charged. A query refused by another analyzer (`max_depth`, `max_complexity`) is still charged: graphql-ruby runs every analyzer.
 - Each query in a multiplex is charged on its own.
-- `Concurrency` takes one slot per query of a multiplex, and releases them all when the multiplex ends.
+- `Concurrency` takes one slot per query of a multiplex, and releases them all when the multiplex ends, even when the queries share one context hash. If a release fails, that slot expires after `stale_after`; the others are still released.
+- A query run with its own trace (`context: { trace: ... }`) cannot be released by `Concurrency`, so it raises `ConfigurationError` instead of taking a slot.
+- A resolver that runs another query for the same client (a nested `execute`) takes a second slot while the first is held.
+- A subscription holds a slot only while its first result runs, not while it stays subscribed.
+- When queries of a multiplex share one context hash, `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` hold the last query's record: give each query its own context hash to read every record.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
 - Field scores are yours: graphql-ruby treats a negative or NaN complexity as 0, so such a field is free, like `complexity: 0`. A complexity that is nil or a String makes graphql-ruby raise before the limiter runs, so the query does not run.
 - When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert.
