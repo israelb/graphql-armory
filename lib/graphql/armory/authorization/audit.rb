@@ -80,7 +80,8 @@ module GraphQL
           schema.types.each_value do |type|
             next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
 
-            %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
+            %i[authorized? authorizes? authorized_new wrap scope_items].each { |name| note_class_check(found, type, name) }
+            note_reauthorization(found, type)
             note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
@@ -110,6 +111,16 @@ module GraphQL
             note_instance_check(found, argument.class, :authorized?)
             note_visibility_check(found, argument)
           end
+        end
+
+        # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
+        # Reported on the class that sets it. A bypassed type has no rule to skip.
+        def note_reauthorization(found, type)
+          rule = type.armory_rule
+          return if rule.nil? || rule.none?
+
+          holder = type.ancestors.find { |ancestor| ancestor.instance_variable_get(:@reauthorize_scoped_objects) == false }
+          found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects" if holder
         end
 
         # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.
@@ -159,6 +170,8 @@ module GraphQL
           when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
           when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
           when :authorized_new, :wrap then "defined by the app: it decides whether authorized? runs, so on the interpreter it can skip the rule"
+          when :scope_items then "defined by the app: it replaces the user's scope, so a list can hold records the policy's scope excludes, and connections count them"
+          when :reauthorize_scoped_objects then "set to false: records that come through the scope skip the rule, so a user the rule refuses gets them"
           when :visible? then "defined by the app: if it does not call super, visible_when: does not hide this from a user it should"
           else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
           end

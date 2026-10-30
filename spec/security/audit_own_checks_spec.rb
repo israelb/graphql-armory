@@ -68,6 +68,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
       authorize :none, reason: "the root holds nothing"
       field :ping, String, null: true, authorize: :none, reason: "public"
       field :first_invoice, invoice_type, null: true, authorize: :none, reason: "the type's rule decides"
+      field :invoice_list, [invoice_type], null: true, authorize: :none, reason: "the type's rule and scope decide"
       field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type" if relay_template
       if input
         input_type = Class.new(GraphQL::Schema::InputObject) do
@@ -299,6 +300,71 @@ RSpec.describe "the audit and the app's own authorization checks" do
   def foreign_invoice(schema)
     execute_query(schema, "{ firstInvoice { id } }", context: { current_user: world.bob },
                                                      root_value: Struct.new(:first_invoice).new(world.a1)).to_h.dig("data", "firstInvoice")
+  end
+
+  describe "records that come through the scope" do
+    def numbers(schema)
+      world
+      execute_query(schema, "{ invoiceList { id } }", context: { current_user: world.alice },
+                                                      root_value: Struct.new(:invoice_list).new(::Invoice.all)).to_h.dig("data", "invoiceList")&.size
+    end
+
+    let(:skip_rule) do
+      proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(false)
+      end
+    end
+
+    it "reports reauthorize_scoped_objects(false), and pins that it serves what the rule refuses" do
+      schema = build(invoice: skip_rule)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(problems(schema).first.message).to match(/skip the rule/)
+      expect(numbers(build(invoice: proc { authorize :manage, model: ::Invoice }))).to be_nil
+      expect(numbers(schema)).to eq(2)
+    end
+
+    it "reports it once, on the base object that sets it" do
+      schema = build(object: proc { reauthorize_scoped_objects(false) })
+
+      expect(problems(schema).map(&:path).uniq.size).to eq(1)
+      expect(problems(schema).size).to eq(1)
+    end
+
+    it "lists it as a bypass when declared" do
+      plugin = armory
+      schema = build(invoice: skip_rule)
+      type = @classes[:invoice]
+      declared = Class.new(schema) do
+        use plugin, adapter: :pundit, own_checks: { type => { reauthorize_scoped_objects: "the scope is as strict as the rule" } }
+      end
+
+      expect(problems(declared)).to eq([])
+      expect(armory::Audit.(declared).bypasses.map(&:reason)).to include("the scope is as strict as the rule")
+    end
+
+    it "does not report reauthorize_scoped_objects(true) or a type that bypasses the rule" do
+      on = build(invoice: proc { reauthorize_scoped_objects(true) })
+      bypassed = build(invoice: proc do
+        authorize :none, reason: "public", covers_fields: true
+        reauthorize_scoped_objects(false)
+      end)
+
+      expect(problems(on)).to eq([])
+      expect(problems(bypassed)).to eq([])
+    end
+
+    it "reports an own scope_items, and pins that with reauthorization off it serves another account's records" do
+      schema = build(invoice: proc do
+        reauthorize_scoped_objects(false)
+        def self.scope_items(items, _context) = items.where("1=1")
+      end)
+
+      expect(problems(schema).map(&:path)).to include(end_with(".scope_items"))
+      expect(numbers(schema)).to eq(::Invoice.count)
+      expect(numbers(build)).to eq(2)
+    end
   end
 
   it "reports self.wrap on a type, and pins that on the interpreter it skips the rule" do
