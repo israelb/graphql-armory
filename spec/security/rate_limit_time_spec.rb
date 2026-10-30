@@ -202,6 +202,23 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
     end
   end
 
+  it "charges both limiters when a subclass adds Time on top of its parent's, and leaves the parent's own run alone" do
+    other = GraphQL::Armory::RateLimits::Store::Substitute.new
+    clock = self.clock
+    parent = schema_for
+    child = Class.new(parent) do
+      use GraphQL::Armory::RateLimits::Time, store: other, clock: clock, limit: 100, soft: false, key: ->(_query) { "ip:1" }
+    end
+
+    responses = Array.new(2) { run(child).first }
+    run(parent, key: "user:2")
+
+    expect(responses.map { |response| response.key?("errors") }).to eq([false, true])
+    expect(charges.first).to eq(["user:1", 250])
+    expect(other.calls.select { |_method, _key, arguments| arguments[:force] }.map { |_method, key, arguments| [key, arguments[:cost]] })
+      .to eq([["ip:1", 250]])
+  end
+
   describe "a clock that does not answer a finite number" do
     def clock_answering(*readings)
       -> { readings.size > 1 ? readings.shift : readings.first }
@@ -224,6 +241,14 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
       schema = schema_for(clock: clock_answering(0.0, 0.0, nil))
 
       expect { run(schema) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /clock/)
+    end
+
+    it "raises when the clock breaks after a field raised, instead of ending the operation uncharged" do
+      clock = self.clock
+      breaking = Class.new { define_method(:broken) { clock.now = nil; raise IOError, "disk on fire" } }.new
+
+      expect { execute_query(schema_for, "{ broken }", context: { rate_limit_key: "user:1" }, root_value: breaking) }
+        .to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /clock/)
     end
 
     it "charges nothing when the clock stands still or goes backwards" do
