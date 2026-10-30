@@ -38,6 +38,8 @@ Each module starts with its own research before design. A module is ✅ only whe
 
 Every module page follows the same outline: **The problem**, **The solution**, **How to use it**, reference sections, **Guarantees and limits**.
 
+Across modules: [Telemetry](docs/telemetry.md) shows how to see what the gem allowed, refused and ran, in your logs and metrics, without recording anything a client chose.
+
 ## Development
 
 Ruby is not required on the host:

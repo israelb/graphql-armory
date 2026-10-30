@@ -16,23 +16,23 @@ module GraphQL
     module IDs
       SEPARATOR = "/"
 
-      def self.use(schema, encoder: nil, find: nil)
-        lookup = Lookup.build(encoder: encoder, find: find)
+      def self.use(schema, encoder: nil, find: nil, sinks: [])
+        lookup = Lookup.build(encoder: encoder, find: find, sinks: sinks)
         schema.define_singleton_method(:id_from_object) { |object, type, _context| lookup.id_for(object, type) }
         schema.define_singleton_method(:object_from_id) { |id, context| lookup.object_for(id, context) }
       end
 
       # Turns records into IDs and IDs back into records.
       class Lookup
-        attr_reader :encoder, :find
+        attr_reader :encoder, :find, :telemetry
 
         # Wires the default encoder unless one is given; `use` goes through here.
-        def self.build(encoder: nil, find: nil)
-          new(encoder: encoder || Encoder.default, find: find)
+        def self.build(encoder: nil, find: nil, sinks: [])
+          new(encoder: encoder || Encoder.default, find: find, telemetry: Telemetry.build(sinks: sinks))
         end
 
         # `new` is inert: with no encoder wired it hands out no ID and honours none. It checks what it is given.
-        def initialize(encoder: Encoder::Null, find: nil)
+        def initialize(encoder: Encoder::Null, find: nil, telemetry: Telemetry.new)
           unless %i[encode decode].all? { |name| encoder.respond_to?(name) }
             raise Encoder::ConfigurationError, "encoder: must answer encode and decode, like an Encoder subclass"
           end
@@ -40,6 +40,7 @@ module GraphQL
 
           @encoder = encoder
           @find = find
+          @telemetry = telemetry
         end
 
         def id_for(object, type)
@@ -51,17 +52,27 @@ module GraphQL
 
         def object_for(id, context)
           type_name, key = encoder.decode(id).split(SEPARATOR, 2)
-          return nil if key.nil? || key.empty?
+          return refuse(:malformed) if key.nil? || key.empty?
 
           type = visible_type(type_name, context)
-          return nil unless node_type?(type)
+          return refuse(:unknown_type) unless node_type?(type)
 
-          load(type, key, context)
+          object = load(type, key, context)
+          return refuse(:not_found, type: type.graphql_name) if object.nil?
+
+          telemetry.record(:id_resolved, type: type.graphql_name)
+          object
         rescue Encoder::InvalidError
-          nil
+          refuse(:invalid)
         end
 
         private
+
+        # Every refusal answers nil, like a missing record; the signal says why, never which ID.
+        def refuse(reason, **data)
+          telemetry.record(:id_refused, reason: reason, **data)
+          nil
+        end
 
         # Through the query's own view of the schema: `Schema.get_type(name, context)` does not apply `visible?`
         # when graphql-ruby runs without `Schema::Visibility`, `context.types` does in both modes.

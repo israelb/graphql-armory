@@ -198,6 +198,8 @@ A process that crashes never gives its slots back, so each slot expires after `s
 2. Send what it recorded to your metrics: `result.context[:rate_limit_points]` is `{ key:, cost:, limit:, remaining:, window:, soft:, limited: }`, and `limited: true` marks the queries that would have been refused.
 3. When the limits fit your traffic, set `soft: false`.
 
+Rate limiting reports through the query context rather than through `sinks:`, because the context is also where the budget for the response comes from. To see its decisions next to the other modules' signals, send those records to the same place: [Telemetry](telemetry.md#rate-limiting).
+
 ### Sharing limits between processes
 
 `MemoryStore` keeps buckets in one process: with four Puma workers on two servers, a client gets the limit eight times over, and a restart refills every bucket. In production use `RedisStore`, which keeps them in Redis, shared by every process:

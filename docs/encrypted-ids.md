@@ -103,6 +103,21 @@ return nil if encoder.nil?                                  # nothing in the cha
 log_legacy_id(id) if encoder == GraphQL::Armory::Encoder::Legacy
 ```
 
+### Seeing what was refused
+
+Every ID the schema does not honour answers `nil`, like a missing record, so the client learns nothing. You do not have to be as blind. Pass `sinks:` and each lookup says what happened:
+
+```ruby
+use GraphQL::Armory::IDs, sinks: [GraphQL::Armory::Telemetry::Notifications]
+```
+
+| Signal | Data |
+|---|---|
+| `:id_resolved` | `type` |
+| `:id_refused` | `reason`: `:invalid` (did not decrypt), `:malformed` (not `Type/key`), `:unknown_type` (not in the schema, not visible, or not a `Node`), `:not_found` (missing or outside the user's scope, plus `type`) |
+
+The signal never holds the ID, the key or the record. A rising `:invalid` is someone sending forged IDs, or clients still holding IDs from a key you rotated away; `:not_found` bursts from one client are an enumeration attempt. See [Telemetry](telemetry.md) for how to send them to your logs and metrics.
+
 ### Testing with IDs
 
 `Encoder::Substitute` encodes reversibly without a key and records what it encoded and decoded, for specs of code that uses an encoder; never hand out real IDs with it. `IDs::Controls::Encoder.example` is an Encoder subclass with a fixed test key, and `IDs::Controls::Record.example(id:)` a record to build IDs from. `IDs::Lookup.new`, with nothing wired, hands out no ID and honours none (`Encoder::Null`); `IDs::Lookup.build(encoder:, find:)` takes the same settings as `use`.
@@ -122,7 +137,7 @@ log_legacy_id(id) if encoder == GraphQL::Armory::Encoder::Legacy
 | `decode(id)` / `decode(cursor, nonce: true)` | The text, or raises `GraphQL::Armory::Encoder::InvalidError` (a `GraphQL::ExecutionError`, so clients see `Invalid ID or cursor`). |
 | `Encoder.versioned(newest, ..., oldest)` | A chain with the same `encode` and `decode`; encodes with `newest`. |
 | `chain.decode_versioned(text, nonce: false)` | `[data, encoder]`, or `[nil, nil]` when no encoder accepts it. |
-| `use GraphQL::Armory::IDs, encoder: nil, find: nil` | Defines `id_from_object` and `object_from_id`; `encoder` defaults to `Encoder.default`; `find:` loads types without `Base`. |
+| `use GraphQL::Armory::IDs, encoder: nil, find: nil, sinks: []` | Defines `id_from_object` and `object_from_id`; `encoder` defaults to `Encoder.default`; `find:` loads types without `Base`; `sinks:` hears `:id_resolved` and `:id_refused` ([Telemetry](telemetry.md)). |
 | `Encoder.default` | An encoder keyed by `GRAPHQL_ARMORY_KEY`, else by a key derived with HKDF from Rails' `secret_key_base`; raises `ConfigurationError` without either. |
 
 A subclass inherits `key`, `tag` and `codec`, and can override any of them. Passing `nil` to any of them raises `ConfigurationError`, so an unset environment variable fails at boot instead of being ignored.

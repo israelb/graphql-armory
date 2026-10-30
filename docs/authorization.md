@@ -234,7 +234,15 @@ What an interface adds is its fields, declared once and resolved on many types:
 
 ## Telemetry
 
-Pass `sinks: [->(signal, data) {}]`. Signals are `:allowed`, `:denied`, `:bypassed`; data holds only `type`, `action` and `reason`, never record attributes.
+The decisions are visible to you and not to the client. Pass `sinks:` to hear each one:
+
+```ruby
+use GraphQL::Armory::Authorization, adapter: :pundit,
+  sinks: [->(signal, data) { Rails.logger.info("armory #{signal} #{data}") }]
+# armory denied {:type=>"Invoice", :action=>:read}
+```
+
+Signals are `:allowed`, `:denied`, `:bypassed` (an `authorize :none` rule ran) and `:scoped` (a list went through the user's scope). Data holds only `type`, `action` and `reason`, never record attributes. `GraphQL::Armory::Telemetry::Notifications` reports them to `ActiveSupport::Notifications`. Every signal, what to watch for and how to test it: [Telemetry](telemetry.md). A `sinks:` that is not an Array of callables raises `Telemetry::ConfigurationError` at boot.
 
 ## Guarantees and limits
 
