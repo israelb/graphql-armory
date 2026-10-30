@@ -86,7 +86,7 @@ RSpec.describe GraphQL::Armory::Telemetry do
       expect(events).to eq([["operation_refused.graphql_armory", { reason: :unknown_operation }]])
     end
 
-    it "hands subscribers their own copy of the data" do
+    it "keeps what a subscriber does to its payload away from the other sinks" do
       other = []
       subscription = ActiveSupport::Notifications.subscribe("id_refused.graphql_armory") { |*, payload| payload[:extra] = 1 }
       telemetry = armory::Telemetry.build(sinks: [armory::Telemetry::Notifications, ->(_signal, data) { other << data }])
