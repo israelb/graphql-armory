@@ -65,29 +65,56 @@ module GraphQL
           end
         end
 
-        # A method defined on a base class wins over the plugin's module, so an `authorized?` that does not call
-        # `super` skips the rule, and a resolver's `unauthorized_object` can run a mutation on a refused record.
-        # The audit cannot read them: each is reported once, where it is defined, until it is declared.
+        # A method an app defines wins over what the plugin and graphql-ruby decide: `authorized?` and `authorizes?`
+        # can skip a rule, and graphql-ruby calls `unauthorized_object` on whatever loads a record, so returning the
+        # object runs the code on a refused record. The audit cannot read them: each is reported once, where it is
+        # defined, until it is declared. Methods that come from graphql-ruby or from this gem are not the app's.
         def audit_own_checks(schema, findings)
           found = {}
           audited_types(schema).select { |type| type.respond_to?(:armory_rule) }.each do |type|
-            note_own_check(found, type, type.method(:authorized?).owner, :authorized?, ".", Integration::Object)
-            type.all_field_definitions.each do |field|
-              note_own_check(found, type, field.method(:authorized?).owner, :authorized?, "#", Integration::Field) if field.respond_to?(:armory_declared)
-              resolver = field.resolver
-              next unless resolver.respond_to?(:armory_rule)
+            note_class_check(found, type, :authorized?)
+            type.all_field_definitions.each { |field| note_field_checks(found, field) }
+          end
+          schema.types.each_value do |type|
+            next unless type.kind.input_object? && !type.introspection?
 
-              note_own_check(found, type, resolver.instance_method(:authorized?).owner, :authorized?, "#", Integration::Resolver)
-              note_own_check(found, type, resolver.instance_method(:unauthorized_object).owner, :unauthorized_object, "#", GraphQL::Schema::Resolver)
-            end
+            %i[authorized? unauthorized_object].each { |name| note_class_check(found, type, name) }
+            note_argument_checks(found, type.all_argument_definitions)
           end
           report_own_checks(found, schema.armory_configuration.own_checks, findings)
         end
 
-        def note_own_check(found, type, owner, name, separator, expected)
-          return if owner == expected
+        def note_field_checks(found, field)
+          %i[authorized? authorizes? unauthorized_object].each { |name| note_instance_check(found, field.class, name) }
+          note_argument_checks(found, field.all_argument_definitions)
+          resolver = field.resolver
+          return unless resolver
 
-          holder = type.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
+          note_instance_check(found, resolver, :unauthorized_object)
+          note_class_check(found, resolver, :authorizes?)
+          note_instance_check(found, resolver, :authorized?) if resolver.respond_to?(:armory_rule)
+        end
+
+        def note_argument_checks(found, arguments)
+          arguments.each { |argument| note_instance_check(found, argument.class, :authorized?) }
+        end
+
+        def note_instance_check(found, klass, name)
+          return unless klass.method_defined?(name) || klass.private_method_defined?(name)
+
+          note_own_check(found, klass, klass.instance_method(name).owner, name, "#")
+        end
+
+        def note_class_check(found, klass, name)
+          return unless klass.respond_to?(name, true)
+
+          note_own_check(found, klass, klass.method(name).owner, name, ".")
+        end
+
+        def note_own_check(found, klass, owner, name, separator)
+          holder = klass.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
+          return if holder.name&.start_with?("GraphQL::")
+
           found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}"
         end
 
@@ -96,15 +123,22 @@ module GraphQL
             reason = declared.fetch(holder, {})[name]
             next findings.bypass(path, reason) if reason
 
-            findings.problem(:own_check, path, "defined by the app, it runs instead of the plugin's: if it does not call super it can skip the rule. " \
-                                               "Remove it, or declare it in own_checks: with a reason")
+            findings.problem(:own_check, path, "#{own_check_risk(name)}. Remove it, or declare it in own_checks: with a reason")
           end
           declared.each do |holder, methods|
             methods.each_key do |name|
               next if found.key?([holder, name])
 
-              findings.problem(:own_check, "#{holder.name || holder.inspect}##{name}", "named in own_checks: but no check of the schema is defined there: remove it from the option")
+              findings.problem(:own_check, "#{holder.name || holder.inspect} #{name}", "named in own_checks: but no check of the schema is defined there: remove it from the option")
             end
+          end
+        end
+
+        def own_check_risk(name)
+          case name
+          when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
+          when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
+          else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
           end
         end
 

@@ -8,10 +8,11 @@ RSpec.describe "the audit and the app's own authorization checks" do
   let(:ran) { [] }
 
   # Named classes, because the report and `own_checks:` speak in classes.
-  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, **options)
+  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, relay_template: false, **options)
     plugin = armory
     calls = ran
     base_argument = Class.new(GraphQL::Schema::Argument) { include plugin::Base }
+    base_argument.class_eval(&on_argument) if on_argument
     base_field = Class.new(GraphQL::Schema::Field) do
       include plugin::Base
       argument_class base_argument
@@ -23,6 +24,18 @@ RSpec.describe "the audit and the app's own authorization checks" do
       default_action :read
     end
     base_object.class_eval(&object) if object
+    if relay_template
+      connection_class = Class.new(base_object) do
+        include GraphQL::Types::Relay::ConnectionBehaviors
+        authorize :none, reason: "a connection", covers_fields: true
+      end
+      edge_class = Class.new(base_object) do
+        include GraphQL::Types::Relay::EdgeBehaviors
+        authorize :none, reason: "an edge", covers_fields: true
+      end
+      base_object.connection_type_class(connection_class)
+      base_object.edge_type_class(edge_class)
+    end
     payload = Class.new(base_object) { authorize :none, reason: "a payload", covers_fields: true }
     invoice_type = Class.new(base_object) do
       graphql_name "Invoice"
@@ -54,11 +67,34 @@ RSpec.describe "the audit and the app's own authorization checks" do
       graphql_name "Query"
       authorize :none, reason: "the root holds nothing"
       field :ping, String, null: true, authorize: :none, reason: "public"
+      field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type" if relay_template
+      if input
+        input_type = Class.new(GraphQL::Schema::InputObject) do
+          include plugin::Base
+          graphql_name "SomeInput"
+          argument_class base_argument
+          argument :note, String, required: false
+        end
+        input_type.singleton_class.class_eval(&input)
+        field :with_input, String, null: true, authorize: :none, reason: "public" do
+          argument :input, input_type, required: false
+        end
+      end
     end
     mutation_type = Class.new(base_object) do
       graphql_name "Mutation"
       authorize :none, reason: "the root holds nothing"
       field :approve_invoice, mutation: approve_mutation
+      if plain_mutation
+        plain = Class.new(GraphQL::Schema::Mutation) do
+          graphql_name "Plain"
+          object_class payload
+          field_class base_field
+          field :done, String, null: true, hash_key: :done
+        end
+        plain.class_eval(&plain_mutation)
+        field :plain, mutation: plain
+      end
     end
     @classes = { base_field: base_field, base_object: base_object, invoice: invoice_type, base_mutation: base_mutation, approve: approve_mutation }
     Class.new(base_schema) do
@@ -117,6 +153,82 @@ RSpec.describe "the audit and the app's own authorization checks" do
     schema = build(mutation: proc { prepend own })
 
     expect(problems(schema).map(&:path)).to contain_exactly(end_with("#authorized?"))
+  end
+
+  # Verifier probes: these run the refused path too, and the audit said nothing.
+  it "reports unauthorized_object on a base field, which graphql-ruby also calls" do
+    schema = build(on_field: proc { def unauthorized_object(error) = error.object })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with("#unauthorized_object"))
+    expect(problems(schema).first.message).to match(/refused record/)
+  end
+
+  it "reports authorized? on a base argument, which skips an argument's rule" do
+    schema = build(on_argument: proc { def authorized?(*) = true })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with("#authorized?"))
+  end
+
+  it "reports self.authorized? and self.unauthorized_object on an input object" do
+    schema = build(input: proc do
+      def authorized?(*) = true
+      def unauthorized_object(error) = error.object
+    end)
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with(".authorized?"), end_with(".unauthorized_object"))
+  end
+
+  it "reports unauthorized_object on a mutation that does not include Base" do
+    schema = build(plain_mutation: proc { def unauthorized_object(error) = error.object })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with("#unauthorized_object"))
+  end
+
+  it "reports authorizes? on a base field, which on Execution::Next skips authorized?" do
+    schema = build(on_field: proc { def authorizes?(_context) = false })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with("#authorizes?"))
+  end
+
+  it "reports nothing for the connection and edge classes of graphql-ruby's install template" do
+    schema = build(relay_template: true)
+
+    expect(problems(schema)).to eq([])
+    expect(armory::Audit.(schema).ok?).to be(true)
+  end
+
+  # What the report is for.
+  it "pins that a base argument's authorized? skips the argument's rule" do
+    run_query = lambda do |schema|
+      execute_query(schema, %({ guarded(secret: "s") }), context: { current_user: world.alice }, root_value: Struct.new(:ignored).new).to_h
+    end
+    guarded = lambda do |on_argument|
+      plugin = armory
+      base_argument = Class.new(GraphQL::Schema::Argument) { include plugin::Base }
+      base_argument.class_eval(&on_argument) if on_argument
+      base_field = Class.new(GraphQL::Schema::Field) do
+        include plugin::Base
+        argument_class base_argument
+      end
+      root = Class.new(GraphQL::Schema::Object) do
+        include plugin::Base
+        field_class base_field
+        graphql_name "Query"
+        authorize :none, reason: "the root holds nothing"
+        field :guarded, String, null: true, authorize: :none, reason: "public", resolver_method: :guarded do
+          argument :secret, String, required: false, authorize: :manage, model: ::Invoice
+        end
+        define_method(:guarded) { |secret: nil| "got #{secret}" }
+      end
+      Class.new(base_schema) do
+        use plugin, adapter: :pundit
+        query(root)
+      end
+    end
+    skip "Execution::Next resolves root objects differently here" if ArmoryEngine.next?
+
+    expect(run_query.(guarded.(nil)).dig("data", "guarded")).to be_nil
+    expect(run_query.(guarded.(proc { def authorized?(*) = true })).dig("data", "guarded")).to eq("got s")
   end
 
   # What the report is for: these really do skip the rule.

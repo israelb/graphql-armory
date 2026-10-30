@@ -91,8 +91,11 @@ A declared hook that returns `nil` for a non-null field behaves differently per 
 
 **Your own checks on base classes.** The same applies one level down: `Base` is included in your base classes, so a method you define there wins over the plugin's. The audit reports each as an `:own_check` problem, once, where it is defined:
 
-- `authorized?` on a base field, a resolver or a mutation, and `self.authorized?` on a type or a base object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
-- `unauthorized_object` on a resolver or a mutation, a public graphql-ruby method that runs before the schema's hook. If it returns the object, the mutation **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
+- `authorized?` on a base field, a base argument, a resolver or a mutation, and `self.authorized?` on a type, a base object or an input object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
+- `unauthorized_object` on a resolver, a mutation (with or without `Base`), a base field, or `self.unauthorized_object` on an input object. graphql-ruby calls it on whatever loads a record, before the schema's hook. If it returns the object, the code **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
+- `authorizes?` on a base field or a resolver. On `Execution::Next`, answering `false` means `authorized?` does not run, so the rule is skipped.
+
+Methods that come from graphql-ruby or from this gem are not reported, so the connection and edge classes of graphql-ruby's install template stay clean.
 
 Remove the method, or make it call `super` and declare it, by the class that defines it and with your reason:
 
@@ -103,7 +106,12 @@ use GraphQL::Armory::Authorization, adapter: :pundit,
 
 A declared check is listed as a bypass. Each method is declared on its own, and naming one the schema does not use is an `:own_check` problem. The audit cannot read what your method does: the declaration is your word.
 
-**What the audit does not see.** It looks at the classes when it runs, so a method defined later is seen by the next audit. It does not report `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
+**What the audit does not see.**
+
+- It looks at the classes when it runs, so a method defined later is seen by the next audit.
+- A type absent from `schema.types`, as with `use Schema::Visibility, dynamic: true` and a `visible?` that answers `false`, and the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly.
+- `visible?` on a field or a type: your own can defeat `visible_when:`.
+- `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
 
 ## Lists, connections and lookups
 

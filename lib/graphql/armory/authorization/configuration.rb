@@ -9,7 +9,7 @@ module GraphQL
 
         DENIAL_HOOKS = %i[unauthorized_field unauthorized_object].freeze
 
-        OWN_CHECKS = %i[authorized? unauthorized_object].freeze
+        OWN_CHECKS = %i[authorized? authorizes? unauthorized_object].freeze
 
         attr_reader :adapter, :on_unauthorized, :sinks, :own_denial_hooks, :own_checks
 
