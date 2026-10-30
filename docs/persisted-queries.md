@@ -52,7 +52,7 @@ class GraphqlController < ApplicationController
 end
 ```
 
-`PersistedQueries.operation_id(params)` reads the id where clients send it: `operationId`, `extensions.operationId`, or Apollo's `extensions.persistedQuery.sha256Hash` (`extensions` may be a JSON string, as in GET requests). It answers nil when there is no id.
+`PersistedQueries.operation_id(params)` reads the id where clients send it: `operationId`, `extensions.operationId`, or Apollo's `extensions.persistedQuery.sha256Hash` (`extensions` may be a JSON string, as in GET requests). The first one present wins, in that order. It answers nil when there is no id, or when it is not a non-empty String. Params must have String keys, as Rack and Rails params do. An empty `query` sent with an id (a GET request with `query=`) counts as no query.
 
 What each request does:
 
@@ -77,6 +77,8 @@ GraphQL::Armory::PersistedQueries::Manifest.load("persisted-queries.json", diges
 
 `digest: false` accepts ids that are not digests (names such as `invoices-v1`). Then nothing proves an id belongs to its query: anyone who can edit the file can change what an id runs.
 
+Relay's example network layer sends the id as `doc_id`. Pass it yourself: `operation_id: params[:doc_id]`.
+
 ### Rolling it out
 
 1. Generate the manifest in the client build and ship it with the server.
@@ -98,7 +100,9 @@ Deploy the server with the new manifest before, or with, the clients that use it
 
 - `store:` answers `fetch(id)` with an object that has `body` and `document`, or nil. A Manifest, or your own store.
 - `strict:` is `true` or `false`.
-- Keeps a `query_class` the schema already set, and subclasses it.
+- Works with your own `query_class`, whether it is set before `use`, after it, or in a child schema: the plugin subclasses it.
+- `use` it once per schema hierarchy. A second `use`, on the same schema or a child, raises instead of replacing the first one's settings.
+- A store whose `fetch` raises or answers something without `document` makes the request raise: it fails closed, as an exception.
 
 Context keys: `operation_id` (a String; anything else is an unknown id), `armory_allow_raw_query` (only `true` allows).
 
@@ -107,6 +111,7 @@ Context keys: `operation_id` (a String; anything else is an unknown id), `armory
 - A request with an id runs only the stored document for that id, or nothing.
 - In strict mode a raw query runs only when the app's context says `armory_allow_raw_query: true`. The plugin does not decide who is staff: your controller does.
 - Queries built by your own code as `GraphQL::Query` objects (for example in `multiplex`) bypass the plugin's lookup. In strict mode they are not refused either: the check happens when the plugin's query class builds the query.
+- In strict mode, schema introspection run through the plugin is refused too. `Schema.to_json` and `rake graphql:schema:json` need `context: { armory_allow_raw_query: true }` (the rake task's `load_context`). `Schema.to_definition` and `Schema.validate` are not affected.
 - The manifest lives in the server's code: adding an operation needs a deploy. See the runtime store below.
 - Subscriptions: graphql-ruby re-runs a subscription with its printed query, which the plugin accepts when it matches the stored document. Subscriptions are not tested with persisted queries yet.
 

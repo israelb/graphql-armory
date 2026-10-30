@@ -79,6 +79,10 @@ RSpec.describe "use GraphQL::Armory::PersistedQueries" do
     expect(run(schema_for, invoices, operation_id: id(invoices))).to eq("data" => { "invoices" => ["A-1"] })
   end
 
+  it "runs an id sent with an empty query, as a GET request with `query=` does" do
+    expect(run(schema_for, "", operation_id: id(invoices))).to eq("data" => { "invoices" => ["A-1"] })
+  end
+
   it "refuses an id sent with another query, running neither" do
     result = run(schema_for, "{ secret }", operation_id: id(invoices))
 
@@ -118,6 +122,22 @@ RSpec.describe "use GraphQL::Armory::PersistedQueries" do
       expect(schema.query_class.ancestors).to include(custom)
     end
 
+    it "stays in force when a query class is set after use, or by a child schema" do
+      schema.query_class(Class.new(GraphQL::Query))
+      child = Class.new(schema) { query_class Class.new(GraphQL::Query) }
+
+      [schema, child].each do |each_schema|
+        expect(messages(run(each_schema, "{ secret }"))).to eq(["Only persisted operations are allowed: send an operation id"])
+      end
+      expect(resolved).to eq([])
+    end
+
+    it "leaves Schema.validate reporting errors" do
+      expect(schema.validate("{ fieldThatDoesNotExist }").map(&:message)).to eq(
+        ["Field 'fieldThatDoesNotExist' doesn't exist on type 'Query'"]
+      )
+    end
+
     it "runs stored operations" do
       expect(run(schema, operation_id: id(invoices))).to eq("data" => { "invoices" => ["A-1"] })
     end
@@ -147,6 +167,14 @@ RSpec.describe "use GraphQL::Armory::PersistedQueries" do
     it "refuses a store that cannot fetch operations, or a plain Hash" do
       refused(/store/) { schema_for(store: nil) }
       refused(/store/) { schema_for(store: { id(invoices) => invoices }) }
+    end
+
+    it "refuses a second use, here or in a child schema, rather than replacing the first" do
+      store = self.store
+      schema = schema_for(strict: true)
+
+      refused(/already uses/) { schema.use(GraphQL::Armory::PersistedQueries, store: store) }
+      refused(/already uses/) { Class.new(schema) { use GraphQL::Armory::PersistedQueries, store: store } }
     end
 
     it "refuses a strict: that is not true or false" do

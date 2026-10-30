@@ -45,10 +45,29 @@ module GraphQL
         end
         raise ConfigurationError, "strict: must be true or false, got #{strict.inspect}" unless strict == true || strict == false
 
-        schema.query_class(Class.new(schema.query_class) do
-          include Lookup
-          define_method(:persisted_queries) { [store, strict] }
-        end)
+        if schema.singleton_class.include?(Guard)
+          raise ConfigurationError, "#{schema} already uses PersistedQueries (here or in a parent schema): use it once"
+        end
+
+        schema.instance_variable_set(:@armory_persisted_queries, [store, strict].freeze)
+        schema.singleton_class.prepend(Guard)
+        schema.query_class(schema.query_class)
+      end
+
+      # Keeps the lookup in every query class the schema uses, including one set after `use` or by a child schema.
+      module Guard
+        UNSET = Object.new.freeze
+
+        def query_class(new_query_class = UNSET)
+          return super() if UNSET.equal?(new_query_class)
+          return super(new_query_class) if new_query_class.include?(Lookup)
+
+          super(Class.new(new_query_class) { include Lookup })
+        end
+
+        def armory_persisted_queries
+          @armory_persisted_queries || superclass.armory_persisted_queries
+        end
       end
 
       # The operation id a request sent, from Rack or Rails params: `operationId`, `extensions.operationId` or
@@ -82,10 +101,11 @@ module GraphQL
       # Swaps the request's query for the stored document, or for nothing with an error when it is refused.
       module Lookup
         def initialize(schema, query_string = nil, **options)
-          store, strict = persisted_queries
+          store, strict = schema.armory_persisted_queries
           context = options[:context]
           operation_id = context[:operation_id] if context.respond_to?(:[])
           text = query_string || options[:query]
+          text = nil if text == ""
 
           refusal, document =
             if !operation_id.nil?
@@ -104,8 +124,10 @@ module GraphQL
           return super if refusal.nil? && document.nil?
           return super(schema, nil, **options, query: nil, document: document) if refusal.nil?
 
-          # A refused request fails validation with the refusal as its only error, so neither engine runs it.
-          super(schema, nil, **options, query: nil, document: EMPTY_DOCUMENT, validate: true, static_validator: Refusal.new(schema, refusal))
+          # A refused request fails validation with the refusal as its only error, so neither engine runs it. Its
+          # text is never parsed; a document the app built itself is kept, for `Schema.validate`, which validates it
+          # with its own validator.
+          super(schema, nil, **options, query: nil, document: options[:document] || EMPTY_DOCUMENT, validate: true, static_validator: Refusal.new(schema, refusal))
         end
 
         private
