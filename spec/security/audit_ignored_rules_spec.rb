@@ -7,7 +7,8 @@ RSpec.describe "the audit and rules graphql-ruby's relay classes ignore" do
   let(:world) { Dummy::World.build }
 
   def build(connection: proc { authorize :none, reason: "a connection", covers_fields: true },
-            edge: proc { authorize :none, reason: "an edge", covers_fields: true }, object: nil)
+            edge: proc { authorize :none, reason: "an edge", covers_fields: true }, object: nil,
+            direct_connection: nil, direct_edge: nil, resolver: nil, **options)
     plugin = armory
     base_field = Class.new(GraphQL::Schema::Field) { include plugin::Base }
     base_object = Class.new(GraphQL::Schema::Object) do
@@ -15,10 +16,24 @@ RSpec.describe "the audit and rules graphql-ruby's relay classes ignore" do
       field_class base_field
     end
     base_object.class_eval(&object) if object
-    connection_class = Class.new(base_object) { include GraphQL::Types::Relay::ConnectionBehaviors }
-    connection_class.class_eval(&connection)
-    edge_class = Class.new(base_object) { include GraphQL::Types::Relay::EdgeBehaviors }
-    edge_class.class_eval(&edge)
+    direct = lambda do |parent, body|
+      Class.new(parent) do
+        field_class base_field
+        include plugin::Base
+        class_eval(&body)
+      end
+    end
+    connection_class = if direct_connection
+      direct.(GraphQL::Types::Relay::BaseConnection, direct_connection)
+    else
+      Class.new(base_object) { include GraphQL::Types::Relay::ConnectionBehaviors }.tap { |klass| klass.class_eval(&connection) }
+    end
+    edge_class = if direct_edge
+      direct.(GraphQL::Types::Relay::BaseEdge, direct_edge)
+    else
+      Class.new(base_object) { include GraphQL::Types::Relay::EdgeBehaviors }.tap { |klass| klass.class_eval(&edge) }
+    end
+    @connection_class = connection_class
     base_object.connection_type_class(connection_class)
     base_object.edge_type_class(edge_class)
     invoice_type = Class.new(base_object) do
@@ -29,10 +44,19 @@ RSpec.describe "the audit and rules graphql-ruby's relay classes ignore" do
     query_type = Class.new(base_object) do
       graphql_name "Query"
       authorize :none, reason: "the root holds nothing"
-      field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type"
+      if resolver
+        connection = invoice_type.connection_type
+        field :invoices, resolver: Class.new(GraphQL::Schema::Resolver) {
+          include plugin::Base
+          type connection, null: true
+          class_eval(&resolver)
+        }
+      else
+        field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type"
+      end
     end
     Class.new(base_schema) do
-      use plugin, adapter: :pundit
+      use plugin, adapter: :pundit, **options
       query(query_type)
     end
   end
@@ -75,14 +99,110 @@ RSpec.describe "the audit and rules graphql-ruby's relay classes ignore" do
     expect(armory::Audit.(schema).ok?).to be(true)
   end
 
+  # Verifier probes.
+  describe "a class that subclasses graphql-ruby's relay classes directly" do
+    let(:with_policy) { proc { authorize :manage, policy: InvoicePolicy } }
+
+    def own_checks(schema)
+      armory::Audit.(schema).problems.select { |problem| problem.kind == :own_check }
+    end
+
+    it "reports its own self.authorized?, which skips the rule" do
+      rule = with_policy
+      schema = build(direct_connection: proc do
+        class_eval(&rule)
+        def self.authorized?(_object, _context) = true
+      end)
+
+      expect(own_checks(schema).map(&:path)).to contain_exactly(end_with(".authorized?"))
+      expect(run(schema).dig("data", "invoices", "pageInfo", "hasNextPage")).to be(false)
+    end
+
+    it "reports its own self.authorizes? and one that comes through extend" do
+      own = Module.new { def authorized?(_object, _context) = true }
+      rule = with_policy
+
+      expect(own_checks(build(direct_connection: proc do
+        class_eval(&rule)
+        def self.authorizes?(_context) = false
+      end)).map(&:path)).to contain_exactly(end_with(".authorizes?"))
+      expect(own_checks(build(direct_connection: proc do
+        class_eval(&rule)
+        extend own
+      end)).map(&:path)).to contain_exactly(end_with(".authorized?"))
+    end
+
+    it "lists a declared check as a bypass, not as a declaration that matches nothing" do
+      plugin = armory
+      schema = build(direct_connection: proc do
+        authorize :manage, policy: InvoicePolicy
+        def self.authorized?(_object, _context) = true
+      end)
+      holder = @connection_class
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { holder => { authorized?: "checked elsewhere" } } }
+
+      expect(own_checks(declared)).to eq([])
+      expect(armory::Audit.(declared).bypasses.map(&:reason)).to include("checked elsewhere")
+    end
+
+    it "reports a rule on an edge class, which the nodes path never builds" do
+      schema = build(direct_edge: with_policy)
+
+      expect(problems(schema).map(&:path)).to eq(["InvoiceEdge"])
+      expect(problems(schema).first.message).to match(/nodes/)
+      expect(run(schema, "{ invoices { nodes { id } } }").dig("data", "invoices", "nodes")).not_to be_empty
+    end
+
+    it "does not report a rule on a connection class, which does run" do
+      schema = build(direct_connection: with_policy)
+
+      expect(problems(schema)).to eq([])
+      expect(run(schema).dig("data", "invoices")).to be_nil
+    end
+  end
+
+  it "reports visible_when: on a template class, which its own visible? ignores" do
+    schema = build(connection: proc { authorize :none, reason: "x", covers_fields: true, visible_when: :manage, model: ::Invoice })
+
+    expect(problems(schema).map(&:path)).to eq(["InvoiceConnection"])
+    expect(problems(schema).first.message).to match(/visible_when/)
+  end
+
+  describe "telling graphql-ruby's methods from the app's by where they are defined, not by their name" do
+    after { GraphQL.send(:remove_const, :ArmoryProbeChecks) if GraphQL.const_defined?(:ArmoryProbeChecks, false) }
+
+    it "reports an app's check held in a module under the GraphQL namespace, and not as an ignored rule" do
+      GraphQL.const_set(:ArmoryProbeChecks, Module.new { def authorized?(object, context) = super })
+      own = GraphQL::ArmoryProbeChecks
+      schema = build(connection: proc do
+        authorize :manage, model: ::Invoice
+        extend own
+      end)
+      report = armory::Audit.(schema)
+
+      expect(report.problems.select { |problem| problem.kind == :own_check }.map(&:path)).to eq(["GraphQL::ArmoryProbeChecks.authorized?"])
+      expect(problems(schema)).to eq([])
+    end
+  end
+
+  it "pins that a resolver's rule refuses on a root connection field, where a field rule has no parent to ask" do
+    schema = build(resolver: proc do
+      authorize :manage, model: ::Invoice
+      def resolve = ::Invoice.all
+    end)
+
+    expect(problems(schema)).to eq([])
+    expect(run(schema).dig("data", "invoices")).to be_nil
+  end
+
   # What the report is for.
   it "pins that the rule does not run for a user it refuses" do
-    root = Struct.new(:invoices).new(::Invoice.all)
+    expect(run(build(connection: manage)).dig("data", "invoices", "pageInfo", "hasNextPage")).to be(false)
+  end
+
+  def run(schema, query = "{ invoices { pageInfo { hasNextPage } } }")
     world
-
-    result = execute_query(build(connection: manage), "{ invoices { pageInfo { hasNextPage } } }",
-                           context: { current_user: world.alice }, root_value: root).to_h
-
-    expect(result.dig("data", "invoices", "pageInfo", "hasNextPage")).to be(false)
+    root = Struct.new(:invoices).new(::Invoice.all)
+    execute_query(schema, query, context: { current_user: world.alice }, root_value: root).to_h
   end
 end
