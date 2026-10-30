@@ -219,6 +219,22 @@ end
 
 The gem does not depend on the redis gem: add it to your Gemfile. A single `Redis` client is safe to share between threads.
 
+### Testing your limits
+
+`RateLimits::Store::Substitute` is a `MemoryStore` on a clock your test moves, that records its calls and fails when told, so specs need no mocks and no sleeping:
+
+```ruby
+store = GraphQL::Armory::RateLimits::Store::Substitute.new
+schema = Class.new(AppSchema) { use GraphQL::Armory::RateLimits::Points, store: store, limit: 100, window: 60, soft: false }
+
+store.now += 30                                     # half a window later
+store.fail_with(IOError.new("down"), on: :take)     # the next charges raise, as a broken Redis would
+store.answer(:take, [0, 0])                         # an answer no real store gives
+store.calls                                         # [[:take, "user:1", { cost: 40, limit: 100, window: 60, force: false }], ...]
+```
+
+`occupy(key)` holds a slot for an operation running elsewhere and `held(key)` counts the slots held. `RateLimits::Controls::Query.example`, `Root.example` and `Context.example` are a small schema and context to test against. `Points.new` and `Concurrency.new`, with nothing wired, refuse every query (`Store::Null`); `Points.build(...)` and `Concurrency.build(...)` take the same settings as `use`.
+
 ## Reference
 
 `use GraphQL::Armory::RateLimits::Points, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false`
