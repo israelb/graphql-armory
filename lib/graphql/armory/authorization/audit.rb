@@ -80,7 +80,8 @@ module GraphQL
           schema.types.each_value do |type|
             next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
 
-            %i[authorized? authorizes?].each { |name| note_class_check(found, type, name) }
+            %i[authorized? authorizes? authorized_new].each { |name| note_class_check(found, type, name) }
+            note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
           schema.types.each_value do |type|
@@ -94,6 +95,7 @@ module GraphQL
 
         def note_field_checks(found, field)
           %i[authorized? authorizes? unauthorized_object].each { |name| note_instance_check(found, field.class, name) }
+          note_visibility_check(found, field)
           note_argument_checks(found, field.all_argument_definitions)
           resolver = field.resolver
           return unless resolver
@@ -104,7 +106,15 @@ module GraphQL
         end
 
         def note_argument_checks(found, arguments)
-          arguments.each { |argument| note_instance_check(found, argument.class, :authorized?) }
+          arguments.each do |argument|
+            note_instance_check(found, argument.class, :authorized?)
+            note_visibility_check(found, argument)
+          end
+        end
+
+        # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.
+        def note_visibility_check(found, member)
+          note_instance_check(found, member.class, :visible?) if member.respond_to?(:armory_visible_when) && member.armory_visible_when
         end
 
         def note_instance_check(found, klass, name)
@@ -119,11 +129,13 @@ module GraphQL
           note_own_check(found, klass, klass.method(name), name, ".")
         end
 
+        # Follows the whole chain: a method that only calls super must not hide one below it that answers true.
         def note_own_check(found, klass, method, name, separator)
-          holder = holder_of(klass, method)
-          return if library_method?(method, holder, GRAPHQL_RUBY_PATH, ARMORY_PATH)
-
-          found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}"
+          while method
+            holder = holder_of(klass, method)
+            found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}" unless library_method?(method, holder, GRAPHQL_RUBY_PATH, ARMORY_PATH)
+            method = method.super_method
+          end
         end
 
         def report_own_checks(found, declared, findings)
@@ -146,6 +158,8 @@ module GraphQL
           case name
           when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
           when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
+          when :authorized_new then "defined by the app: it decides whether authorized? runs, so on the interpreter it can skip the rule"
+          when :visible? then "defined by the app: if it does not call super, visible_when: does not hide this from a user it should"
           else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
           end
         end

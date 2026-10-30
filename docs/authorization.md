@@ -94,8 +94,12 @@ A declared hook that returns `nil` for a non-null field behaves differently per 
 - `authorized?` on a base field, a base argument, a resolver or a mutation, and `self.authorized?` on a type, a base object or an input object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
 - `unauthorized_object` on a resolver, a mutation (with or without `Base`), a base field, or `self.unauthorized_object` on an input object. graphql-ruby calls it on whatever loads a record, before the schema's hook. If it returns the object, the code **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
 - `authorizes?` on a base field, a resolver, a type or a base object (`self.authorizes?`). On `Execution::Next`, answering `false` means `authorized?` does not run, so the rule is skipped.
+- `self.authorized_new` on a type. It decides whether `authorized?` runs, so on the interpreter it can skip the rule.
+- `visible?` on a type, a field or an argument whose `visible_when:` depends on it. If it does not call `super`, `visible_when:` hides nothing. Elsewhere your own `visible?` is not reported.
 
-Methods that come from graphql-ruby or from this gem are not reported, so the connection and edge classes of graphql-ruby's install template stay clean.
+Each level of a chain is reported: a method that calls `super` does not hide one below it that answers true, so declare every level you keep.
+
+Methods that come from graphql-ruby or from this gem, in their files and on classes they name, are not reported, so the connection and edge classes of graphql-ruby's install template stay clean.
 
 Remove the method, or make it call `super` and declare it, by the class that defines it and with your reason:
 
@@ -110,7 +114,7 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
 - A type absent from `schema.types`, as with `use Schema::Visibility, dynamic: true` and a `visible?` that answers `false`, and the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly.
-- `visible?` on a field or a type: your own can defeat `visible_when:`.
+- Code written to get past it. The audit reads the classes, it does not run your methods: a declared alias of a library method, a class of yours named under `GraphQL::`, or a forged `__FILE__` are not caught. The audit protects against mistakes, not against the app's own code.
 - `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
 
 ## Lists, connections and lookups

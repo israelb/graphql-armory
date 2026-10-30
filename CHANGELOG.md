@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The authorization audit follows the whole `super` chain of an own check, and also reports an own `self.authorized_new`, and an own `visible?` where a `visible_when:` depends on it. Declare every level you keep in `own_checks:`.
 - The authorization audit reports a rule on a class that includes `ConnectionBehaviors` or `EdgeBehaviors` as an `:ignored_rule` problem. Those modules answer `authorized?` with true, so the rule never ran. An audit that passed with such a rule now fails until it moves to the field.
 - The authorization audit reports a schema that defines its own `unauthorized_field` or `unauthorized_object` as a `:hook` problem. Such a method wins over the plugin's, so `on_unauthorized:` did not apply to that denial and nothing said so. An app that keeps one on purpose declares it, with its reason: `own_denial_hooks: { unauthorized_field: "..." }`, which the audit lists as a bypass. A schema with its own hook that passed the audit now fails it. It also reports, as `:own_check` problems, what an app defines that wins over the plugin and can skip a rule or run code on a refused record: `authorized?` on a base field, argument, resolver, mutation, type or input object, `unauthorized_object` wherever graphql-ruby calls it, and `authorizes?`. Declare one with `own_checks: { Klass => { authorized?: "..." } }`. Docs: `docs/authorization.md`.
 
