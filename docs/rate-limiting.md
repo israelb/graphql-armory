@@ -102,14 +102,14 @@ Give expensive fields a higher score where you define them, so their cost reflec
 
 ```ruby
 field :report, ReportType, null: false, complexity: 40      # 40 points instead of 1
-field :create_invoice, mutation: Mutations::CreateInvoice, complexity: 10  # writes cost more than reads
+field :create_invoice, mutation: Mutations::CreateInvoice, complexity: 10  # 10 points plus its selections
 ```
 
 Three settings make the scores fair. Large public APIs (GitHub, Shopify, see [References](#references)) do the same:
 
-- **Paginate every list.** A plain list field (`[Invoice]`) costs its fields **once**, however many items it returns, so 10,000 invoices cost like one. Use connections for anything that can grow. A connection asked for without `first:` or `last:` is sized by the schema's `default_page_size`, or else by `default_max_page_size`: set one of them so it is never unbounded.
+- **Paginate every list.** A plain list field (`[Invoice]`) costs its fields **once**, however many items it returns, so 10,000 invoices cost like one. Use connections for anything that can grow. A connection asked for without `first:` or `last:` is sized by the schema's `default_page_size`, or else by `default_max_page_size`. If neither is set, graphql-ruby raises `GraphQL::Error` while scoring the query (a server error, not a refusal), so set one of them. GitHub goes further and requires `first:` or `last:` on every connection.
 - **Cap a single query.** graphql-ruby's `max_complexity 1_000` refuses any query above that score, whatever the client's budget. Shopify caps single queries at 1,000 points.
-- **Make writes cost more.** Give mutations a higher `complexity:`. Shopify charges 10 points per mutation by default.
+- **Make writes cost more.** Give mutations a higher `complexity:`: `complexity: 10` charges 10 points for the mutation field itself, plus the fields it selects. Shopify charges 10 points per mutation by default.
 
 See graphql-ruby's [complexity and depth guide](https://graphql-ruby.org/queries/complexity_and_depth) for computed costs.
 
