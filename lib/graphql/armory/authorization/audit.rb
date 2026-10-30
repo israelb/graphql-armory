@@ -122,39 +122,25 @@ module GraphQL
         # The interpreter asks the field's return type, Execution::Next the resolved object, and each path differs, so it
         # is reported wherever it is off, without judging whether it skips anything: declaring it takes one line.
         def note_reauthorization(found, type)
-          return if unreadable_reauthorization?(type) || type.reauthorize_scoped_objects
+          readers = type.is_a?(Class) ? [type] : type.ancestors.select { |ancestor| ancestor.respond_to?(:reauthorize_scoped_objects, true) }
+          readers.each { |reader| note_class_check(found, reader, :reauthorize_scoped_objects) }
 
-          holder = reauthorization_holder(type)
-          found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects"
+          setter = reauthorization_setter(type)
+          found[[setter, :reauthorize_scoped_objects]] = "#{setter.name || setter.inspect}.reauthorize_scoped_objects" if setter&.instance_variable_get(:@reauthorize_scoped_objects) == false
         end
 
         def relay_connection?(type)
           type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
         end
 
-        # A connection with no node and no value of its own has nothing to answer: graphql-ruby's reader would raise.
-        def unreadable_reauthorization?(type)
-          return false unless relay_connection?(type) && type.node_type.nil? && type.instance_variable_get(:@reauthorize_scoped_objects).nil?
-
-          method = type.method(:reauthorize_scoped_objects)
-          library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH)
-        end
-
-        # graphql-ruby's reader follows superclasses, not the interfaces a class implements, to the nearest that set the
-        # value. A connection reads only its own, then its node's. With nothing seen holding it, the type itself is reported.
-        def reauthorization_holder(type)
-          method = type.method(:reauthorize_scoped_objects)
-          holder = holder_of(type, method)
-          return holder unless library_method?(method, holder, GRAPHQL_RUBY_PATH)
-
-          if relay_connection?(type)
-            return type unless type.instance_variable_get(:@reauthorize_scoped_objects).nil?
-
-            return reauthorization_holder(type.node_type)
-          end
+        # The nearest that set the value, read from the classes so no method of the app runs: graphql-ruby's reader follows
+        # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's, which is
+        # audited as a type of its own.
+        def reauthorization_setter(type)
+          return type if relay_connection?(type)
 
           chain = type.is_a?(Class) ? type.ancestors.grep(Class) : type.ancestors
-          chain.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? } || type
+          chain.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? }
         end
 
         # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.

@@ -397,6 +397,47 @@ RSpec.describe "the audit and the app's own authorization checks" do
       expect(result.dig("data", "things", "nodes")).not_to be_empty
     end
 
+    it "reports an own reader whatever it answers, without running it" do
+      answers_true = build(invoice: proc { def self.reauthorize_scoped_objects(*) = true })
+      raises = build(invoice: proc { def self.reauthorize_scoped_objects(*) = raise("needs a request") })
+
+      expect(problems(answers_true).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(problems(raises).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "does not let a declared pass-through on a base clear a child's own flag" do
+      plugin = armory
+      schema = build(object: proc { def self.reauthorize_scoped_objects(new_value = nil) = super }, invoice: proc { reauthorize_scoped_objects(false) })
+      base = @classes[:base_object]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { base => { reauthorize_scoped_objects: "only passes through" } } }
+
+      expect(problems(schema).size).to eq(2)
+      expect(problems(declared).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "reports every level of a chain of own readers" do
+      schema = build(object: proc { def self.reauthorize_scoped_objects(*) = false }, invoice: proc { def self.reauthorize_scoped_objects(*) = super })
+
+      expect(problems(schema).size).to eq(2)
+    end
+
+    it "does not raise on a connection with no node, with an own reader or over another such connection" do
+      schema = build(on_query: lambda do |query, _invoice|
+        empty = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "EmptyConnection"
+          def self.reauthorize_scoped_objects(*) = super
+        end
+        over = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "OverEmptyConnection"
+          define_singleton_method(:node_type) { empty }
+        end
+        query.field :empties, empty, null: true, authorize: :none, reason: "x"
+        query.field :overs, over, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
     it "reports the flag on a subclass of a named connection, whose node_type is reset to nil" do
       schema = build(on_query: lambda do |query, invoice|
         named = Class.new(GraphQL::Types::Relay::BaseConnection) do
