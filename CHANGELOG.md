@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rate limiting, part 1: `use GraphQL::Armory::RateLimits::Points, store:, limit:, window:` charges each query its complexity against a bucket of points per client (`context[:rate_limit_key]`) that refills over the window. Over-limit queries are refused before running, with their cost, what remains and when to retry; soft mode (the default) only records. `RateLimits::MemoryStore` for tests and single processes. Docs: `docs/rate-limiting.md`.
+
 ## 0.1.0.pre4 (2026-10-29)
 
 Persisted queries / operation allowlist (roadmap module 3). Docs: `docs/persisted-queries.md`.
