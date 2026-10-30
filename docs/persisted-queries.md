@@ -20,6 +20,55 @@ Your client's build step (Apollo's persisted query manifest generator, or Relay'
 - **Smaller requests.** The client sends a 64-character id and the variables.
 - **Both engines.** It hooks only `Schema.query_class`, so it works on the interpreter and on `Execution::Next`.
 
+## Who does what
+
+Two separate pieces work together. Your client tooling writes the list; this gem enforces it on the server.
+
+| Piece | Who provides it | What it does |
+|---|---|---|
+| `persisted-queries.json` | Apollo or Relay, in your client's build | Lists every operation the app uses. You do not write or edit it by hand. |
+| `PersistedQueries::Manifest` | this gem | Loads the file at boot and checks that nobody edited it. |
+| `use GraphQL::Armory::PersistedQueries` | this gem | Runs the operation a request names by id, and in strict mode refuses everything else. |
+
+Think of an event: the client tooling prints the guest list, and this gem is the guard at the door. A list without a guard stops nobody. Apollo Server (Node) ships its own guard; open-source graphql-ruby has none, so without this gem a Ruby API ignores the file and keeps running any query it receives.
+
+Your part is to copy the file the client build produced into the server (for example as `persisted-queries.json` in the Rails root) and deploy it.
+
+### What the file looks like
+
+Apollo's manifest, written by `generate-persisted-query-manifest` (`@apollo/generate-persisted-query-manifest`):
+
+```json
+{
+  "format": "apollo-persisted-query-manifest",
+  "version": 1,
+  "operations": [
+    {
+      "id": "6c5d8a12c92cffe7786b5a6d288f56d479973fd0f35b31bce215a4df9cf554ef",
+      "name": "Invoices",
+      "type": "query",
+      "body": "query Invoices { invoices { number total } }"
+    }
+  ]
+}
+```
+
+Relay's persisted output, written by `relay-compiler` with `persistConfig`, is a flat map of id to query:
+
+```json
+{
+  "904cd33a4439518767fd75402dd7e47b": "query Invoices { invoices { number total } }"
+}
+```
+
+Each id is the digest of its exact query text: SHA-256 in Apollo's manifest, MD5 in this Relay example (load it with `digest: :md5`). Change a query without regenerating its id and the app refuses to boot, naming that id.
+
+A client then sends only the id and the variables:
+
+```json
+{ "operationId": "6c5d8a12c92cffe7786b5a6d288f56d479973fd0f35b31bce215a4df9cf554ef", "variables": {} }
+```
+
 ## How to use it
 
 Load the manifest and add the plugin:
