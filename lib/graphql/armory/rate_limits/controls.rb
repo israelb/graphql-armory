@@ -28,6 +28,22 @@ module GraphQL
           end
         end
 
+        # A root for Query.example whose every field takes `seconds` on `clock` (a Clock::Substitute) before it
+        # answers, so a spec decides how long an operation took.
+        module Time
+          def self.example(clock, resolved = [], seconds: 0.25)
+            root = Root.example(resolved)
+            Class.new do
+              %i[cheap report broken].each do |field|
+                define_method(field) do
+                  clock.advance(seconds)
+                  root.public_send(field)
+                end
+              end
+            end.new
+          end
+        end
+
         # A query context naming its client.
         module Context
           def self.example(key: "user:1", **context)
