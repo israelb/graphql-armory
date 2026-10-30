@@ -36,7 +36,7 @@ Your part is to copy the file the client build produced into the server (for exa
 
 ### What the file looks like
 
-Apollo's manifest, written by `generate-persisted-query-manifest` (`@apollo/generate-persisted-query-manifest`):
+Apollo's manifest, written by `generate-persisted-query-manifest` (`@apollo/generate-persisted-query-manifest`, see [Apollo's guide](https://www.apollographql.com/docs/react/data/persisted-queries)):
 
 ```json
 {
@@ -53,7 +53,7 @@ Apollo's manifest, written by `generate-persisted-query-manifest` (`@apollo/gene
 }
 ```
 
-Relay's persisted output, written by `relay-compiler` with `persistConfig`, is a flat map of id to query:
+Relay's persisted output, written by `relay-compiler` with `persistConfig` (see [Relay's guide](https://relay.dev/docs/guides/persisted-queries/)), is a flat map of id to query:
 
 ```json
 {
