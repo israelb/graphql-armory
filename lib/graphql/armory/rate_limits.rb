@@ -97,6 +97,13 @@ module GraphQL
           raise ConfigurationError, "store: #{method} answered #{answer.inspect}: it must answer [true or false, #{meaning}]"
         end
 
+        # A callable answering seconds, like `Clock.monotonic`.
+        def clock(value)
+          raise ConfigurationError, "clock: must be a callable answering seconds, got #{value.inspect}" unless value.respond_to?(:call)
+
+          value
+        end
+
         def store_error_handler(handler)
           return ->(error, _query) { warn("graphql-armory rate limit store failed, query let through: #{error.class}: #{error.message}") } if handler.nil?
           raise ConfigurationError, "on_store_error: must be a callable that takes the error and the query" unless handler.respond_to?(:call)
@@ -110,7 +117,9 @@ end
 
 require "graphql/armory/rate_limits/memory_store"
 require "graphql/armory/rate_limits/store"
+require "graphql/armory/rate_limits/clock"
 require "graphql/armory/rate_limits/redis_store"
 require "graphql/armory/rate_limits/points"
 require "graphql/armory/rate_limits/concurrency"
+require "graphql/armory/rate_limits/time"
 require "graphql/armory/rate_limits/controls"
