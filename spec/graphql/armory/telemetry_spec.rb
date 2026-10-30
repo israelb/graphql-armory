@@ -27,6 +27,30 @@ RSpec.describe GraphQL::Armory::Telemetry do
     end
   end
 
+  it "never quotes a sink in the boot error: a metrics client holds its API key" do
+    client = Class.new { def initialize = @api_key = "sk_live_SECRET123"; def call(*) = nil }.new
+    credentials = [{ url: "https://user:hunter2@metrics" }]
+
+    [client, credentials, [credentials.first]].each do |sinks|
+      expect { armory::Telemetry.new(sinks: sinks) }.to raise_error(armory::Telemetry::ConfigurationError) { |error|
+        expect(error.message).not_to match(/SECRET|hunter2|api_key/)
+      }
+    end
+  end
+
+  it "gives every sink the same frozen data, so one sink cannot change what the next sees" do
+    type = +"Invoice"
+    seen = []
+    mutator = ->(_signal, data) { data[:reason] = :tampered }
+    reader = ->(_signal, data) { seen << data }
+
+    expect { armory::Telemetry.new(sinks: [mutator]).record(:id_refused, reason: :invalid) }.to raise_error(FrozenError)
+    armory::Telemetry.new(sinks: [reader]).record(:id_refused, reason: :invalid, type: type)
+    type << "!"
+
+    expect([seen.first, seen.first.frozen?, seen.first[:type].frozen?]).to eq([{ reason: :invalid, type: "Invoice" }, true, true])
+  end
+
   it "refuses bad sinks in use GraphQL::Armory::Authorization at boot, not at the first query" do
     expect { Class.new(GraphQL::Schema) { use GraphQL::Armory::Authorization, adapter: :pundit, sinks: "log" } }
       .to raise_error(armory::Telemetry::ConfigurationError, /sinks/)
@@ -60,6 +84,16 @@ RSpec.describe GraphQL::Armory::Telemetry do
       ActiveSupport::Notifications.unsubscribe(subscription)
 
       expect(events).to eq([["operation_refused.graphql_armory", { reason: :unknown_operation }]])
+    end
+
+    it "hands subscribers their own copy of the data" do
+      other = []
+      subscription = ActiveSupport::Notifications.subscribe("id_refused.graphql_armory") { |*, payload| payload[:extra] = 1 }
+      telemetry = armory::Telemetry.build(sinks: [armory::Telemetry::Notifications, ->(_signal, data) { other << data }])
+      telemetry.record(:id_refused, reason: :invalid)
+      ActiveSupport::Notifications.unsubscribe(subscription)
+
+      expect(other).to eq([{ reason: :invalid }])
     end
 
     it "is refused at boot when ActiveSupport::Notifications is not available" do

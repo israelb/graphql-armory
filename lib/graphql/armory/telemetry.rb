@@ -14,20 +14,24 @@ module GraphQL
       end
 
       def initialize(sinks: [])
-        unless sinks.is_a?(Array) && sinks.all? { |sink| sink.respond_to?(:call) }
-          raise ConfigurationError, "sinks: must be an Array of callables taking (signal, data), got #{sinks.inspect}"
-        end
+        # Messages name a class, never `inspect` a value: a metrics client holds its API key.
+        raise ConfigurationError, "sinks: must be an Array of callables taking (signal, data), got #{sinks.class}" unless sinks.is_a?(Array)
 
         sinks.each do |sink|
-          if sink.respond_to?(:available?) && !sink.available?
-            raise ConfigurationError, "sink #{sink} is not available: the library it reports to is not loaded"
-          end
+          raise ConfigurationError, "sinks: must be an Array of callables taking (signal, data), found a #{sink.class}" unless sink.respond_to?(:call)
+          next unless sink.respond_to?(:available?) && !sink.available?
+
+          raise ConfigurationError, "sink #{sink.is_a?(Module) ? sink.name : sink.class} is not available: the library it reports to is not loaded"
         end
 
         @sinks = sinks.dup.freeze
       end
 
+      # Every sink gets the same frozen data, so one sink (or a subscriber) cannot change what the next one sees.
       def record(signal, **data)
+        return nil if @sinks.empty?
+
+        data = data.to_h { |key, value| [key, value.is_a?(String) ? value.dup.freeze : value] }.freeze
         @sinks.each { |sink| sink.call(signal, data) }
         nil
       end
@@ -40,7 +44,7 @@ module GraphQL
         end
 
         def self.call(signal, data)
-          ::ActiveSupport::Notifications.instrument("#{signal}.graphql_armory", data)
+          ::ActiveSupport::Notifications.instrument("#{signal}.graphql_armory", data.dup) # ActiveSupport may add keys to its payload
         end
       end
 

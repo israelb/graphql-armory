@@ -39,10 +39,12 @@ end
 ```
 
 ```
-armory id_refused {:reason=>:invalid}
-armory operation_refused {:reason=>:unknown_operation}
-armory denied {:type=>"Invoice", :action=>:read}
+armory id_refused {reason: :invalid}
+armory operation_refused {reason: :unknown_operation}
+armory denied {type: "Invoice", action: :read}
 ```
+
+(Ruby before 3.4 prints a hash as `{:reason=>:invalid}`.)
 
 ### With ActiveSupport::Notifications
 
@@ -63,7 +65,40 @@ ActiveSupport::Notifications.subscribe(/\.graphql_armory\z/) do |name, _start, _
 end
 ```
 
-A `reason` has a handful of values, so it is safe as a metrics tag. `Notifications` needs ActiveSupport loaded: passing it without ActiveSupport raises `Telemetry::ConfigurationError` at boot, instead of silently reporting nothing.
+A `reason` has a handful of values, so it is safe as a metrics tag. `Notifications` needs ActiveSupport loaded: passing it without ActiveSupport raises `Telemetry::ConfigurationError` at boot, instead of silently reporting nothing. A Rails app has ActiveSupport fully loaded; outside Rails, `require "active_support"` before `require "active_support/notifications"`, as the latter alone is not enough in recent versions.
+
+### With Datadog
+
+A sink is any callable, so a metrics client plugs in directly. With [DogStatsD](https://docs.datadoghq.com/metrics/dogstatsd_metrics_submission/?tab=ruby), every signal becomes a counter and the signal's data becomes its tags:
+
+```ruby
+# Gemfile: gem "dogstatsd-ruby"
+require "datadog/statsd"
+
+STATSD = Datadog::Statsd.new("localhost", 8125)
+
+datadog = lambda do |signal, data|
+  STATSD.increment("graphql_armory.#{signal}", tags: data.map { |key, value| "#{key}:#{value}" })
+end
+
+class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::Authorization, adapter: :pundit, sinks: [datadog]
+  use GraphQL::Armory::IDs, sinks: [datadog]
+  use GraphQL::Armory::PersistedQueries, store: PERSISTED_QUERIES, sinks: [datadog]
+end
+```
+
+In Datadog you get metrics such as `graphql_armory.id_refused` with the tag `reason:invalid`, or `graphql_armory.denied` with `type:Invoice` and `action:read`. Graph them, and build a monitor on the ones that should stay near zero (`id_refused` with `reason:invalid`, `operation_refused` with `reason:unknown_operation`). The tags are safe because they hold reasons, type names and actions: few values, none chosen by a client, so they do not inflate your metrics' cardinality.
+
+If you already use `ActiveSupport::Notifications`, subscribe once and send from there instead, so the sink stays out of the schema:
+
+```ruby
+ActiveSupport::Notifications.subscribe(/\.graphql_armory\z/) do |name, _start, _finish, _id, payload|
+  STATSD.increment("graphql_armory.#{name.delete_suffix(".graphql_armory")}", tags: payload.map { |key, value| "#{key}:#{value}" })
+end
+```
+
+The gem does not depend on Datadog or on any other backend. The same shape works for StatsD, Prometheus, OpenTelemetry or whatever your team uses: write the callable that turns `(signal, data)` into one call of that client. The example above follows Datadog's documented `increment(name, tags:)`; it has not been run against a live agent.
 
 ### What to watch for
 
@@ -119,6 +154,18 @@ The reasons of `:id_refused`:
 
 Rate limiting has no sinks. It records on every query, in the query's context, what it charged and what remains: `context[:rate_limit_points]` and `context[:rate_limit_concurrency]`, which carry `limited: true` for the queries it refused or, in soft mode, would have refused. See [Rolling it out](rate-limiting.md#rolling-it-out) and [Showing clients their budget](rate-limiting.md#showing-clients-their-budget). Send those to the same place as the signals above.
 
+## What telemetry does not cover
+
+Signals are counters of the gem's decisions. They are not a replacement for these:
+
+- **Traces.** A signal is a point event, not a span. In Datadog APM (or any tracer) a refused ID does not appear as a span of its own; it shows in the trace of the request that carried it, as the normal "not found" answer. If you want it on the trace, have your sink add a tag to the active span with your tracer's API.
+- **Who asked.** A signal says `id_refused`, not which user or IP. Correlate with your request logs through the request id, or add the user in your own sink from your request context: that is yours to hold, and stays out of the gem.
+- **Rate limiting.** It has no sinks: it records in the query's context. Send `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` from your controller, to the same client. They hold the rate limit `key:` (a user id or an IP): send them somewhere that may hold personal data, or leave the key out.
+- **Slow or failing requests.** The gem records its decisions. Latency, errors and throughput of your GraphQL endpoint come from your APM or from graphql-ruby's own tracing.
+- **Anything that did not reach the gem.** A request rejected before GraphQL runs (a web application firewall, a body size limit, a parse error) never produces a signal.
+- **A guarantee of delivery.** Sinks run in the request and report nothing if the process dies first. Counters sent to StatsD are best effort by design.
+- **History.** The gem keeps nothing: the signals are as durable as the place you send them.
+
 ## What a signal never holds
 
 A signal has a reason and, where it helps, the name of a type or an action. It **never** holds:
@@ -142,7 +189,7 @@ lookup = GraphQL::Armory::IDs::Lookup.new(
 
 lookup.object_for("forged", context)
 
-telemetry.recorded           # => [[:id_refused, { reason: :invalid }]]
+telemetry.recorded               # => [[:id_refused, { reason: :invalid }]]
 telemetry.recorded?(:id_refused) # => true
 ```
 
@@ -156,16 +203,17 @@ use GraphQL::Armory::PersistedQueries, store: store, sinks: [->(signal, data) { 
 ## Reference
 
 - `sinks:` is an option of `use GraphQL::Armory::Authorization`, `use GraphQL::Armory::IDs` and `use GraphQL::Armory::PersistedQueries`. An Array of callables taking `(signal, data)`, called in order; default `[]`.
-- `Telemetry.new(sinks: [])`, `Telemetry.build(sinks: [])`, `telemetry.record(signal, **data)` (answers nil).
+- `Telemetry.new(sinks: [])`, `Telemetry.build(sinks: [])`, `telemetry.record(signal, **data)` (answers nil; `data` reaches the sinks frozen).
 - `Telemetry::Notifications`: a sink that calls `ActiveSupport::Notifications.instrument("<signal>.graphql_armory", data)`. `Notifications.available?` tells whether ActiveSupport::Notifications is loaded.
 - `Telemetry::Substitute`: `record`, `recorded` (an Array of `[signal, data]`), `recorded?(signal)`, and `fail_with(error)` / `recover` to make `record` raise, as a broken sink would.
-- `Telemetry::ConfigurationError`, raised at boot when `sinks:` is not an Array of callables, or a sink reports `available?` as false.
+- `Telemetry::ConfigurationError`, raised at boot when `sinks:` is not an Array of callables, or a sink reports `available?` as false. Its message names the class of the offending value and never prints the value: a metrics client holds its API key.
 - `Authorization::Telemetry` is the same class as `Telemetry`.
 
 ## Guarantees and limits
 
 - **Sinks run inline**, in the request's thread, in the order given. A slow sink slows every request: increment a counter or enqueue, do not call a remote service.
-- **A sink that raises raises.** The error reaches the request and the request fails with it; nothing is let through because of it. If you would rather a broken metrics client never fail a request, rescue inside your sink.
+- **A sink that raises fails the request closed.** The error normally reaches the request, and nothing is let through because of it. One exception: for an ID given to a `loads:` argument, the authorization module reads an `ArgumentError`, an `Encoder::InvalidError` or an `ActiveRecord::RecordNotFound` raised by the ID lookup as an invalid ID and answers `nil`, so a sink raising one of those does not surface there (it is still closed: the record is not loaded). If you would rather a broken metrics client never fail a request, rescue inside your sink.
+- **Every sink gets the same frozen data.** A sink cannot change what the next one sees; trying to change it raises `FrozenError`. `Notifications` hands each subscriber its own copy.
 - **One request can record many signals**, one per decision (a list of invoices is several), and each query of a batch records its own.
 - **Signals are not a security log by themselves.** They tell you what the gem decided; who asked comes from your request context.
 - Names and reasons are part of the public API, but the gem is in prerelease: they may change before 1.0, and the CHANGELOG says so when they do.
