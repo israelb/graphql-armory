@@ -162,6 +162,9 @@ module GraphQL
           elsif rule.none?
             findings.bypass(path, rule.reason)
             audit_fields(type, findings, model: nil, bypassed: !rule.covers_fields?, reported: Set.new)
+          elsif rule_ignored?(type)
+            findings.problem(:ignored_rule, path, "graphql-ruby's #{type.method(:authorized?).owner} answers authorized? here, so this rule never runs: " \
+                                                  "put the rule on the field that returns it, and declare `authorize :none` with a reason on this class")
           else
             model = model_of(type, path, findings)
             reported = Set.new
@@ -169,6 +172,12 @@ module GraphQL
             check(path, model, Rule.new(rule.visible_when, policy: rule.policy), findings, reported) if model && rule.visible_when
             audit_fields(type, findings, model: model, bypassed: false, reported: reported)
           end
+        end
+
+        # ConnectionBehaviors and EdgeBehaviors, included after Base, bring an `authorized?` that wins over the plugin's.
+        def rule_ignored?(type)
+          owner = type.method(:authorized?).owner
+          owner != Integration::Object && owner.name&.start_with?("GraphQL::")
         end
 
         # Interface fields are reported once, on the interface that declares them, not on every implementer.
