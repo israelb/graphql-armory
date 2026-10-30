@@ -186,6 +186,62 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
     end
   end
 
+  describe "several limiters on one schema" do
+    it "keeps each limiter's own store, key and limit: the second never replaces the first" do
+      other = GraphQL::Armory::RateLimits::Store::Substitute.new
+      schema = schema_for
+      schema.use(GraphQL::Armory::RateLimits::Time, store: other, clock: clock, limit: 100, soft: false, key: ->(_query) { "ip:1" })
+
+      responses = Array.new(3) { run(schema).first }
+
+      expect(responses.map { |response| response.key?("errors") }).to eq([false, true, true])
+      # The refused runs reach the first limiter too (graphql-ruby runs every analyzer) and cost it 0 ms.
+      expect(charges).to eq([["user:1", 250], ["user:1", 0], ["user:1", 0]])
+      expect(other.calls.select { |_method, _key, arguments| arguments[:force] }.map { |_method, key, arguments| [key, arguments[:cost]] })
+        .to eq([["ip:1", 250]])
+    end
+  end
+
+  describe "a clock that does not answer a finite number" do
+    def clock_answering(*readings)
+      -> { readings.size > 1 ? readings.shift : readings.first }
+    end
+
+    it "is refused at boot instead of letting operations run uncharged" do
+      [nil, "1", Float::NAN, Float::INFINITY].each do |reading|
+        expect { schema_for(clock: -> { reading }) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /clock/)
+      end
+    end
+
+    it "stops an operation before it runs when the clock breaks after boot" do
+      schema = schema_for(clock: clock_answering(0.0, "later"))
+
+      expect { run(schema) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /clock/)
+      expect(resolved).to eq([])
+    end
+
+    it "raises when the clock breaks while the operation runs, rather than charging nothing quietly" do
+      schema = schema_for(clock: clock_answering(0.0, 0.0, nil))
+
+      expect { run(schema) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /clock/)
+    end
+
+    it "charges nothing when the clock stands still or goes backwards" do
+      schema = schema_for(clock: clock_answering(5.0, 5.0, 4.0))
+      run(schema)
+
+      expect(charges).to eq([["user:1", 0]])
+    end
+  end
+
+  it "carries the time of a query with no limit on the limited queries of its multiplex" do
+    schema = schema_for(limit: ->(key, _query) { key == "admin" ? nil : 1_000 })
+    queries = %w[admin u].map { |key| { query: "{ cheap }", context: { rate_limit_key: key }, root_value: root } }
+    ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries)
+
+    expect(charges).to eq([["u", 500]])
+  end
+
   describe "soft mode, the default" do
     it "runs operations with no milliseconds left, charges them and records them as limited" do
       query = GraphQL::Armory::RateLimits::Controls::Query.example

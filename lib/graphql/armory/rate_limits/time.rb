@@ -55,6 +55,7 @@ module GraphQL
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error)
           @clock = Settings.clock(clock)
+          now # a clock that answers anything but a finite number fails here, not by charging nothing
           @extensions = Settings.extensions(extensions)
           @trace = measuring_trace
         end
@@ -92,35 +93,40 @@ module GraphQL
 
           limited = remaining.zero?
           info = record(query, key: key, limit: limit, remaining: remaining, limited: limited)
-          announce(query, info) if @extensions
+          extension = announce(query, info) if @extensions
           return refusal(limit) if limited && !@soft
 
-          owe(query, key, limit)
+          owe(query, key, limit, info, extension)
           nil
         end
 
-        # The clock's reading, for the trace.
+        # The clock's reading, for the trace. A reading that is not a finite number would make the charge
+        # impossible, so it raises instead of letting operations run uncharged.
         def now
-          @clock.call
+          reading = @clock.call
+          return reading if reading.is_a?(Numeric) && reading.finite?
+
+          raise ConfigurationError, "clock: answered #{reading.inspect}: it must answer a finite number of seconds"
         end
 
         # Charges the elapsed time since `started`, split equally among the queries of the multiplex that ran.
         def charge(multiplex, started)
           return if started.nil?
 
-          seconds = @clock.call - started
-          seconds = 0 unless seconds.is_a?(Numeric) && seconds.finite? && seconds.positive?
+          # A clock that stands still or goes backwards charges nothing.
+          seconds = [now - started, 0].max
+          # Each limiter takes only its own debts: a schema may `use` several, with different stores and keys.
           owed = multiplex.queries.filter_map do |query|
-            debt = query.context.namespace(NAMESPACE).delete(:time_charge)
-            [query, *debt] if debt
+            debt = query.context.namespace(NAMESPACE)[:time_charges]&.delete(self)
+            [query, debt] if debt
           end
           return if owed.empty?
 
           share = (seconds * 1000 / owed.size.to_f).ceil
           # Every query is charged even if one hook raises; the first such error is raised afterwards.
           failure = nil
-          owed.each do |query, _time, key, limit|
-            charge_one(query, key, limit, share)
+          owed.each do |query, debt|
+            charge_one(query, debt, share)
           rescue StandardError => error
             failure ||= error
           end
@@ -129,26 +135,27 @@ module GraphQL
 
         private
 
-        def charge_one(query, key, limit, cost)
-          answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
+        def charge_one(query, debt, cost)
+          answer = @store.take(debt[:key], cost: cost, limit: debt[:limit], window: @window, force: true)
           _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
-          settle(query, key, limit, cost, remaining)
+          settle(query, debt, cost, remaining)
         rescue StandardError => error
           @on_store_error.call(error, query)
         end
 
         # What the client has left once the charge is in, in the record and in the extensions announced earlier.
-        def settle(query, key, limit, cost, remaining)
-          space = query.context.namespace(NAMESPACE)
-          info = (space[:time] || base_record(key: key, limit: limit, limited: false)).merge(remaining: remaining, elapsed: cost)
-          space[:time] = info
+        def settle(query, debt, cost, remaining)
+          info = (debt[:info] || base_record(key: debt[:key], limit: debt[:limit], limited: false)).merge(remaining: remaining, elapsed: cost)
+          query.context.namespace(NAMESPACE)[:time] = info
           query.context[CONTEXT_KEY] = info
-          space[:time_extension]&.merge!("remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
+          debt[:extension]&.merge!("remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
         end
 
-        # Per query, not in the context hash: queries of a multiplex may share one hash.
-        def owe(query, key, limit)
-          query.context.namespace(NAMESPACE)[:time_charge] = [self, key, limit]
+        # Per query and per limiter, not in the context hash: queries of a multiplex may share one hash, and a
+        # schema may use several limiters.
+        def owe(query, key, limit, info = nil, extension = nil)
+          charges = (query.context.namespace(NAMESPACE)[:time_charges] ||= {})
+          charges[self] = { key: key, limit: limit, info: info, extension: extension }
         end
 
         def record(query, **info)
@@ -166,7 +173,6 @@ module GraphQL
         def announce(query, info)
           extension = { "limit" => info[:limit], "remaining" => info[:remaining], "resetIn" => Points.reset_in(info) }
           query.context.response_extensions["rateLimitTime"] = extension
-          query.context.namespace(NAMESPACE)[:time_extension] = extension
         end
 
         def refusal(limit)
