@@ -15,12 +15,25 @@ module GraphQL
       class Points
         CONTEXT_KEY = :rate_limit_points
 
-        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil)
-          points = new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error)
+        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
+          points = new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
           schema.query_analyzer(Class.new(Analyzer) { define_method(:points) { points } })
         end
 
-        def initialize(store:, limit:, window:, soft:, key:, on_store_error:)
+        # HTTP headers for the budget a result recorded: `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`
+        # (seconds until the bucket is full again). Empty when the query had no limit.
+        def self.headers(result)
+          info = result.context[CONTEXT_KEY]
+          return {} unless info && info[:limit]
+
+          { "RateLimit-Limit" => info[:limit].to_s, "RateLimit-Remaining" => info[:remaining].to_s, "RateLimit-Reset" => reset_in(info).to_s }
+        end
+
+        def self.reset_in(info)
+          ((info[:limit] - info[:remaining]) * info[:window] / info[:limit].to_f).ceil
+        end
+
+        def initialize(store:, limit:, window:, soft:, key:, on_store_error:, extensions: false)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
@@ -31,6 +44,9 @@ module GraphQL
           @soft = Settings.soft(soft)
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error)
+          raise ConfigurationError, "extensions: must be true or false, got #{extensions.inspect}" unless extensions == true || extensions == false
+
+          @extensions = extensions
         end
 
         # The refusal for a query that costs `cost`, or nil to let it run.
@@ -50,7 +66,11 @@ module GraphQL
           end
           taken, remaining = Settings.checked(answer, :take, "the Integer points left")
 
-          record(query, key: key, cost: cost, limit: limit, remaining: remaining, limited: !taken)
+          info = record(query, key: key, cost: cost, limit: limit, remaining: remaining, limited: !taken)
+          if @extensions
+            query.context.response_extensions["rateLimit"] =
+              { "cost" => cost, "limit" => limit, "remaining" => remaining, "resetIn" => self.class.reset_in(info) }
+          end
           refusal(cost, limit, remaining) unless taken || @soft
         end
 

@@ -128,6 +128,35 @@ The response holds only the refusal:
 
 A query that costs more than the whole limit can never run, and says so: `this query costs 1200 points and the limit is 1000 every 60 seconds, so it can never run.` Its extensions hold `cost` and `limit`.
 
+### Showing clients their budget
+
+A client that only learns its budget when it is refused cannot pace itself. GitHub sends the budget in headers on every response; Shopify puts it in the response's `extensions`. You can do either, or both.
+
+In the response, with `extensions: true`:
+
+```ruby
+use GraphQL::Armory::RateLimits::Points, store: store, limit: 1_000, window: 60, soft: false, extensions: true
+```
+
+```json
+{
+  "data": { "report": { "total": 120 } },
+  "extensions": { "rateLimit": { "cost": 40, "limit": 1000, "remaining": 960, "resetIn": 3 } }
+}
+```
+
+`resetIn` is the number of seconds until the bucket is full again. It is on refused responses too, and absent for a client with no limit. It is off by default, so responses do not change until you turn it on.
+
+In HTTP headers, from your controller:
+
+```ruby
+result = AppSchema.execute(params[:query], variables: params[:variables], context: context)
+response.headers.merge!(GraphQL::Armory::RateLimits::Points.headers(result))
+render json: result
+```
+
+That sets `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds until the bucket is full), or nothing when the query had no limit.
+
 ### Different limits per client
 
 ```ruby
@@ -171,7 +200,7 @@ A process that crashes never gives its slots back, so each slot expires after `s
 
 ## Reference
 
-`use GraphQL::Armory::RateLimits::Points, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil`
+`use GraphQL::Armory::RateLimits::Points, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false`
 
 - `store:` answers `take(key, cost:, limit:, window:, force:)` with `[taken, remaining]`. `MemoryStore.new(clock: ...)` keeps buckets in the process.
 - `limit:` a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
@@ -179,6 +208,8 @@ A process that crashes never gives its slots back, so each slot expires after `s
 - `soft:` `true` (default) charges and records without refusing; `false` refuses.
 - `key:` a callable `(query)` answering the client key; by default `context[:rate_limit_key]`. It must be a non-empty String.
 - `on_store_error:` a callable `(error, query)` called when the store raises; the query then runs (fails open). By default it warns.
+- `extensions:` `true` adds `"rateLimit" => { cost, limit, remaining, resetIn }` to every response of a limited client; `false` (default) leaves responses unchanged.
+- `Points.headers(result)` answers the `RateLimit-*` headers for a result, or `{}`.
 - Instrumentation: `context[:rate_limit_points]`.
 
 `use GraphQL::Armory::RateLimits::Concurrency, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil`
