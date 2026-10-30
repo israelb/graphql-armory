@@ -63,6 +63,32 @@ RSpec.describe "the points budget in responses" do
       )
     end
 
+    it "answers each query's own budget when the queries of a multiplex share one context hash" do
+      schema = schema_for
+      shared = { rate_limit_key: "user:1" }
+      queries = [{ query: "{ report }", context: shared, root_value: root }, { query: "{ cheap }", context: shared, root_value: root }]
+      results = ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries)
+
+      expect(results.map { |result| headers.call(result)["RateLimit-Remaining"] }).to eq(%w[60 59])
+    end
+
+    it "answers no headers, and keeps no stale record, when the store fails" do
+      store = self.store
+      flaky = Class.new do
+        attr_accessor :down
+
+        define_method(:take) { |key, cost:, limit:, window:, force:| down ? raise(IOError, "down") : store.take(key, cost: cost, limit: limit, window: window, force: force) }
+      end.new
+      schema = schema_for(store: flaky, on_store_error: ->(_error, _query) {})
+      shared = { rate_limit_key: "user:1" }
+      execute_query(schema, "{ cheap }", context: shared, root_value: root)
+      flaky.down = true
+
+      result = execute_query(schema, "{ cheap }", context: shared, root_value: root)
+
+      expect([headers.call(result), result.context[:rate_limit_points]]).to eq([{}, nil])
+    end
+
     it "answers no headers when the query was not limited or the limiter is not installed" do
       unlimited = run(schema_for(limit: ->(_key, _query) { nil }))
       plain = execute_query(Class.new(ArmoryEngine.base_schema) { query(Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :cheap, String }) }, "{ cheap }", root_value: root)

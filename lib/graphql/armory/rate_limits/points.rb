@@ -14,6 +14,7 @@ module GraphQL
       # `context[:rate_limit_points]`.
       class Points
         CONTEXT_KEY = :rate_limit_points
+        NAMESPACE = :graphql_armory
 
         def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
           points = new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
@@ -23,7 +24,7 @@ module GraphQL
         # HTTP headers for the budget a result recorded: `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`
         # (seconds until the bucket is full again). Empty when the query had no limit.
         def self.headers(result)
-          info = result.context[CONTEXT_KEY]
+          info = result.context.namespace(NAMESPACE)[:points]
           return {} unless info && info[:limit]
 
           { "RateLimit-Limit" => info[:limit].to_s, "RateLimit-Remaining" => info[:remaining].to_s, "RateLimit-Reset" => reset_in(info).to_s }
@@ -61,6 +62,8 @@ module GraphQL
           answer = begin
             @store.take(key, cost: cost, limit: limit, window: @window, force: @soft)
           rescue StandardError => error
+            # No record: a context hash shared with an earlier query must not keep its numbers.
+            query.context[CONTEXT_KEY] = nil
             @on_store_error.call(error, query)
             return nil
           end
@@ -76,8 +79,12 @@ module GraphQL
 
         private
 
+        # In the context hash for instrumentation, and per query for `headers`: queries of a multiplex may share one
+        # context hash, where the last query's record wins.
         def record(query, **info)
-          query.context[CONTEXT_KEY] = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited] }
+          info = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited] }
+          query.context.namespace(NAMESPACE)[:points] = info
+          query.context[CONTEXT_KEY] = info
         end
 
         def refusal(cost, limit, remaining)

@@ -155,7 +155,7 @@ response.headers.merge!(GraphQL::Armory::RateLimits::Points.headers(result))
 render json: result
 ```
 
-That sets `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds until the bucket is full), or nothing when the query had no limit.
+That sets `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds until the bucket is full), or nothing when the query had no limit. It works whether or not `extensions:` is on, and reads each query's own budget, also in a multiplex. The `rateLimit` key of the response extensions belongs to the limiter: do not write it yourself.
 
 ### Different limits per client
 
