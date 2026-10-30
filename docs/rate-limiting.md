@@ -108,6 +108,7 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - A query this limiter refuses resolves no field and is not charged. A query that fails validation is not charged. A query refused by another analyzer (`max_depth`, `max_complexity`) is still charged: graphql-ruby runs every analyzer.
 - Each query in a multiplex is charged on its own.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
+- Field scores are yours: graphql-ruby treats a negative or NaN complexity as 0, so such a field is free, like `complexity: 0`. A complexity that is nil or a String makes graphql-ruby raise before the limiter runs, so the query does not run.
 - When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert.
 - `MemoryStore` keeps buckets in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use a shared store in production (planned).
 
