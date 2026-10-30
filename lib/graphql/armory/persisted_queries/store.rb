@@ -15,18 +15,30 @@ module GraphQL
           end
         end
 
-        # Holds the given queries under the SHA-256 of each, like an Apollo manifest, and records the ids it was
-        # asked for: for tests, instead of hand-written stores.
+        # Holds the given queries under the SHA-256 of each, like an Apollo manifest, records the ids it was asked
+        # for and fails when told: for tests, instead of hand-written stores.
         class Substitute
           attr_reader :fetched
 
           def initialize(*queries)
             @manifest = Manifest.new(queries.to_h { |query| [Digest::SHA256.hexdigest(query), query] })
             @fetched = []
+            @failure = nil
+          end
+
+          # Raises `error` from every fetch until `recover`.
+          def fail_with(error)
+            @failure = error
+          end
+
+          def recover
+            @failure = nil
           end
 
           def fetch(id)
             @fetched << id
+            raise @failure if @failure
+
             @manifest.fetch(id)
           end
         end

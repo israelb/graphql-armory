@@ -24,6 +24,15 @@ RSpec.describe "encrypted IDs and persisted queries as useful objects" do
       expect([encoder.encoded, encoder.decoded]).to eq([["Invoice/1"], [id]])
     end
 
+    it "fails when told, until it recovers" do
+      encoder.fail_with(IOError.new("kms down"))
+
+      expect { encoder.encode("Invoice/1") }.to raise_error(IOError, "kms down")
+      expect { encoder.decode("substitute:x") }.to raise_error(IOError, "kms down")
+      encoder.recover
+      expect(encoder.decode(encoder.encode("Invoice/1"))).to eq("Invoice/1")
+    end
+
     it "refuses an ID it did not hand out" do
       expect { encoder.decode("forged") }.to raise_error(armory::Encoder::InvalidError)
     end
@@ -97,6 +106,17 @@ RSpec.describe "encrypted IDs and persisted queries as useful objects" do
   describe GraphQL::Armory::PersistedQueries::Store::Null do
     it "holds no operation" do
       expect(armory::PersistedQueries::Store::Null.new.fetch("abc")).to be_nil
+    end
+  end
+
+  describe GraphQL::Armory::PersistedQueries::Store::Substitute do
+    it "fails when told, until it recovers" do
+      store = armory::PersistedQueries::Store::Substitute.new("{ secret }")
+      store.fail_with(IOError.new("redis down"))
+
+      expect { store.fetch("abc") }.to raise_error(IOError, "redis down")
+      store.recover
+      expect(store.fetch("abc")).to be_nil
     end
   end
 end
