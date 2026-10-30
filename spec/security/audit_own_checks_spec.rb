@@ -477,6 +477,40 @@ RSpec.describe "the audit and the app's own authorization checks" do
       expect(result.dig("data", "things", "nodes").size).to eq(::Invoice.count) unless ArmoryEngine.next?
     end
 
+    it "reports a flag whose reader answers false with no class holding it: a method on a parent interface" do
+      plugin = armory
+      parent = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Parent"
+        def self.reauthorize_scoped_objects(*) = false
+      end
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        include parent
+        graphql_name "Thing"
+        field :id, String, null: false
+      end
+      connection = nil
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        implements interface
+      end, on_query: lambda do |query, invoice|
+        interface.define_singleton_method(:resolve_type) { |_object, _context| invoice }
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "ThingConnection"
+          edge_type(interface.edge_type)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { connection => { scope_items: "narrows" } } }
+      result = execute_query(schema, "{ things { nodes { id } } }", context: { current_user: world.alice },
+                                                                    root_value: Struct.new(:things).new(::Invoice.all)).to_h
+
+      expect(problems(declared).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(result.dig("data", "things", "nodes").size).to eq(::Invoice.count) unless ArmoryEngine.next?
+    end
+
     it "reports a flagged union under a connection with its own scope" do
       schema = build(on_query: lambda do |query, invoice|
         union = Class.new(GraphQL::Schema::Union) do

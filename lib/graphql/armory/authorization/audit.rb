@@ -139,13 +139,16 @@ module GraphQL
 
         # graphql-ruby's reader answers with the nearest class that set the value. A connection with none takes it from
         # its node: an object node is reported on its own, and an abstract one only skips under a connection that narrows.
+        # When the reader is off and nothing is seen holding it, the type itself is reported: a flag is never dropped.
         def reauthorization_holder(type)
           method = type.method(:reauthorize_scoped_objects)
           holder = holder_of(type, method)
           return holder unless library_method?(method, holder, GRAPHQL_RUBY_PATH)
 
           setter = type.ancestors.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? }
-          return setter if setter || !type.respond_to?(:edge_class) || type.node_type.kind.object?
+          return setter if setter
+          return type unless type.respond_to?(:edge_class)
+          return if type.node_type.kind.object?
 
           reauthorization_holder(type.node_type) if own_scope_items?(type)
         end
