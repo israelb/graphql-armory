@@ -6,12 +6,12 @@
 
 Open-source extensions for [graphql-ruby](https://github.com/rmosolgo/graphql-ruby), built on its public extension points: no fork, no monkey patching. One gem, one module at a time; each module has its own page in [`docs/`](docs) with the problem it solves, how to use it, and its limits.
 
-> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre2`). The API may change before 1.0.
+> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre3`). The API may change before 1.0.
 
 ## Install
 
 ```ruby
-gem "graphql-armory", "~> 0.1.0.pre2"  # a prerelease: `gem install graphql-armory --pre`
+gem "graphql-armory", "~> 0.1.0.pre3"  # a prerelease: `gem install graphql-armory --pre`
 gem "pundit"      # or "cancancan", for the authorization module
 ```
 
@@ -24,7 +24,7 @@ Status: ✅ released, 🚧 in progress, ⬜ not started. Update this table in th
 | Order | Module | Status | Docs | Current limits |
 |---|---|---|---|---|
 | 1 | Authorization (Pundit, CanCanCan) | ✅ | [docs/authorization.md](docs/authorization.md) | Released in 0.1.0.pre2 (prerelease). Pundit and CanCanCan (the audit checks less with CanCanCan). Global IDs in `loads:` decoded through `object_from_id`; `loads:` inside input objects scoped with `include Base`. `Execution::Next` needs graphql >= 2.6.2. |
-| 2 | Encrypted, versioned IDs and cursors | 🚧 | [docs/encrypted-ids.md](docs/encrypted-ids.md) | Done, unreleased: `Encoder`, versioned chains and `Legacy`, `Encoder.default` (ENV or Rails), `use GraphQL::Armory::IDs`. Composite primary keys not supported. |
+| 2 | Encrypted, versioned IDs and cursors | ✅ | [docs/encrypted-ids.md](docs/encrypted-ids.md) | Released in 0.1.0.pre3 (prerelease). `Encoder` (AES-256-GCM), versioned chains and `Legacy`, `Encoder.default` (ENV or Rails), `use GraphQL::Armory::IDs`. Composite primary keys not supported. |
 | 3 | Persisted queries / operation whitelisting | ⬜ | | Research not started. |
 | 4 | Rate limiting | ⬜ | | Research not started. |
 | 5 | Stable (keyset) connections | ⬜ | | Research not started. |
@@ -53,7 +53,7 @@ GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test         # another graphq
 Releases are published from GitHub Actions with RubyGems Trusted Publishing (`.github/workflows/release.yml`): no API key is stored and no OTP is asked. Bump `GraphQL::Armory::VERSION` and the CHANGELOG on `main`, then push the matching tag:
 
 ```
-git tag v0.1.0.pre2 && git push origin v0.1.0.pre2
+git tag v0.1.0.pre3 && git push origin v0.1.0.pre3
 ```
 
 The workflow checks that the tag matches the version, runs the specs and pushes the gem. It only publishes a tag on a commit of `main`. The `release` environment can require a maintainer's approval first (on a public repository, or a private one on a paid GitHub plan).
