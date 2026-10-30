@@ -118,6 +118,13 @@ RSpec.describe "use GraphQL::Armory::IDs" do
         expect(node(legacy_schema, Base64.urlsafe_encode64("Query/1", padding: false), world.alice)).to eq("data" => { "node" => nil })
       end
 
+      it "still honours a hidden type's ID for a user who may see it" do
+        id = encoder.encode("InvoiceExport/#{world.a1.id}")
+        result = run(schema, "query($id: ID!) { node(id: $id) { __typename } }", world.carol, { "id" => id })
+
+        expect(result.dig("data", "node")).not_to be_nil
+      end
+
       it "refuses an ID of another model in loads:, like a missing one" do
         lookup = ->(id) { run(schema, "query($id: ID!) { invoiceByRef(invoiceId: $id) { number } }", world.alice, { "id" => id }) }
 
