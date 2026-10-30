@@ -8,7 +8,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
   let(:ran) { [] }
 
   # Named classes, because the report and `own_checks:` speak in classes.
-  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, relay_template: false, **options)
+  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, plain_class: GraphQL::Schema::Mutation, relay_template: false, **options)
     plugin = armory
     calls = ran
     base_argument = Class.new(GraphQL::Schema::Argument) { include plugin::Base }
@@ -86,7 +86,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
       authorize :none, reason: "the root holds nothing"
       field :approve_invoice, mutation: approve_mutation
       if plain_mutation
-        plain = Class.new(GraphQL::Schema::Mutation) do
+        plain = Class.new(plain_class) do
           graphql_name "Plain"
           object_class payload
           field_class base_field
@@ -188,6 +188,37 @@ RSpec.describe "the audit and the app's own authorization checks" do
     schema = build(on_field: proc { def authorizes?(_context) = false })
 
     expect(problems(schema).map(&:path)).to contain_exactly(end_with("#authorizes?"))
+  end
+
+  # Recheck probes: the same checks, reached another way.
+  it "reports a check a mutation inherits from a module on its parent" do
+    own = Module.new { def unauthorized_object(error) = error.object }
+    schema = build(mutation: proc { include own })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with("#unauthorized_object"))
+  end
+
+  it "reports class-level checks an input object gets through extend" do
+    own = Module.new do
+      def authorized?(*) = true
+      def unauthorized_object(error) = error.object
+    end
+    schema = build(input: proc { include own })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with(".authorized?"), end_with(".unauthorized_object"))
+  end
+
+  it "reports self.authorized? a type gets through extend" do
+    own = Module.new { def authorized?(_object, _context) = true }
+    schema = build(invoice: proc { extend own })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with(".authorized?"))
+  end
+
+  it "reports unauthorized_object on a RelayClassicMutation that does not include Base" do
+    schema = build(plain_class: GraphQL::Schema::RelayClassicMutation, plain_mutation: proc { def unauthorized_object(error) = error.object })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with("#unauthorized_object"))
   end
 
   it "reports nothing for the connection and edge classes of graphql-ruby's install template" do
