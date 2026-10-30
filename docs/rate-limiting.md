@@ -117,3 +117,12 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - **Operations at the same time:** at most N queries running at once per client, released when each one ends.
 - **A Redis store**, shared between processes and atomic.
 - **Processing time, a second layer:** a budget of milliseconds per client per window, measured as queries run, for costs the complexity score does not see.
+
+## References
+
+The same technique, charging queries a calculated cost against a budget per client, is used by large public GraphQL APIs:
+
+- GitHub: [Rate limits and query limits for the GraphQL API](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api): a points budget per hour, where connections' `first`/`last` drive the cost, and a `rateLimit` field showing what remains.
+- Shopify: [GraphQL Admin API rate limits](https://shopify.dev/docs/apps/build/apis/graphql-admin/rate-limits): a calculated query cost against a bucket that refills continuously; Shopify also refunds the difference when the real cost is lower than the estimate.
+- Cha et al., [A Principled Approach to GraphQL Query Cost Analysis](https://arxiv.org/abs/2009.05632) (ESEC/FSE 2020, IBM Research): estimating a query's cost statically, before running it, and why naive estimates over- or under-count.
+- graphql-ruby: [Complexity and depth](https://graphql-ruby.org/queries/complexity_and_depth), the cost this limiter charges.
