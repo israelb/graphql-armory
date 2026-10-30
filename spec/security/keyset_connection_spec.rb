@@ -221,6 +221,36 @@ RSpec.describe GraphQL::Armory::Keyset do
       expect(result.dig("errors", 0, "message")).to eq("Invalid ID or cursor")
     end
 
+    # Verifier probes: a short decimal like 1e99999999999 exhausted memory, and Postgres raised on a number as a date.
+    it "refuses a forged value that is not the form the column's own cursors have" do
+      KeysetItem.create!
+      {
+        "keyset_items.amount:asc" => ["1e5", 5, "1" * 200],
+        "keyset_items.happened_at:asc" => [5, true, "tomorrow", "99999-01-01T00:00:00Z"],
+        "keyset_items.rank:asc" => ["abc", "1", true]
+      }.each do |column, values|
+        name = column[/\.(\w+):/, 1]
+        values.each do |value|
+          cursor = forge([value, 1], order: "#{column},keyset_items.id:asc")
+          result = page(keyset(KeysetItem.order(name.to_sym), plain_cursors: true), schema: plain, first: 1, after: cursor)
+          expect(result.dig("errors", 0, "message")).to eq("Invalid ID or cursor"), "#{name} #{value.inspect}: #{result}"
+        end
+      end
+    end
+
+    it "answers the same error when a custom encoder raises or answers nil" do
+      KeysetItem.create!
+      [->(*) { raise OpenSSL::Cipher::CipherError }, ->(*) {}].each do |decoding|
+        custom = Module.new do
+          define_singleton_method(:encode) { |text, nonce: false| text }
+          define_singleton_method(:decode) { |text, nonce: false| decoding.call(text) }
+        end
+        schema = controls::Schema.example(base: base_schema, cursor_encoder: custom)
+
+        expect(page(keyset, schema: schema, first: 1, after: "x").dig("errors", 0, "message")).to eq("Invalid ID or cursor")
+      end
+    end
+
     it "binds cursor values, so SQL in a cursor is only a value" do
       KeysetItem.create!(name: "a")
       KeysetItem.create!(name: "b")
@@ -249,6 +279,38 @@ RSpec.describe GraphQL::Armory::Keyset do
       end
     end
 
+    # Verifier probes: a join repeats rows, and these columns' values do not survive a trip through a cursor.
+    it "refuses joins unless the relation is distinct" do
+      expect { described_class.build(Account.joins(:users).order(:id)) }.to raise_error(described_class::ConfigurationError, /distinct/)
+      expect { described_class.build(Account.left_joins(:users).order(:id)) }.to raise_error(described_class::ConfigurationError, /distinct/)
+
+      account = Account.create!(name: "A")
+      2.times { |index| User.create!(account: account, name: "u#{index}") }
+      connection = described_class.build(Account.joins(:users).distinct.order(:id))
+
+      expect(ids(page(connection, first: 5))).to eq([account.id])
+    end
+
+    def model_with(&body)
+      Class.new(ActiveRecord::Base) do
+        self.table_name = "keyset_items"
+        define_singleton_method(:name) { "KeysetItemVariant" }
+        class_eval(&body)
+      end
+    end
+
+    it "refuses a serialized column" do
+      model = model_with { serialize :name, coder: JSON }
+
+      expect { described_class.build(model.order(:name)) }.to raise_error(described_class::ConfigurationError, /name/)
+    end
+
+    it "refuses an encrypted column" do
+      model = model_with { encrypts :name }
+
+      expect { described_class.build(model.order(:name)) }.to raise_error(described_class::ConfigurationError, /name/)
+    end
+
     it "refuses what is not a relation" do
       expect { described_class.build([1, 2]) }.to raise_error(described_class::ConfigurationError, /relation/)
     end
@@ -262,6 +324,12 @@ RSpec.describe GraphQL::Armory::Keyset do
       expect(connection.has_next_page).to be(false)
       expect(connection.has_previous_page).to be(false)
       expect(connection.cursor_for(Object.new)).to be_nil
+    end
+
+    it "stays inert when given a relation without going through build" do
+      KeysetItem.create!
+
+      expect(described_class.new(KeysetItem.all).nodes).to eq([])
     end
   end
 
@@ -328,6 +396,33 @@ RSpec.describe GraphQL::Armory::Keyset do
 
       expect { scoped_page(scoped_schema(adapter: adapter, scope: :in_memory), world.alice, first: 1) }
         .to raise_error(described_class::ConfigurationError, /relation/)
+    end
+
+    # Verifier probe: a new object on every scope told graphql-ruby the list was narrowed, so `authorized?` was skipped.
+    it "keeps per-object checks when the scope did not narrow the list" do
+      skip "Execution::Next skips them for a plain relation too" if ArmoryEngine.next?
+
+      schema = scoped_schema
+      type = schema.get_type("Invoice")
+      type.authorize :none, reason: "checked per object"
+      type.define_singleton_method(:authorized?) { |object, context| object.account_id == context[:current_user].account_id }
+      type.reauthorize_scoped_objects(false)
+      world
+      nodes = scoped_page(schema, world.alice, first: 5).dig("data", "items", "nodes")
+
+      expect(nodes.map { |node| node && node["id"].to_i }).to eq([world.a1.id, world.a2.id, nil])
+    end
+
+    # Verifier probe: `rescoped` built a new connection and lost what the resolver had set on it.
+    it "keeps what the resolver set on the connection" do
+      schema = scoped_schema
+      world
+      connection = keyset(Invoice.order(:id)).tap { |built| built.max_page_size = 1 }
+      result = execute_query(schema, query, variables: { "first" => 5 }, context: { current_user: world.alice },
+                                            root_value: controls::Root.example(connection)).to_h
+
+      expect(ids(result)).to eq([world.a1.id])
+      expect(info(result, "hasNextPage")).to be(true)
     end
 
     it "pages inside a CanCanCan ability" do

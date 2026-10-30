@@ -19,6 +19,11 @@ module GraphQL
       CURSOR_VERSION = 1
       PAGEABLE_TYPES = %i[integer string text decimal datetime date boolean uuid].freeze
 
+      # The forms this connection's own cursors have. A forged decimal like 1e99999999999 would exhaust memory.
+      DECIMAL_FORM = /\A-?\d{1,65}(\.\d{1,65})?\z/
+      DATE_FORM = /\A\d{4}-\d{2}-\d{2}\z/
+      DATETIME_FORM = /\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})\z/
+
       Column = Struct.new(:name, :direction, :attribute, :type, keyword_init: true)
 
       # Reads what a relation is ordered by, adds the primary key as the tie-breaker, and refuses what it cannot page.
@@ -28,6 +33,7 @@ module GraphQL
           refuse("an offset") if relation.offset_value
           refuse("a group") if relation.group_values.any?
           refuse("a select") if relation.select_values.any?
+          refuse("a join that is not distinct: it can repeat rows") if joined?(relation) && !relation.distinct_value
 
           columns = relation.order_values.map { |order| column(relation.klass, order) }.uniq(&:name)
           primary_key = Array(relation.klass.primary_key)
@@ -36,6 +42,10 @@ module GraphQL
           direction = columns.last&.direction || :asc
           (primary_key - columns.map(&:name)).each { |name| columns << column_named(relation.klass, name, direction) }
           columns.freeze
+        end
+
+        def self.joined?(relation)
+          relation.joins_values.any? || relation.left_outer_joins_values.any?
         end
 
         def self.column(klass, order)
@@ -54,8 +64,14 @@ module GraphQL
 
           type = klass.type_for_attribute(name)
           refuse("an order on a #{type.type} column: #{name}") unless PAGEABLE_TYPES.include?(type.type)
+          refuse("an order on a serialized or encrypted column: #{name}") if transformed?(type)
 
           Column.new(name: name, direction: direction, attribute: klass.arel_table[name], type: type)
+        end
+
+        # These report the type they store as, but the database does not order them by the value a cursor holds.
+        def self.transformed?(type)
+          type.is_a?(ActiveRecord::Type::Serialized) || type.is_a?(ActiveRecord::Encryption::EncryptedAttributeType)
         end
 
         def self.refuse(what)
@@ -75,16 +91,20 @@ module GraphQL
 
       # `new` is inert: with no relation it has no rows, no pages and no cursors.
       def initialize(items = nil, columns: [], plain_cursors: false, **options)
-        super(items, **options)
+        super(columns.empty? ? nil : items, **options)
         @columns = columns
         @plain_cursors = plain_cursors
       end
 
-      # The same connection over the relation the block answers: how a type's scope reaches the rows.
+      # This connection over the relation the block answers: how a type's scope reaches the rows. A scope that did
+      # not change the relation answers the same object, so graphql-ruby does not take the list as narrowed.
       def rescoped
         return self if items.nil?
 
-        self.class.build(yield(items), plain_cursors: @plain_cursors)
+        relation = yield(items)
+        return self if relation.equal?(items)
+
+        dup.scope_to(relation, self.class.build(relation, plain_cursors: @plain_cursors).columns)
       end
 
       def nodes
@@ -120,6 +140,14 @@ module GraphQL
         refuse_plain_cursors
         values = columns.map { |column| dump(column.type.serialize(item[column.name])) }
         encode(JSON.generate("v" => CURSOR_VERSION, "o" => fingerprint, "k" => values))
+      end
+
+      protected
+
+      def scope_to(relation, columns)
+        @items = relation
+        @columns = columns
+        self
       end
 
       private
@@ -192,10 +220,12 @@ module GraphQL
       end
 
       def dump(value)
+        return value.getutc.iso8601(9) if value.respond_to?(:getutc)
+
         case value
         when BigDecimal then value.to_s("F")
         when Date then value.iso8601
-        else value.respond_to?(:getutc) ? value.getutc.iso8601(9) : value
+        else value
         end
       end
 
@@ -212,15 +242,26 @@ module GraphQL
         raise Encoder::InvalidError
       end
 
+      # Anything a custom encoder raises on a bad cursor, or a nil it answers, is one more invalid cursor.
       def decoded(cursor)
         decode(cursor).dup.force_encoding(Encoding::UTF_8).tap { |text| raise Encoder::InvalidError unless text.valid_encoding? }
-      rescue GraphQL::ExecutionError
+      rescue StandardError
         raise Encoder::InvalidError
       end
 
+      def well_formed?(kind, value)
+        case kind
+        when :integer then value.is_a?(Integer)
+        when :boolean then value == true || value == false
+        when :decimal then value.is_a?(String) && DECIMAL_FORM.match?(value)
+        when :date then value.is_a?(String) && DATE_FORM.match?(value)
+        when :datetime then value.is_a?(String) && DATETIME_FORM.match?(value)
+        else value.is_a?(String) && !value.include?("\0")
+        end
+      end
+
       def load_value(column, value)
-        scalar = [String, Integer, TrueClass, FalseClass].any? { |kind| value.is_a?(kind) }
-        raise Encoder::InvalidError if !scalar || (value.is_a?(String) && value.include?("\0"))
+        raise Encoder::InvalidError unless well_formed?(column.type.type, value)
 
         cast = column.type.cast(value)
         raise Encoder::InvalidError if cast.nil?

@@ -46,7 +46,9 @@ The relation must be ordered by plain, non-null columns of its own table. The pr
 - a column of another table;
 - a nullable column: SQL comparisons skip `NULL`, so those rows would be lost;
 - a `float` column: equality on floats is not reliable. Allowed types are integer, string, text, decimal, datetime, date, boolean and uuid;
-- a relation with `limit`, `offset`, `group` or `select`.
+- a serialized or encrypted column: the database does not order those by the value a cursor would hold;
+- a relation with `limit`, `offset`, `group` or `select`;
+- a `joins` or `left_joins` without `distinct`, because a join can repeat a row. Add `.distinct`, or filter with a subquery.
 
 Add an index on the ordering columns, in that order, ending with the primary key. Without one the database still has to sort.
 
@@ -84,6 +86,8 @@ Errors:
 - The encoder check runs on the first page, not at boot, because the connection reads the encoder from the schema of the query.
 - The check only knows the default Base64 encoder. A custom encoder that does not encrypt passes unnoticed: a keyset cursor is only as private as your `cursor_encoder`.
 - With `plain_cursors: true` a client can read the ordering values and forge a cursor. It stays inside the scope and its values are bound, never interpolated, but it can probe those columns.
-- A forged value of the wrong type on a plain cursor is cast by the column's type (`"abc"` on an integer column is 0), so it pages from there instead of failing.
+- A forged value on a plain cursor must have the form the column's own cursors have (an Integer, a plain decimal, an ISO 8601 date or time) or it is an invalid cursor. A forged value of the right form is honoured: it pages from there.
+- Encryption keeps length, so the length of an encrypted cursor reveals roughly the length of a string ordering value.
+- A value JSON cannot hold, such as Postgres `infinity` in an ordering column, raises when the cursor is built. Avoid it in columns you order by.
 - There is no total count. `hasNextPage` costs no extra query going forward without `before`, nor does `hasPreviousPage` going backward without `after`; in the other cases each costs one query, only when the client asks for it.
 - ActiveRecord only. The attributes of the ordering columns must be readable on each row, which is why `select` is refused.
