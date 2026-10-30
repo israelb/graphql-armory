@@ -27,7 +27,7 @@ Status: ✅ released, 🚧 in progress, ⬜ not started. Update this table in th
 | 2 | Encrypted, versioned IDs and cursors | ✅ | [docs/encrypted-ids.md](docs/encrypted-ids.md) | Released in 0.1.0.pre4 (prerelease). `Encoder` (AES-256-GCM), versioned chains and `Legacy`, `Encoder.default` (ENV or Rails), `use GraphQL::Armory::IDs`. Composite primary keys not supported. |
 | 3 | Persisted queries / operation allowlist | ✅ | [docs/persisted-queries.md](docs/persisted-queries.md) | Released in 0.1.0.pre4 (prerelease). Allowlist from a build manifest (Apollo, Relay), `use GraphQL::Armory::PersistedQueries` with strict mode. A runtime store (database, sync endpoint) is planned for later. |
 | 4 | Rate limiting | ✅ | [docs/rate-limiting.md](docs/rate-limiting.md) | Released in 0.1.0.pre5 (prerelease); `RateLimits::Time` in 0.1.0.pre6. Points per client (query complexity) and operations at the same time, `MemoryStore` and `RedisStore`, the budget in response extensions and headers. `RateLimits::Time` charges the wall-clock milliseconds operations take. |
-| 5 | Stable (keyset) connections | ⬜ | | Research not started. |
+| 5 | Stable (keyset) connections | 🚧 | [docs/keyset-connections.md](docs/keyset-connections.md) | Not released yet. `Keyset.build(relation)` per resolver, ActiveRecord only, plain non-null columns of the relation's own table. Base64 cursors refused unless `plain_cursors: true`. No total count. |
 | 6 | Subscriptions over Pusher / Ably | ⬜ | | Research not started. |
 | 7 | Response caching | ⬜ | | Research not started. |
 | 8 | API versioning (changesets) | ⬜ | | Research not started. |

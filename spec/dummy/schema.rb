@@ -23,6 +23,15 @@ ActiveRecord::Schema.define do
     t.references :account, null: false
   end
 
+  create_table :keyset_items do |t|
+    t.integer :rank, null: false, default: 0
+    t.string :name, null: false, default: ""
+    t.decimal :amount, precision: 10, scale: 2, null: false, default: 0
+    t.datetime :happened_at, precision: 6, null: false, default: "2026-01-01"
+    t.float :score, null: false, default: 0
+    t.string :note
+  end
+
   create_table :notes do |t|
     t.references :account, null: false
     t.string :body
