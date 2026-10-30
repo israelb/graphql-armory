@@ -103,6 +103,10 @@ return nil if encoder.nil?                                  # nothing in the cha
 log_legacy_id(id) if encoder == GraphQL::Armory::Encoder::Legacy
 ```
 
+### Testing with IDs
+
+`Encoder::Substitute` encodes reversibly without a key and records what it encoded and decoded, for specs of code that uses an encoder; never hand out real IDs with it. `IDs::Controls::Encoder.example` is an Encoder subclass with a fixed test key, and `IDs::Controls::Record.example(id:)` a record to build IDs from. `IDs::Lookup.new`, with nothing wired, hands out no ID and honours none (`Encoder::Null`); `IDs::Lookup.build(encoder:, find:)` takes the same settings as `use`.
+
 ## Reference
 
 | Declaration | Meaning |
