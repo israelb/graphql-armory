@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: new section "Clients that change identity" in `docs/rate-limiting.md`. A limit per key does not stop a client that gets a new IP or a new account for every request; the page now says so, shows how to share one bucket among new accounts or put a ceiling on everyone, and lists what belongs before GraphQL (signup limits, verification, network blocking). No code change.
+
 ## 0.1.0.pre6 (2026-10-30)
 
 Telemetry for every module, and the processing-time layer of rate limiting. Docs: `docs/telemetry.md`, `docs/rate-limiting.md`.

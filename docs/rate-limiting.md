@@ -334,6 +334,26 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - A query run with its own trace (`context: { trace: ... }`) cannot be charged, so it raises `ConfigurationError`, as with `Concurrency`.
 - When the store fails, operations run unlimited and `on_store_error` is called; a failed charge never raises into the query (unless your hook does).
 
+### Clients that change identity
+
+Every key has its own bucket. A client that gets a new key for each request (a new IP from a proxy, or a new disposable account) starts every time with a full bucket, so a limit per key does not stop it. The limiter does not know who owns a key: opening accounts and choosing IPs happens before it, and so does stopping abuse there.
+
+What you can do with the gem:
+
+- **Share one bucket among the clients you do not trust yet.** Build the key from something that is not free to rotate, such as the age of the account, so every new account draws from the same small budget:
+
+  ```ruby
+  context[:rate_limit_key] = user.created_at > 1.day.ago ? "new-accounts" : "user:#{user.id}"
+
+  use GraphQL::Armory::RateLimits::Points, store: store, window: 60,
+    limit: ->(key, _query) { key == "new-accounts" ? 500 : 1_000 }
+  ```
+
+  The cost is that honest new users share that budget, and a burst from an attacker can use it up for them. Start in soft mode and look at `context[:rate_limit_points]` before you refuse anyone. The example has not been run against a real app.
+- **Put a ceiling on everyone.** A key that is the same for every request (`"all"`) with `Concurrency` or `Time` protects your servers from a flood, whoever sends it. It does not tell clients apart: an attacker can leave honest clients without budget.
+
+What this limiter does not do, and you handle before the request reaches GraphQL: limit account creation per IP, subnet or device, verify an email or a phone number before an account can query, block by network reputation, and detect and ban abusive clients. The limiter is the last layer, not a replacement for those.
+
 ## References
 
 The same technique, charging queries a calculated cost against a budget per client, is used by large public GraphQL APIs:
