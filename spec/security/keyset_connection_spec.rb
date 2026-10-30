@@ -311,6 +311,30 @@ RSpec.describe GraphQL::Armory::Keyset do
       expect { described_class.build(model.order(:name)) }.to raise_error(described_class::ConfigurationError, /name/)
     end
 
+    # Verifier recheck: `normalizes` declared last wraps the type and hid these from the check.
+    it "refuses a serialized or encrypted column behind a later normalizes" do
+      encrypted_model = model_with do
+        encrypts :name
+        normalizes :name, with: ->(value) { value.strip }
+      end
+      serialized_model = model_with do
+        serialize :name, coder: JSON
+        normalizes :name, with: ->(value) { value }
+      end
+
+      expect { described_class.build(encrypted_model.order(:name)) }.to raise_error(described_class::ConfigurationError, /name/)
+      expect { described_class.build(serialized_model.order(:name)) }.to raise_error(described_class::ConfigurationError, /name/)
+    end
+
+    it "still pages a column that is only normalized" do
+      model = model_with { normalizes :name, with: ->(value) { value.strip } }
+      all = %w[a b c].map { |name| model.create!(name: name).id }
+      relation = model.order(:name)
+      first = page(described_class.build(relation), first: 1)
+
+      expect(ids(page(described_class.build(relation), first: 2, after: info(first, "endCursor")))).to eq(all.last(2))
+    end
+
     it "refuses what is not a relation" do
       expect { described_class.build([1, 2]) }.to raise_error(described_class::ConfigurationError, /relation/)
     end

@@ -89,5 +89,7 @@ Errors:
 - A forged value on a plain cursor must have the form the column's own cursors have (an Integer, a plain decimal, an ISO 8601 date or time) or it is an invalid cursor. A forged value of the right form is honoured: it pages from there.
 - Encryption keeps length, so the length of an encrypted cursor reveals roughly the length of a string ordering value.
 - A value JSON cannot hold, such as Postgres `infinity` in an ordering column, raises when the cursor is built. Avoid it in columns you order by.
+- A decimal of more than 65 digits on either side of the point, possible only on an unconstrained Postgres `numeric`, gets `Invalid ID or cursor` even on its own cursor. Give the column a precision.
+- On `Execution::Next`, a node type with `reauthorize_scoped_objects(false)` skips `authorized?` even when its scope did not narrow the list. A plain relation does the same: it comes from graphql-ruby. Do not combine that setting with a scope that does not filter.
 - There is no total count. `hasNextPage` costs no extra query going forward without `before`, nor does `hasPreviousPage` going backward without `after`; in the other cases each costs one query, only when the client asks for it.
 - ActiveRecord only. The attributes of the ordering columns must be readable on each row, which is why `select` is refused.

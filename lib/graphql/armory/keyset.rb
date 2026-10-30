@@ -70,8 +70,11 @@ module GraphQL
         end
 
         # These report the type they store as, but the database does not order them by the value a cursor holds.
+        # `normalizes` wraps the type it is declared over, so the wrapped types count too.
         def self.transformed?(type)
-          type.is_a?(ActiveRecord::Type::Serialized) || type.is_a?(ActiveRecord::Encryption::EncryptedAttributeType)
+          return true if type.is_a?(ActiveRecord::Type::Serialized) || type.is_a?(ActiveRecord::Encryption::EncryptedAttributeType)
+
+          type.respond_to?(:cast_type) && transformed?(type.cast_type)
         end
 
         def self.refuse(what)
