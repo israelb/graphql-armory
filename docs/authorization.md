@@ -74,6 +74,45 @@ use GraphQL::Armory::Authorization, adapter: :pundit, on_unauthorized: :null # d
 
 Denied non-null fields raise the generic "Not found" error, because GraphQL cannot return `null` there (on Execution::Next a denied object in a non-null position answers graphql-ruby's own "Cannot return null for non-nullable field", and `:raise` messages are prefixed with the field path). `find_by:` lookups always answer `null` in every mode: a missing ID cannot raise, and a foreign ID must look the same.
 
+### If your schema defines its own denial hooks
+
+The modes above run in the plugin's `unauthorized_field` and `unauthorized_object`. A method your schema class defines on itself wins over the plugin's, wherever `use` is in the class, so that denial answers whatever your method answers and `on_unauthorized:` does not apply to it. If your method names the field or the type it refused, it confirms to the client that they exist.
+
+The audit reports each one as a `:hook` problem. Remove the method, or call `super` from it and declare it, with your reason:
+
+```ruby
+use GraphQL::Armory::Authorization, adapter: :pundit,
+  own_denial_hooks: { unauthorized_field: "logs the denial, then calls super" }
+```
+
+A declared hook is listed in the audit as a bypass with that reason. The audit cannot read what your method does: the declaration is your word that it reveals nothing. Naming a hook that does not win over the plugin's is also a `:hook` problem. Your own `resolve_type` is not reported: an app with interfaces or unions must define it, and it decides types, not what a denial looks like.
+
+A declared hook that returns `nil` for a non-null field behaves differently per engine: the interpreter answers "Cannot return null", and `Execution::Next` leaves the null with no error. Call `super`, or raise.
+
+**Your own checks on base classes.** The same applies one level down: `Base` is included in your base classes, so a method you define there wins over the plugin's. The audit reports each as an `:own_check` problem, once, where it is defined:
+
+- `authorized?` on a base field, a base argument, a resolver or a mutation, and `self.authorized?` on a type, a base object or an input object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
+- `unauthorized_object` on a resolver, a mutation (with or without `Base`), a base field, or `self.unauthorized_object` on an input object. graphql-ruby calls it on whatever loads a record, before the schema's hook. If it returns the object, the code **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
+- `authorizes?` on a base field, a resolver, a type or a base object (`self.authorizes?`). On `Execution::Next`, answering `false` means `authorized?` does not run, so the rule is skipped.
+
+Methods that come from graphql-ruby or from this gem are not reported, so the connection and edge classes of graphql-ruby's install template stay clean.
+
+Remove the method, or make it call `super` and declare it, by the class that defines it and with your reason:
+
+```ruby
+use GraphQL::Armory::Authorization, adapter: :pundit,
+  own_checks: { Types::BaseMutation => { authorized?: "adds the OTP check, then calls super" } }
+```
+
+A declared check is listed as a bypass. Each method is declared on its own, and naming one the schema does not use is an `:own_check` problem. The audit cannot read what your method does: the declaration is your word.
+
+**What the audit does not see.**
+
+- It looks at the classes when it runs, so a method defined later is seen by the next audit.
+- A type absent from `schema.types`, as with `use Schema::Visibility, dynamic: true` and a `visible?` that answers `false`, and the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly.
+- `visible?` on a field or a type: your own can defeat `visible_when:`.
+- `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
+
 ## Lists, connections and lookups
 
 Lists of a type are narrowed through `InvoicePolicy::Scope` (relations) or by calling the policy per item (arrays). Return a relation when you can: SQL filters before Ruby sees anything.
@@ -110,7 +149,7 @@ load "tasks/graphql_armory.rake"
 # bundle exec rake "graphql_armory:audit[AppSchema]"
 ```
 
-It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, and lists every declared bypass with its reason.
+It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, your own denial hooks and checks on base classes, and lists every declared bypass with its reason.
 
 ## CanCanCan
 

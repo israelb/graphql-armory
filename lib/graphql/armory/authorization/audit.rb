@@ -32,7 +32,10 @@ module GraphQL
 
         def call(schema)
           findings = Findings.new
-          unless schema.respond_to?(:armory_configuration) && schema.armory_configuration
+          if schema.respond_to?(:armory_configuration) && schema.armory_configuration
+            audit_denial_hooks(schema, findings)
+            audit_own_checks(schema, findings)
+          else
             findings.problem(:plugin, "Schema", "never installed the plugin: add `use GraphQL::Armory::Authorization, adapter: ...`")
           end
 
@@ -43,6 +46,101 @@ module GraphQL
         end
 
         private
+
+        # A method the schema defines on itself wins over the plugin's, so `on_unauthorized:` no longer decides
+        # what that denial looks like. The check runs here because `use` usually comes before those methods.
+        def audit_denial_hooks(schema, findings)
+          declared = schema.armory_configuration.own_denial_hooks
+          Configuration::DENIAL_HOOKS.each do |hook|
+            path = "Schema.#{hook}"
+            own = schema.method(hook).owner != Integration::Schema
+            if own && declared.key?(hook)
+              findings.bypass(path, declared[hook])
+            elsif own
+              findings.problem(:hook, path, "the schema's own method runs instead of the plugin's, so on_unauthorized: does not apply and a denial " \
+                                            "may reveal what it hides: remove it, or declare it in own_denial_hooks: with a reason")
+            elsif declared.key?(hook)
+              findings.problem(:hook, path, "named in own_denial_hooks: but the plugin's hook is the one that runs: remove it from the option")
+            end
+          end
+        end
+
+        # A method an app defines wins over what the plugin and graphql-ruby decide: `authorized?` and `authorizes?`
+        # can skip a rule, and graphql-ruby calls `unauthorized_object` on whatever loads a record, so returning the
+        # object runs the code on a refused record. The audit cannot read them: each is reported once, where it is
+        # defined, until it is declared. Methods that come from graphql-ruby or from this gem are not the app's.
+        def audit_own_checks(schema, findings)
+          found = {}
+          audited_types(schema).select { |type| type.respond_to?(:armory_rule) }.each do |type|
+            %i[authorized? authorizes?].each { |name| note_class_check(found, type, name) }
+            type.all_field_definitions.each { |field| note_field_checks(found, field) }
+          end
+          schema.types.each_value do |type|
+            next unless type.kind.input_object? && !type.introspection?
+
+            %i[authorized? unauthorized_object].each { |name| note_class_check(found, type, name) }
+            note_argument_checks(found, type.all_argument_definitions)
+          end
+          report_own_checks(found, schema.armory_configuration.own_checks, findings)
+        end
+
+        def note_field_checks(found, field)
+          %i[authorized? authorizes? unauthorized_object].each { |name| note_instance_check(found, field.class, name) }
+          note_argument_checks(found, field.all_argument_definitions)
+          resolver = field.resolver
+          return unless resolver
+
+          note_instance_check(found, resolver, :unauthorized_object)
+          note_class_check(found, resolver, :authorizes?)
+          note_instance_check(found, resolver, :authorized?) if resolver.respond_to?(:armory_rule)
+        end
+
+        def note_argument_checks(found, arguments)
+          arguments.each { |argument| note_instance_check(found, argument.class, :authorized?) }
+        end
+
+        def note_instance_check(found, klass, name)
+          return unless klass.method_defined?(name) || klass.private_method_defined?(name)
+
+          note_own_check(found, klass, klass.instance_method(name).owner, name, "#")
+        end
+
+        def note_class_check(found, klass, name)
+          return unless klass.respond_to?(name, true)
+
+          note_own_check(found, klass, klass.method(name).owner, name, ".")
+        end
+
+        def note_own_check(found, klass, owner, name, separator)
+          holder = klass.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
+          return if holder.name&.start_with?("GraphQL::")
+
+          found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}"
+        end
+
+        def report_own_checks(found, declared, findings)
+          found.each do |(holder, name), path|
+            reason = declared.fetch(holder, {})[name]
+            next findings.bypass(path, reason) if reason
+
+            findings.problem(:own_check, path, "#{own_check_risk(name)}. Remove it, or declare it in own_checks: with a reason")
+          end
+          declared.each do |holder, methods|
+            methods.each_key do |name|
+              next if found.key?([holder, name])
+
+              findings.problem(:own_check, "#{holder.name || holder.inspect} #{name}", "named in own_checks: but no check of the schema is defined there: remove it from the option")
+            end
+          end
+        end
+
+        def own_check_risk(name)
+          case name
+          when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
+          when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
+          else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
+          end
+        end
 
         # Walks `schema.types`, which a schema that hides types with `visible?` would filter.
         def audited_types(schema)
