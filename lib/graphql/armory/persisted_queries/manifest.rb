@@ -8,7 +8,8 @@ module GraphQL
     module PersistedQueries
       # The operations a client build produced, loaded from Apollo's persisted query manifest or Relay's
       # persisted output. Every id must be the digest of its query, so an edited manifest cannot put another
-      # query behind an id; every query is parsed once, here. Any problem raises at boot.
+      # query behind an id; every query is parsed once, here. Any problem raises at boot, and no message
+      # quotes the manifest's values: they may hold query text.
       class Manifest
         DIGESTS = { sha256: Digest::SHA256, sha1: Digest::SHA1, md5: Digest::MD5 }.freeze
         APOLLO_FORMAT = "apollo-persisted-query-manifest"
@@ -17,10 +18,12 @@ module GraphQL
 
         def self.load(path, digest: :sha256)
           data = begin
-            JSON.parse(File.read(path))
+            JSON.parse(File.read(path, mode: "r:bom|utf-8"))
           rescue JSON::ParserError
             # Not the parser's message: it quotes the file's content.
             raise ConfigurationError, "#{path} is not valid JSON"
+          rescue SystemCallError => error
+            raise ConfigurationError, "#{path} cannot be read (#{error.class})"
           end
           new(data, digest: digest)
         end
@@ -33,11 +36,13 @@ module GraphQL
           end
 
           @digest = digest && DIGESTS.fetch(digest)
-          @operations = entries(data).each_with_object({}) do |(id, name, body), operations|
+          @operations = entries(data).each_with_index.with_object({}) do |((id, name, body), index), operations|
+            operation = operation(index, id, name, body)
             raise ConfigurationError, "operation #{id} appears twice in the manifest" if operations.key?(id)
 
-            operations[id] = operation(id, name, body)
+            operations[id] = operation
           end.freeze
+          raise ConfigurationError, "the manifest holds no operations: is it the right file?" if @operations.empty?
         end
 
         def fetch(id)
@@ -50,36 +55,47 @@ module GraphQL
 
         private
 
-        # [id, name, body] triples from either format.
+        # [id, name, body] triples from either format. A Relay map may have an operation keyed "format", so a
+        # Hash is Apollo's when its format says so, or when it has both "format" and "operations".
         def entries(data)
-          return apollo_entries(data) if data.is_a?(Hash) && data.key?("format")
-          return data.map { |id, body| [id, nil, body] } if data.is_a?(Hash)
+          raise ConfigurationError, unknown_format unless data.is_a?(Hash)
+          return apollo_entries(data) if data["format"] == APOLLO_FORMAT || (data.key?("format") && data.key?("operations"))
 
-          raise ConfigurationError, "unknown manifest format: expected Apollo's persisted query manifest or Relay's persisted output"
+          data.map { |id, body| [id, nil, body] }
         end
 
         def apollo_entries(data)
-          raise ConfigurationError, "unknown manifest format #{data["format"].inspect}" unless data["format"] == APOLLO_FORMAT
-          raise ConfigurationError, "unsupported manifest version #{data["version"].inspect}: expected 1" unless data["version"] == 1
+          raise ConfigurationError, "unknown manifest format: expected #{APOLLO_FORMAT}" unless data["format"] == APOLLO_FORMAT
+          raise ConfigurationError, "unsupported manifest version: expected 1" unless data["version"].eql?(1)
+          raise ConfigurationError, "the manifest's operations must be an array" unless data["operations"].is_a?(Array)
 
-          Array(data["operations"]).map { |entry| entry.values_at("id", "name", "body") }
+          data["operations"].each_with_index.map do |entry, index|
+            raise ConfigurationError, "manifest entry #{index} is not an object" unless entry.is_a?(Hash)
+
+            entry.values_at("id", "name", "body")
+          end
         end
 
-        def operation(id, name, body)
-          unless id.is_a?(String) && body.is_a?(String)
-            raise ConfigurationError, "manifest entry #{id.inspect} needs a String id and a String body"
+        def operation(index, id, name, body)
+          unless id.is_a?(String) && body.is_a?(String) && (name.nil? || name.is_a?(String))
+            raise ConfigurationError, "manifest entry #{index} needs a String id, a String body and a String name or none"
           end
           if @digest && @digest.hexdigest(body) != id
             raise ConfigurationError, "operation #{id} is not the digest of its query: the manifest was edited, or `digest:` is wrong"
           end
 
-          Operation.new(id: id, name: name, body: body, document: parse(id, body)).freeze
+          # Copies, so neither the caller's data nor a fetched operation can change what a later fetch returns.
+          Operation.new(id: id.dup.freeze, name: name&.dup&.freeze, body: body.dup.freeze, document: parse(id, body)).freeze
         end
 
         def parse(id, body)
           GraphQL.parse(body)
         rescue GraphQL::ParseError
           raise ConfigurationError, "operation #{id} does not parse"
+        end
+
+        def unknown_format
+          "unknown manifest format: expected Apollo's persisted query manifest or Relay's persisted output"
         end
       end
     end
