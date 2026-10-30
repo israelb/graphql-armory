@@ -14,6 +14,7 @@ module GraphQL
         def initialize(clock: self.class.monotonic_clock)
           @clock = clock
           @buckets = {}
+          @slots = {}
           @mutex = Mutex.new
         end
 
@@ -31,6 +32,30 @@ module GraphQL
             @buckets[key] = [level, [now, at].max]
 
             [taken, level.floor]
+          end
+        end
+
+        # Slots for operations running at the same time: at most `limit` per key, each held by a token until
+        # released or until `ttl` seconds pass (a process that crashed never releases). Takes a slot when one is
+        # free; with `force: true` takes it anyway. Answers whether one was free and the slots now held.
+        def acquire(key, token:, limit:, ttl:, force: false)
+          @mutex.synchronize do
+            now = @clock.call
+            slots = (@slots[key] ||= {})
+            slots.delete_if { |_token, expires_at| expires_at <= now }
+
+            acquired = slots.size < limit
+            slots[token] = now + ttl if acquired || force
+
+            [acquired, slots.size]
+          end
+        end
+
+        def release(key, token:)
+          @mutex.synchronize do
+            slots = @slots[key] or return
+            slots.delete(token)
+            @slots.delete(key) if slots.empty?
           end
         end
       end

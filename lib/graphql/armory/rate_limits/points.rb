@@ -21,15 +21,13 @@ module GraphQL
         end
 
         def initialize(store:, limit:, window:, soft:, key:, on_store_error:)
-          raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore" unless store_takes?(store)
-          unless limit.respond_to?(:call) || positive_integer?(limit)
-            raise ConfigurationError, "limit: must be a positive Integer, or a callable taking the key and the query, got #{limit.inspect}"
+          unless Settings.store_answers?(store, take: %i[cost limit window force])
+            raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
-          raise ConfigurationError, "window: must be a positive number of seconds, got #{window.inspect}" unless window.is_a?(Numeric) && window.positive? && window.finite?
 
           @store = store
-          @limit = limit
-          @window = window
+          @limit = Settings.limit(limit)
+          @window = Settings.seconds(:window, window)
           @soft = Settings.soft(soft)
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error)
@@ -38,7 +36,7 @@ module GraphQL
         # The refusal for a query that costs `cost`, or nil to let it run.
         def charge(query, cost)
           key = Settings.key_for(@key, query)
-          limit = limit_for(key, query)
+          limit = Settings.limit_for(@limit, key, query)
           if limit.nil?
             record(query, key: key, cost: cost, limit: nil, remaining: nil, limited: false)
             return nil
@@ -50,44 +48,13 @@ module GraphQL
             @on_store_error.call(error, query)
             return nil
           end
-          taken, remaining = checked(answer)
+          taken, remaining = Settings.checked(answer, :take, "the Integer points left")
 
           record(query, key: key, cost: cost, limit: limit, remaining: remaining, limited: !taken)
           refusal(cost, limit, remaining) unless taken || @soft
         end
 
         private
-
-        def limit_for(key, query)
-          return @limit unless @limit.respond_to?(:call)
-
-          limit = @limit.call(key, query)
-          return limit if limit.nil? || positive_integer?(limit)
-
-          raise ConfigurationError, "limit: answered #{limit.inspect} for #{key}: it must answer a positive Integer, or nil for no limit"
-        end
-
-        # A store answer that is not [true or false, a whole number of points] would let queries through: 0 is truthy.
-        def checked(answer)
-          taken, remaining = answer if answer.is_a?(Array) && answer.size == 2
-          return answer if (taken == true || taken == false) && remaining.is_a?(Integer) && !remaining.negative?
-
-          raise ConfigurationError, "store: take answered #{answer.inspect}: it must answer [true or false, the Integer points left]"
-        end
-
-        def store_takes?(store)
-          return false unless store.respond_to?(:take)
-
-          parameters = store.method(:take).parameters
-          return true if parameters.any? { |type, _| type == :keyrest }
-
-          keywords = parameters.select { |type, _| type == :key || type == :keyreq }.map(&:last)
-          (%i[cost limit window force] - keywords).empty?
-        end
-
-        def positive_integer?(value)
-          value.is_a?(Integer) && value.positive?
-        end
 
         def record(query, **info)
           query.context[CONTEXT_KEY] = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited] }
