@@ -85,7 +85,7 @@ module GraphQL
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
           schema.types.each_value do |type|
-            next if type.introspection? || !type.respond_to?(:scope_items)
+            next if type.introspection? || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
 
             note_class_check(found, type, :scope_items)
             note_reauthorization(found, type)
@@ -121,36 +121,48 @@ module GraphQL
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
         # The interpreter asks the field's return type, Execution::Next the resolved object. Reported on what sets it.
         def note_reauthorization(found, type)
-          return if type.respond_to?(:edge_class) && type.node_type.nil? # nothing to serve, and its reader would raise
+          return if relay_connection?(type) && type.node_type.nil? # nothing to serve, and its reader would raise
           return if type.reauthorize_scoped_objects || !reauthorization_skips_a_rule?(type)
 
           holder = reauthorization_holder(type)
           found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects" if holder
         end
 
-        # A connection has the rule of its node, and an edge decides nothing about it. An interface or union only narrows,
-        # and so only skips, with its own scope_items. An object bypassed with `authorize :none` has no rule to skip.
+        # A connection has the rule of its node. An interface or union only narrows, and so only skips, with its own
+        # scope_items. An object or edge skips its own rule or its own `authorized?`: with neither there is nothing to skip.
         def reauthorization_skips_a_rule?(type)
-          return type.respond_to?(:edge_class) if type.respond_to?(:node_type)
+          return true if relay_connection?(type)
           return own_scope_items?(type) unless type.kind.object?
 
-          type.respond_to?(:armory_rule) && !type.armory_rule&.none?
+          rule = type.armory_rule if type.respond_to?(:armory_rule)
+          return true if type.respond_to?(:armory_rule) && !rule&.none?
+
+          method = type.method(:authorized?)
+          !library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH, ARMORY_PATH)
         end
 
-        # graphql-ruby's reader answers with the nearest class that set the value. A connection with none takes it from
-        # its node: an object node is reported on its own, and an abstract one only skips under a connection that narrows.
-        # When the reader is off and nothing is seen holding it, the type itself is reported: a flag is never dropped.
+        def relay_connection?(type)
+          type.kind.object? && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
+        end
+
+        # graphql-ruby's reader follows superclasses, not the interfaces a class implements, to the nearest that set the
+        # value. A connection reads only its own, then its node: an object node is reported on its own, and an abstract
+        # one only skips under a connection that narrows. With the reader off and nothing seen holding it, the type itself
+        # is reported: a flag is never dropped.
         def reauthorization_holder(type)
           method = type.method(:reauthorize_scoped_objects)
           holder = holder_of(type, method)
           return holder unless library_method?(method, holder, GRAPHQL_RUBY_PATH)
 
-          setter = type.ancestors.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? }
-          return setter if setter
-          return type unless type.respond_to?(:edge_class)
-          return if type.node_type.kind.object?
+          if relay_connection?(type)
+            return type unless type.instance_variable_get(:@reauthorize_scoped_objects).nil?
+            return if type.node_type.kind.object?
 
-          reauthorization_holder(type.node_type) if own_scope_items?(type)
+            return own_scope_items?(type) ? reauthorization_holder(type.node_type) : nil
+          end
+
+          chain = type.is_a?(Class) ? type.ancestors.grep(Class) : type.ancestors
+          chain.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? } || type
         end
 
         def own_scope_items?(type)
