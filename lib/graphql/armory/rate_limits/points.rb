@@ -48,7 +48,7 @@ module GraphQL
           raise ConfigurationError, "extensions: must be true or false, got #{extensions.inspect}" unless extensions == true || extensions == false
 
           @store = store
-          @limit = Settings.limit(limit)
+          @limit = Settings.wired_limit(limit, store)
           @window = Settings.seconds(:window, window)
           @soft = Settings.wired_soft(soft, store)
           @key = Settings.key_reader(key)

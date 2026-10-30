@@ -34,6 +34,14 @@ module GraphQL
           value
         end
 
+        # A limit callable may answer nil (no limit for that key), so on the Null store it could let queries through.
+        def wired_limit(value, store)
+          limit(value)
+          raise ConfigurationError, "a limit: callable needs a store: on the Null store a nil answer would let queries run unlimited" if value.respond_to?(:call) && store.is_a?(Store::Null)
+
+          value
+        end
+
         # Soft mode counts but never refuses, so on the Null store it would let everything through uncounted.
         def wired_soft(value, store)
           soft(value)

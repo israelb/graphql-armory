@@ -33,10 +33,10 @@ RSpec.describe "rate limits as useful objects" do
     end
 
     it "never lets a query through with a partial configuration given to new" do
-      [{ soft: true }, { limit: 100, soft: true }, { limit: nil }, { store: nil }, { window: 0 }, { extensions: "yes" }].each do |settings|
+      [{ soft: true }, { limit: 100, soft: true }, { limit: nil }, { limit: ->(_key, _query) {} }, { store: nil }, { window: 0 }, { extensions: "yes" }].each do |settings|
         expect { GraphQL::Armory::RateLimits::Points.new(**settings) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError)
       end
-      [{ soft: true }, { limit: nil }, { store: nil }, { stale_after: 0 }].each do |settings|
+      [{ soft: true }, { limit: nil }, { limit: ->(_key, _query) {} }, { store: nil }, { stale_after: 0 }].each do |settings|
         expect { GraphQL::Armory::RateLimits::Concurrency.new(**settings) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError)
       end
       expect(GraphQL::Armory::RateLimits::Points.new(limit: 100).(query, 1)).to be_a(GraphQL::AnalysisError)

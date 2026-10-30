@@ -37,7 +37,7 @@ module GraphQL
           end
 
           @store = store
-          @limit = Settings.limit(limit)
+          @limit = Settings.wired_limit(limit, store)
           @stale_after = Settings.seconds(:stale_after, stale_after)
           @soft = Settings.wired_soft(soft, store)
           @key = Settings.key_reader(key)
