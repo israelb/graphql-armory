@@ -153,6 +153,22 @@ use GraphQL::Armory::PersistedQueries, store: PERSISTED, sinks: [GraphQL::Armory
 
 While you are in `strict: false`, `:raw_query_run` is the traffic still to migrate: turn on `strict: true` when it reaches zero. After a deploy, `:operation_refused` with `:unknown_operation` is a client build whose operations are not in the manifest. Signals never hold the operation id or the query. See [Telemetry](telemetry.md).
 
+### Counting probes in strict mode
+
+In strict mode a raw query is refused before it is validated, so it never produces a validation error. If your abuse detection counts validation errors (`undefinedField`, `argumentNotAccepted`) to spot someone probing your schema, it sees nothing from a strict endpoint. Count the refusal instead: a legitimate client sends operation ids and never a raw query, so `:operation_refused` with `reason: :raw_query` is a clean strike.
+
+```ruby
+count_probes = lambda do |signal, data|
+  next unless signal == :operation_refused && data[:reason] == :raw_query
+
+  AbuseDetection.strike(Current.client_key) # your detector, with the client from your own request context
+end
+
+use GraphQL::Armory::PersistedQueries, store: PERSISTED, strict: true, sinks: [count_probes]
+```
+
+A signal holds only the reason, so the sink reads who sent the request from your own request context, as in [Telemetry](telemetry.md). Do not strike on `:unknown_operation`: after a deploy it is a legitimate client build whose operations are not in the manifest yet. The example has not been run against a live detector.
+
 ### Testing with persisted queries
 
 `PersistedQueries::Store::Substitute.new(*queries)` holds the given queries under their SHA-256, like an Apollo manifest, and records the ids it was asked for (`fetched`). `PersistedQueries::Controls::Operations`, `Query.example` and `Root.example` are a small schema and its operations to test against. The decision itself is `PersistedQueries::Gate`: `Gate.build(store:, strict:)` takes the same settings as `use`, and `gate.(context, query_text, document)` answers `[refusal, document]`. `Gate.new`, with nothing wired, refuses every request (`Store::Null`, strict).
