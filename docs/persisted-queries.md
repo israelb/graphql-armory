@@ -12,7 +12,7 @@ A GraphQL endpoint accepts any query anyone writes. Authorization decides what e
 
 ## The solution
 
-Your client's build step (Apollo's persisted query manifest generator, or Relay's `persistOutput`) writes every operation the app uses to a JSON file. The server loads that file and clients send the operation's id instead of its text:
+Your client's build step (Apollo's persisted query manifest generator, or the Relay compiler's `persistConfig`) writes every operation the app uses to a JSON file. The server loads that file and clients send the operation's id instead of its text:
 
 - **An allowlist.** In strict mode the server refuses any query that is not in the file, before validating it, so a raw query cannot even probe field names.
 - **Tamper-evident.** Every id must be the digest (SHA-256 by default) of its query. A manifest edited by hand to put another query behind an id is refused when the app boots.
@@ -30,7 +30,7 @@ Two separate pieces work together. Your client tooling writes the list; this gem
 | `PersistedQueries::Manifest` | this gem | Loads the file at boot and checks that nobody edited it. |
 | `use GraphQL::Armory::PersistedQueries` | this gem | Runs the operation a request names by id, and in strict mode refuses everything else. |
 
-Think of an event: the client tooling prints the guest list, and this gem is the guard at the door. A list without a guard stops nobody. Apollo Server (Node) ships its own guard; open-source graphql-ruby has none, so without this gem a Ruby API ignores the file and keeps running any query it receives.
+Think of an event: the client tooling prints the guest list, and this gem is the guard at the door. A list without a guard stops nobody. Apollo's own router (GraphOS Router, Enterprise plan) can enforce the list; Apollo Server's built-in `persistedQueries` option is only a cache (automatic persisted queries) and still runs any query. Open-source graphql-ruby has no equivalent (GraphQL-Pro has its OperationStore), so without this gem a Ruby API ignores the file and keeps running any query it receives.
 
 Your part is to copy the file the client build produced into the server (for example as `persisted-queries.json` in the Rails root) and deploy it.
 
@@ -175,3 +175,10 @@ The manifest is the simplest store: one file, no database, deployed with the cod
 - **Publishing without redeploying**: the server reads new operations as soon as they are synced.
 
 Until then, any object that answers `fetch(id)` with an operation can be passed as `store:`.
+
+## References
+
+- Apollo Client: [Persisted queries](https://www.apollographql.com/docs/react/data/persisted-queries) — generating the manifest with `@apollo/generate-persisted-query-manifest` and sending ids.
+- Apollo iOS: [Persisted queries](https://www.apollographql.com/docs/ios/fetching/apqs).
+- Relay: [Persisted queries](https://relay.dev/docs/guides/persisted-queries/) — `persistConfig`, local persisting to a file, `doc_id` in the network layer.
+- Relay: [Compiler config](https://relay.dev/docs/getting-started/compiler-config/).
