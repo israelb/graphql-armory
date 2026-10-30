@@ -13,6 +13,7 @@ module GraphQL
       class Manifest
         DIGESTS = { sha256: Digest::SHA256, sha1: Digest::SHA1, md5: Digest::MD5 }.freeze
         APOLLO_FORMAT = "apollo-persisted-query-manifest"
+        ID_LIKE = /\A[A-Za-z0-9_.:-]{1,128}\z/
 
         Operation = Struct.new(:id, :name, :body, :document, keyword_init: true)
 
@@ -38,7 +39,7 @@ module GraphQL
           @digest = digest && DIGESTS.fetch(digest)
           @operations = entries(data).each_with_index.with_object({}) do |((id, name, body), index), operations|
             operation = operation(index, id, name, body)
-            raise ConfigurationError, "operation #{id} appears twice in the manifest" if operations.key?(id)
+            raise ConfigurationError, "operation #{label(index, id)} appears twice in the manifest" if operations.key?(id)
 
             operations[id] = operation
           end.freeze
@@ -81,17 +82,22 @@ module GraphQL
             raise ConfigurationError, "manifest entry #{index} needs a String id, a String body and a String name or none"
           end
           if @digest && @digest.hexdigest(body) != id
-            raise ConfigurationError, "operation #{id} is not the digest of its query: the manifest was edited, or `digest:` is wrong"
+            raise ConfigurationError, "operation #{label(index, id)} is not the digest of its query: the manifest was edited, or `digest:` is wrong"
           end
 
           # Copies, so neither the caller's data nor a fetched operation can change what a later fetch returns.
-          Operation.new(id: id.dup.freeze, name: name&.dup&.freeze, body: body.dup.freeze, document: parse(id, body)).freeze
+          Operation.new(id: id.dup.freeze, name: name&.dup&.freeze, body: body.dup.freeze, document: parse(label(index, id), body)).freeze
         end
 
-        def parse(id, body)
+        def parse(label, body)
           GraphQL.parse(body)
         rescue GraphQL::ParseError
-          raise ConfigurationError, "operation #{id} does not parse"
+          raise ConfigurationError, "operation #{label} does not parse"
+        end
+
+        # The id names the operation in errors only when it looks like an id; otherwise it may be query text.
+        def label(index, id)
+          id.match?(ID_LIKE) ? id : "at entry #{index}"
         end
 
         def unknown_format

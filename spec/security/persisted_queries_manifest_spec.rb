@@ -122,7 +122,10 @@ RSpec.describe GraphQL::Armory::PersistedQueries::Manifest do
         -> { manifest_class.new({ "format" => invoices, "operations" => [] }) },
         -> { manifest_class.new(apollo(account).merge("version" => invoices)) },
         -> { manifest_class.new(apollo(account).tap { |data| data["operations"][0]["id"] = [invoices] }) },
-        -> { manifest_class.new({ "x" => { "q" => invoices } }, digest: false) }
+        -> { manifest_class.new({ "x" => { "q" => invoices } }, digest: false) },
+        -> { manifest_class.new({ invoices => invoices }) },
+        -> { manifest_class.new({ invoices => "query {" }, digest: false) },
+        -> { manifest_class.new(apollo(account).tap { |data| data["operations"] << { "id" => invoices, "body" => account } << { "id" => invoices, "body" => account } }, digest: false) }
       ]
 
       leaks.each do |leak|
