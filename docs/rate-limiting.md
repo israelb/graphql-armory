@@ -22,7 +22,7 @@ A limit of 100 requests per minute lets a client send 100 of the second kind, by
 - **Per client.** Each client key (a user, an API token, an IP) has its own bucket; you can give each key its own limit.
 - **Safe to roll out.** Soft mode, the default, charges and records but refuses nothing, so you can watch real traffic before turning it on.
 
-`GraphQL::Armory::RateLimits::Concurrency` adds a second rule: at most N operations running at the same time per client ([Operations at the same time](#operations-at-the-same-time)). Planned: a Redis store shared between processes, and later a layer that measures processing time (see [Planned](#planned)).
+`GraphQL::Armory::RateLimits::Concurrency` adds a second rule: at most N operations running at the same time per client ([Operations at the same time](#operations-at-the-same-time)). Both keep their state in a store: `MemoryStore` for tests and one process, `RedisStore` for production ([Sharing limits between processes](#sharing-limits-between-processes)). Planned: a layer that measures processing time (see [Planned](#planned)).
 
 ## How to use it
 
@@ -198,11 +198,32 @@ A process that crashes never gives its slots back, so each slot expires after `s
 2. Send what it recorded to your metrics: `result.context[:rate_limit_points]` is `{ key:, cost:, limit:, remaining:, window:, soft:, limited: }`, and `limited: true` marks the queries that would have been refused.
 3. When the limits fit your traffic, set `soft: false`.
 
+### Sharing limits between processes
+
+`MemoryStore` keeps buckets in one process: with four Puma workers on two servers, a client gets the limit eight times over, and a restart refills every bucket. In production use `RedisStore`, which keeps them in Redis, shared by every process:
+
+```ruby
+# Gemfile: gem "redis"
+RATE_LIMIT_STORE = GraphQL::Armory::RateLimits::RedisStore.new(redis: Redis.new(url: ENV.fetch("REDIS_URL")))
+
+class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::RateLimits::Points, store: RATE_LIMIT_STORE, limit: 1_000, window: 60, soft: false
+  use GraphQL::Armory::RateLimits::Concurrency, store: RATE_LIMIT_STORE, limit: 5, soft: false
+end
+```
+
+- **Atomic.** Each charge, slot taken and slot released is one Lua script, so two requests of the same client never both spend the last points.
+- **One clock.** The time comes from Redis (`TIME`), not from each server, so servers whose clocks drift still agree on when a bucket refills.
+- **Small.** A client costs two keys, `graphql-armory:rate-limits:points:<key>` and `...:slots:<key>`; both expire once they no longer matter (a window, or `stale_after`, after the last use). Pass `prefix:` to share one Redis with other apps.
+- **Fails open.** When Redis is down or slow, the client raises, the query runs, and `on_store_error` is called: make that hook alert. Set the client's timeouts (for example `Redis.new(url: ..., timeout: 0.2)`) so a slow Redis cannot slow every request.
+
+The gem does not depend on the redis gem: add it to your Gemfile. A single `Redis` client is safe to share between threads.
+
 ## Reference
 
 `use GraphQL::Armory::RateLimits::Points, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false`
 
-- `store:` answers `take(key, cost:, limit:, window:, force:)` with `[taken, remaining]`. `MemoryStore.new(clock: ...)` keeps buckets in the process.
+- `store:` answers `take(key, cost:, limit:, window:, force:)` with `[taken, remaining]`. `MemoryStore.new(clock: ...)` keeps buckets in the process; `RedisStore` shares them (below).
 - `limit:` a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
 - `window:` positive seconds over which `limit` points refill, continuously.
 - `soft:` `true` (default) charges and records without refusing; `false` refuses.
@@ -220,6 +241,12 @@ A process that crashes never gives its slots back, so each slot expires after `s
 - `soft:`, `key:` and `on_store_error:` as for `Points`. When the store raises on release, `on_store_error` is called and the slot expires after `stale_after`.
 - Instrumentation: `context[:rate_limit_concurrency]`.
 
+`GraphQL::Armory::RateLimits::RedisStore.new(redis:, prefix: "graphql-armory:rate-limits:", clock: nil)`
+
+- `redis:` a redis-rb client (>= 4.8), or anything answering `eval(script, keys:, argv:)` and `evalsha(sha, keys:, argv:)` the same way. Needs Redis 5 or later. Works with Redis Cluster: each script touches one key.
+- `prefix:` a non-empty String put before every key.
+- `clock:` nil (default) reads Redis's clock; a callable answering seconds replaces it, for tests.
+
 Invalid settings raise `RateLimits::ConfigurationError` at boot.
 
 ## Guarantees and limits
@@ -233,12 +260,11 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - When queries of a multiplex share one context hash, `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` hold the last query's record: give each query its own context hash to read every record.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
 - Field scores are yours: graphql-ruby treats a negative or NaN complexity as 0, so such a field is free, like `complexity: 0`. A complexity that is nil or a String makes graphql-ruby raise before the limiter runs, so the query does not run.
-- When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert.
-- `MemoryStore` keeps buckets and slots in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use a shared store in production (planned).
+- When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert. `RedisStore` also counts a bucket whose fields were changed into something that is not a number as a store failure, rather than reading it as full.
+- `MemoryStore` keeps buckets and slots in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use `RedisStore` in production.
 
 ## Planned
 
-- **A Redis store**, shared between processes and atomic.
 - **Processing time, a second layer:** a budget of milliseconds per client per window, measured as queries run, for costs the complexity score does not see.
 
 ## References

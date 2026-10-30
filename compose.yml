@@ -7,10 +7,17 @@ services:
     environment:
       GRAPHQL_ARMORY_ENGINE: ${GRAPHQL_ARMORY_ENGINE:-interpreter}
       GRAPHQL_VERSION: ${GRAPHQL_VERSION:-}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
     volumes:
       - .:/app
       - bundle:/bundle
     command: bash bin/test
+
+  # For RedisStore's specs. Keys are prefixed per example and expire, so runs can share it.
+  redis:
+    image: redis:7-alpine
 
 volumes:
   bundle:

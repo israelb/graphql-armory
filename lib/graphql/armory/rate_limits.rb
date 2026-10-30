@@ -93,5 +93,6 @@ module GraphQL
 end
 
 require "graphql/armory/rate_limits/memory_store"
+require "graphql/armory/rate_limits/redis_store"
 require "graphql/armory/rate_limits/points"
 require "graphql/armory/rate_limits/concurrency"

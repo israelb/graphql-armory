@@ -24,9 +24,17 @@ jobs:
     name: Ruby 3.4 / graphql ~> 2.6.0 / interpreter (minimal)
     if: ${{ vars.CI_FULL_MATRIX != 'true' }}
     runs-on: ubuntu-24.04
+    services:
+      # For RedisStore's specs (spec/security/rate_limit_stores_spec.rb): they fail, not skip, on CI without it.
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
       GRAPHQL_VERSION: "~> 2.6.0"
       GRAPHQL_ARMORY_ENGINE: interpreter
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
@@ -49,9 +57,17 @@ jobs:
           # Execution::Next is supported from graphql 2.6.2 (a denied field crashes it in 2.5.26 to 2.6.1).
           - { graphql: "~> 2.4.0", engine: next }
           - { graphql: "~> 2.5.0", engine: next }
+    services:
+      # For RedisStore's specs (spec/security/rate_limit_stores_spec.rb): they fail, not skip, on CI without it.
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
       GRAPHQL_VERSION: ${{ matrix.graphql }}
       GRAPHQL_ARMORY_ENGINE: ${{ matrix.engine }}
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
