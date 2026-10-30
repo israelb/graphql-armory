@@ -22,7 +22,7 @@ A limit of 100 requests per minute lets a client send 100 of the second kind, by
 - **Per client.** Each client key (a user, an API token, an IP) has its own bucket; you can give each key its own limit.
 - **Safe to roll out.** Soft mode, the default, charges and records but refuses nothing, so you can watch real traffic before turning it on.
 
-Planned in the next releases: a limit on operations running at the same time per client, a Redis store shared between processes, and later a second layer that measures processing time (see [Planned](#planned)).
+`GraphQL::Armory::RateLimits::Concurrency` adds a second rule: at most N operations running at the same time per client ([Operations at the same time](#operations-at-the-same-time)). Planned: a Redis store shared between processes, and later a layer that measures processing time (see [Planned](#planned)).
 
 ## How to use it
 
@@ -137,6 +137,32 @@ use GraphQL::Armory::RateLimits::Points, store: store, window: 60,
 
 The callable answers a positive Integer, or nil for no limit (for example an internal service). Anything else raises.
 
+### Operations at the same time
+
+Points limit how much work a client asks for per minute. They do not stop a client that sends 30 cheap requests at once and occupies every server process while they run: GitHub, for one, also caps concurrent requests. Add `Concurrency` next to `Points`:
+
+```ruby
+class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::RateLimits::Concurrency,
+    store: store,      # the same store as Points
+    limit: 5,          # operations running at once per client
+    soft: false
+end
+```
+
+It uses the same `rate_limit_key`. Before an operation runs it takes one of the client's slots; when the operation ends, it gives the slot back, even if the operation raised or another analyzer refused it. A client whose slots are all taken is refused before any field resolves:
+
+```json
+{
+  "errors": [{
+    "message": "Too many operations at the same time: 5 are already running for this client (limit 5). Retry when one finishes.",
+    "extensions": { "code": "RATE_LIMITED", "limit": 5, "active": 5 }
+  }]
+}
+```
+
+A process that crashes never gives its slots back, so each slot expires after `stale_after:` seconds (60 by default). Set it above your longest request timeout. Soft mode, per-key limits (`limit: ->(key, query) { ... }`) and `on_store_error:` work as for `Points`; what happened is in `result.context[:rate_limit_concurrency]` (`{ key:, limit:, active:, soft:, limited: }`).
+
 ### Rolling it out
 
 1. Install it in soft mode (leave out `soft:`). Queries run as before; each one records what it cost.
@@ -155,20 +181,32 @@ The callable answers a positive Integer, or nil for no limit (for example an int
 - `on_store_error:` a callable `(error, query)` called when the store raises; the query then runs (fails open). By default it warns.
 - Instrumentation: `context[:rate_limit_points]`.
 
+`use GraphQL::Armory::RateLimits::Concurrency, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil`
+
+- `store:` answers `acquire(key, token:, limit:, ttl:, force:)` with `[acquired, active]` and `release(key, token:)`. `MemoryStore` does both.
+- `limit:` operations at once per client: a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
+- `stale_after:` positive seconds after which a slot that was never released expires.
+- `soft:`, `key:` and `on_store_error:` as for `Points`. When the store raises on release, `on_store_error` is called and the slot expires after `stale_after`.
+- Instrumentation: `context[:rate_limit_concurrency]`.
+
 Invalid settings raise `RateLimits::ConfigurationError` at boot.
 
 ## Guarantees and limits
 
 - A query this limiter refuses resolves no field and is not charged. A query that fails validation is not charged. A query refused by another analyzer (`max_depth`, `max_complexity`) is still charged: graphql-ruby runs every analyzer.
 - Each query in a multiplex is charged on its own.
+- `Concurrency` takes one slot per query of a multiplex, and releases them all when the multiplex ends, even when the queries share one context hash. If a release fails, that slot expires after `stale_after`; the others are still released.
+- A query run with its own trace (`context: { trace: ... }`) cannot be released by `Concurrency`, so it raises `ConfigurationError` instead of taking a slot.
+- A resolver that runs another query for the same client (a nested `execute`) takes a second slot while the first is held.
+- A subscription holds a slot only while its first result runs, not while it stays subscribed.
+- When queries of a multiplex share one context hash, `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` hold the last query's record: give each query its own context hash to read every record.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
 - Field scores are yours: graphql-ruby treats a negative or NaN complexity as 0, so such a field is free, like `complexity: 0`. A complexity that is nil or a String makes graphql-ruby raise before the limiter runs, so the query does not run.
 - When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert.
-- `MemoryStore` keeps buckets in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use a shared store in production (planned).
+- `MemoryStore` keeps buckets and slots in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use a shared store in production (planned).
 
 ## Planned
 
-- **Operations at the same time:** at most N queries running at once per client, released when each one ends.
 - **A Redis store**, shared between processes and atomic.
 - **Processing time, a second layer:** a budget of milliseconds per client per window, measured as queries run, for costs the complexity score does not see.
 

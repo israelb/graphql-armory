@@ -34,6 +34,53 @@ module GraphQL
           value
         end
 
+        def limit(limit)
+          return limit if limit.respond_to?(:call) || positive_integer?(limit)
+
+          raise ConfigurationError, "limit: must be a positive Integer, or a callable taking the key and the query, got #{limit.inspect}"
+        end
+
+        def limit_for(limit, key, query)
+          return limit unless limit.respond_to?(:call)
+
+          answer = limit.call(key, query)
+          return answer if answer.nil? || positive_integer?(answer)
+
+          raise ConfigurationError, "limit: answered #{answer.inspect} for #{key}: it must answer a positive Integer, or nil for no limit"
+        end
+
+        def positive_integer?(value)
+          value.is_a?(Integer) && value.positive?
+        end
+
+        def seconds(name, value)
+          return value if value.is_a?(Numeric) && value.positive? && value.finite?
+
+          raise ConfigurationError, "#{name}: must be a positive number of seconds, got #{value.inspect}"
+        end
+
+        # Whether `store` answers each method with the keywords this gem passes, so a wrong signature fails at
+        # boot instead of failing open on every query.
+        def store_answers?(store, methods)
+          methods.all? do |name, keywords|
+            next false unless store.respond_to?(name)
+
+            parameters = store.method(name).parameters
+            next false unless parameters.any? { |type, _| %i[req opt rest].include?(type) } # the key
+            next true if parameters.any? { |type, _| type == :keyrest }
+
+            (keywords - parameters.select { |type, _| type == :key || type == :keyreq }.map(&:last)).empty?
+          end
+        end
+
+        # A store answer that is not [true or false, a whole number] would let queries through: 0 is truthy.
+        def checked(answer, method, meaning)
+          granted, count = answer if answer.is_a?(Array) && answer.size == 2
+          return answer if (granted == true || granted == false) && count.is_a?(Integer) && !count.negative?
+
+          raise ConfigurationError, "store: #{method} answered #{answer.inspect}: it must answer [true or false, #{meaning}]"
+        end
+
         def store_error_handler(handler)
           return ->(error, _query) { warn("graphql-armory rate limit store failed, query let through: #{error.class}: #{error.message}") } if handler.nil?
           raise ConfigurationError, "on_store_error: must be a callable that takes the error and the query" unless handler.respond_to?(:call)
@@ -47,3 +94,4 @@ end
 
 require "graphql/armory/rate_limits/memory_store"
 require "graphql/armory/rate_limits/points"
+require "graphql/armory/rate_limits/concurrency"
