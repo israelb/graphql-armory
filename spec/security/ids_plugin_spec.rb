@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "base64"
+
 # `use GraphQL::Armory::IDs` gives a schema encrypted global IDs in one line. Every ID that cannot be honoured —
 # tampered, of an unknown type, of another model, out of the user's scope — answers exactly like a missing one.
 RSpec.describe "use GraphQL::Armory::IDs" do
@@ -47,10 +49,17 @@ RSpec.describe "use GraphQL::Armory::IDs" do
       end
       field :invoices, [invoice], null: false, authorize: :none, reason: "scoped"
     end
+    # Hidden from non-admins: an ID naming it must answer like a missing one for them.
+    invoice_export = Class.new(base_object) do
+      graphql_name "InvoiceExport"
+      authorize :read, model: Invoice, visible_when: :export
+      implements GraphQL::Types::Relay::Node
+      field :number, String, null: false
+    end
     types = { invoice => Invoice, account => Account }
     Class.new(ArmoryEngine.base_schema) do
       query query
-      orphan_types invoice, account
+      orphan_types invoice, account, invoice_export
       use armory::Authorization, adapter: adapter
       use armory::IDs, encoder: encoder, **(find ? { find: find } : {})
       define_singleton_method(:resolve_type) { |_abstract, obj, _ctx| types.find { |_type, model| obj.is_a?(model) }&.first }
@@ -91,12 +100,22 @@ RSpec.describe "use GraphQL::Armory::IDs" do
           encoder.encode("Ghost/1"),                          # a type the schema does not have
           encoder.encode("Node/#{world.a1.id}"),              # not an object type
           encoder.encode("String/1"),
+          encoder.encode("Query/1"),                          # an object type that never had IDs, whose model cannot be told
+          encoder.encode("__Type/1"),
+          encoder.encode("InvoiceExport/#{world.a1.id}"),     # a type hidden from this user
           encoder.encode("no-separator"),
           Class.new(GraphQL::Armory::Encoder) { key("x" * 32) }.encode("Invoice/#{world.a1.id}")
         ]
 
         expect(refused.map { |id| node(schema, id, world.alice) }).to all(eq(missing))
         expect(missing).to eq("data" => { "node" => nil })
+      end
+
+      it "does not let a forged legacy ID name a root type when Legacy is in the chain" do
+        chain = GraphQL::Armory::Encoder.versioned(encoder, GraphQL::Armory::Encoder::Legacy)
+        legacy_schema = schema_for(adapter, encoder: chain)
+
+        expect(node(legacy_schema, Base64.urlsafe_encode64("Query/1", padding: false), world.alice)).to eq("data" => { "node" => nil })
       end
 
       it "refuses an ID of another model in loads:, like a missing one" do
@@ -114,7 +133,8 @@ RSpec.describe "use GraphQL::Armory::IDs" do
   end
 
   it "loads types without the authorization module through find:, and refuses them without it" do
-    find = ->(type, key, _context) { type.graphql_name == "Account" ? Account.find_by(id: key) : nil }
+    # Only Node types reach find:, so a naive lookup never sees Query or __Type.
+    find = ->(type, key, _context) { Object.const_get(type.graphql_name).find_by(id: key) }
     query = "query($id: ID!) { node(id: $id) { ... on Account { name } } }"
     id = encoder.encode("Account/#{world.account_a.id}")
     run = ->(schema) { execute_query(schema, query, variables: { "id" => id }, context: { current_user: world.alice }, root_value: root).to_h }

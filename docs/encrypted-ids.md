@@ -37,8 +37,9 @@ end
 `use GraphQL::Armory::IDs` defines `id_from_object` and `object_from_id` for you. An ID holds the type name and the record's id, encrypted. When the schema decodes one:
 
 - A type that includes the authorization module's `Base` is looked up **inside the user's scope**, so another tenant's ID answers `null`, like a missing record (in `node(id:)`, `loads:` and anything else that calls `object_from_id`).
-- A tampered ID, an ID made with another key, an unknown or hidden type, or a type that is not an object type answer `null` too, with no error.
-- A type without `Base` is loaded only if you say how: `use GraphQL::Armory::IDs, find: ->(type, key, context) { ... }`. Otherwise its IDs answer `null`.
+- A tampered ID, an ID made with another key, an unknown type, a type hidden from this user (`visible_when:`), or a type that is not an object type implementing `Node` (root types, payloads, introspection) answer `null` too, with no error.
+- A type without `Base` is loaded only if you say how: `use GraphQL::Armory::IDs, find: ->(type, key, context) { ... }`. Otherwise its IDs answer `null`. `find:` only sees `Node` types; return `nil` for a missing record (`find_by`, not `find`): an error it raises reaches the client.
+- A `Base` type named unlike its model (Rails' `Types::InvoiceType`) needs `authorize :read, model: Invoice`, or every lookup of it raises `ConfigurationError`.
 
 Pass your own encoder with `use GraphQL::Armory::IDs, encoder: AppEncoder` (or a versioned chain, below).
 
