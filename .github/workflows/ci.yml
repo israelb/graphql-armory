@@ -1,12 +1,11 @@
 name: CI
 
-# Two jobs, only one of them runs. While the repository is private (limited Actions minutes) the
-# minimal job runs. To run the full matrix:
-#   gh variable set CI_FULL_MATRIX --body true
-# and back to minimal:
-#   gh variable delete CI_FULL_MATRIX
-# Changes that only touch docs paths do not run the specs.
+# Two jobs, only one of them runs. The repository is public (Actions minutes are free), so the repository
+# variable CI_FULL_MATRIX is `true` and the full matrix runs. To fall back to the minimal job:
+#   gh variable set CI_FULL_MATRIX --body false
+# Changes that only touch docs paths do not run the specs. `workflow_dispatch` runs the suite by hand.
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:
