@@ -72,7 +72,7 @@ module GraphQL
         def audit_own_checks(schema, findings)
           found = {}
           audited_types(schema).select { |type| type.respond_to?(:armory_rule) }.each do |type|
-            note_class_check(found, type, :authorized?)
+            %i[authorized? authorizes?].each { |name| note_class_check(found, type, name) }
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
           schema.types.each_value do |type|

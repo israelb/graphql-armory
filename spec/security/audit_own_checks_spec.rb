@@ -190,6 +190,28 @@ RSpec.describe "the audit and the app's own authorization checks" do
     expect(problems(schema).map(&:path)).to contain_exactly(end_with("#authorizes?"))
   end
 
+  it "reports self.authorizes? on a type and on a base object, which on Execution::Next skips the type's rule" do
+    own = Module.new { def authorizes?(_context) = false }
+    on_type = build(invoice: proc { def self.authorizes?(_context) = false })
+    on_base = build(object: proc { def self.authorizes?(_context) = false })
+    by_extend = build(invoice: proc { extend own })
+
+    [on_type, on_base, by_extend].each do |schema|
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".authorizes?"))
+      expect(problems(schema).first.message).to match(/Execution::Next/)
+    end
+  end
+
+  it "lists a declared self.authorizes? as a bypass" do
+    schema = build(invoice: proc { def self.authorizes?(_context) = true })
+    plugin = armory
+    type = @classes[:invoice]
+    declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { type => { authorizes?: "always runs the rule" } } }
+
+    expect(problems(declared)).to eq([])
+    expect(armory::Audit.(declared).bypasses.map(&:reason)).to include("always runs the rule")
+  end
+
   # Recheck probes: the same checks, reached another way.
   it "reports a check a mutation inherits from a module on its parent" do
     own = Module.new { def unauthorized_object(error) = error.object }
