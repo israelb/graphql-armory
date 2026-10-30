@@ -14,6 +14,11 @@ module GraphQL
         RELAY_TYPES = [GraphQL::Types::Relay::BaseConnection, GraphQL::Types::Relay::BaseEdge,
                        GraphQL::Types::Relay::PageInfo].freeze
 
+        # A library's method is defined in its files and held by a class it names. Either alone misleads: anyone can name
+        # a module under `GraphQL::`, and an alias keeps graphql-ruby's location on an app's class.
+        GRAPHQL_RUBY_PATH = "#{File.dirname(GraphQL::Schema.method(:from_definition).source_location.first)}/"
+        ARMORY_PATH = "#{File.expand_path('..', __dir__)}/"
+
         attr_reader :adapter
 
         # `new` is inert: with no adapter nothing can be verified, so nothing is covered.
@@ -40,6 +45,7 @@ module GraphQL
           end
 
           audited_types(schema).each { |type| audit_type(type, findings) }
+          schema.types.each_value { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
           schema.types.each_value { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
           schema.types.each_value { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
           findings.report
@@ -71,8 +77,11 @@ module GraphQL
         # defined, until it is declared. Methods that come from graphql-ruby or from this gem are not the app's.
         def audit_own_checks(schema, findings)
           found = {}
-          audited_types(schema).select { |type| type.respond_to?(:armory_rule) }.each do |type|
-            %i[authorized? authorizes?].each { |name| note_class_check(found, type, name) }
+          schema.types.each_value do |type|
+            next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
+
+            %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
+            note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
           schema.types.each_value do |type|
@@ -86,6 +95,7 @@ module GraphQL
 
         def note_field_checks(found, field)
           %i[authorized? authorizes? unauthorized_object].each { |name| note_instance_check(found, field.class, name) }
+          note_visibility_check(found, field)
           note_argument_checks(found, field.all_argument_definitions)
           resolver = field.resolver
           return unless resolver
@@ -96,26 +106,36 @@ module GraphQL
         end
 
         def note_argument_checks(found, arguments)
-          arguments.each { |argument| note_instance_check(found, argument.class, :authorized?) }
+          arguments.each do |argument|
+            note_instance_check(found, argument.class, :authorized?)
+            note_visibility_check(found, argument)
+          end
+        end
+
+        # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.
+        def note_visibility_check(found, member)
+          note_instance_check(found, member.class, :visible?) if member.respond_to?(:armory_visible_when) && member.armory_visible_when
         end
 
         def note_instance_check(found, klass, name)
           return unless klass.method_defined?(name) || klass.private_method_defined?(name)
 
-          note_own_check(found, klass, klass.instance_method(name).owner, name, "#")
+          note_own_check(found, klass, klass.instance_method(name), name, "#")
         end
 
         def note_class_check(found, klass, name)
           return unless klass.respond_to?(name, true)
 
-          note_own_check(found, klass, klass.method(name).owner, name, ".")
+          note_own_check(found, klass, klass.method(name), name, ".")
         end
 
-        def note_own_check(found, klass, owner, name, separator)
-          holder = klass.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
-          return if holder.name&.start_with?("GraphQL::")
-
-          found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}"
+        # Follows the whole chain: a method that only calls super must not hide one below it that answers true.
+        def note_own_check(found, klass, method, name, separator)
+          while method
+            holder = holder_of(klass, method)
+            found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}" unless library_method?(method, holder, GRAPHQL_RUBY_PATH, ARMORY_PATH)
+            method = method.super_method
+          end
         end
 
         def report_own_checks(found, declared, findings)
@@ -138,6 +158,8 @@ module GraphQL
           case name
           when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
           when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
+          when :authorized_new, :wrap then "defined by the app: it decides whether authorized? runs, so on the interpreter it can skip the rule"
+          when :visible? then "defined by the app: if it does not call super, visible_when: does not hide this from a user it should"
           else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
           end
         end
@@ -159,15 +181,62 @@ module GraphQL
           rule = type.armory_rule
           if rule.nil?
             findings.problem(:no_rule, path, "has no rule and no default_action, so it is denied")
+          elsif rule.visible_when && (answer = graphql_ruby_answer(type, :visible?))
+            findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers visible? here, so visible_when: never runs: remove it")
           elsif rule.none?
             findings.bypass(path, rule.reason)
             audit_fields(type, findings, model: nil, bypassed: !rule.covers_fields?, reported: Set.new)
+          elsif (answer = graphql_ruby_answer(type, :authorized?))
+            findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers authorized? here, so this rule never runs: " \
+                                                  "put the rule on the field that returns it (on a root field, on a resolver: a field rule asks " \
+                                                  "the parent's policy), and declare `authorize :none, reason: \"...\", covers_fields: true` on this class")
           else
             model = model_of(type, path, findings)
             reported = Set.new
             check(path, model, rule, findings, reported) if model
             check(path, model, Rule.new(rule.visible_when, policy: rule.policy), findings, reported) if model && rule.visible_when
             audit_fields(type, findings, model: model, bypassed: false, reported: reported)
+          end
+        end
+
+        # ConnectionBehaviors and EdgeBehaviors, included after Base, bring an `authorized?` and a `visible?` that win
+        # over the plugin's. An app's method may call super, so this follows the chain to the first library that answers.
+        def graphql_ruby_answer(type, name)
+          method = type.method(name)
+          until method.nil? || method.owner == Integration::Object
+            return method.owner if library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH)
+
+            method = method.super_method
+          end
+        end
+
+        def holder_of(klass, method)
+          owner = method.owner
+          klass.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
+        end
+
+        def library_method?(method, holder, *paths)
+          file = method.source_location&.first
+          !file.nil? && file.start_with?(*paths) && holder.name&.start_with?("GraphQL::") == true
+        end
+
+        # A direct edge subclass runs the plugin's check, but only where an edge is built: `nodes` never builds one.
+        def audit_edge_rule(type, schema, findings)
+          rule = type.armory_rule if type.respond_to?(:armory_rule)
+          return if rule.nil? || rule.none? || !nodes_field_beside?(type, schema)
+
+          findings.problem(:ignored_rule, type.graphql_name, "the connection's nodes field returns the nodes without building an edge, so this rule does not " \
+                                                             "cover it: put the rule on the field that returns the connection (on a root field, on a resolver: " \
+                                                             "a field rule asks the parent's policy), or remove the nodes field with has_nodes_field(false)")
+        end
+
+        def nodes_field_beside?(edge, schema)
+          schema.types.each_value.any? do |type|
+            next false unless type.kind.object? && !type.introspection?
+
+            fields = type.all_field_definitions
+            fields.any? { |field| field.graphql_name == "nodes" } &&
+              fields.any? { |field| field.graphql_name == "edges" && field.type.unwrap == edge }
           end
         end
 

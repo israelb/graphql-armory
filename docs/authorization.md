@@ -94,8 +94,12 @@ A declared hook that returns `nil` for a non-null field behaves differently per 
 - `authorized?` on a base field, a base argument, a resolver or a mutation, and `self.authorized?` on a type, a base object or an input object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
 - `unauthorized_object` on a resolver, a mutation (with or without `Base`), a base field, or `self.unauthorized_object` on an input object. graphql-ruby calls it on whatever loads a record, before the schema's hook. If it returns the object, the code **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
 - `authorizes?` on a base field, a resolver, a type or a base object (`self.authorizes?`). On `Execution::Next`, answering `false` means `authorized?` does not run, so the rule is skipped.
+- `self.authorized_new` or `self.wrap` on a type. Each decides whether `authorized?` runs, so on the interpreter it can skip the rule.
+- `visible?` on a type, a field or an argument whose `visible_when:` depends on it. If it does not call `super`, `visible_when:` hides nothing. Elsewhere your own `visible?` is not reported.
 
-Methods that come from graphql-ruby or from this gem are not reported, so the connection and edge classes of graphql-ruby's install template stay clean.
+Each level of a chain is reported: a method that calls `super` does not hide one below it that answers true, so declare every level you keep.
+
+Methods that come from graphql-ruby or from this gem, in their files and on classes they name, are not reported, so the connection and edge classes of graphql-ruby's install template stay clean.
 
 Remove the method, or make it call `super` and declare it, by the class that defines it and with your reason:
 
@@ -110,7 +114,7 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
 - A type absent from `schema.types`, as with `use Schema::Visibility, dynamic: true` and a `visible?` that answers `false`, and the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly.
-- `visible?` on a field or a type: your own can defeat `visible_when:`.
+- Code written to get past it. The audit reads the classes, it does not run your methods: a declared alias of a library method, a class of yours named under `GraphQL::`, or a forged `__FILE__` are not caught. The audit protects against mistakes, not against the app's own code.
 - `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
 
 ## Lists, connections and lookups
@@ -126,6 +130,10 @@ field :invoice_via_ref, InvoiceType, authorize: :none, reason: "loaded through t
   argument :invoice_id, ID, loads: InvoiceType
 end
 ```
+
+**A rule on a connection or edge class does not run.** graphql-ruby's install template includes `ConnectionBehaviors` and `EdgeBehaviors` in a class that already has `Base`, and they bring an `authorized?` that always answers true. A rule there, declared or inherited, is ignored: a refused user still gets `pageInfo` and any field of the connection itself, while `nodes` stay narrowed. `visible_when:` there is ignored the same way. A direct `Relay::BaseEdge` subclass does run its rule, but only where an edge is built, and the `nodes` field never builds one. The audit reports all of these as `:ignored_rule`.
+
+Put the rule where something answers for it, and declare `authorize :none, reason: "...", covers_fields: true` on the class. A field rule asks the policy of the parent object, so it works on a connection nested under a record. On a root field there is no parent to ask (Pundit raises, CanCanCan refuses everyone), so use a resolver with `authorize :manage, model: Invoice`.
 
 `find_by:` and `loads:` (also inside input objects whose base class includes `Base`) look the record up **inside the user's scope**, so another tenant's ID answers exactly like a missing one. Opt out of the scope for a field's `loads:` only on purpose, with `load_through_scope: false`; the audit lists it. On `Execution::Next` the opt-out also reaches `loads:` nested in that field's input objects (the interpreter keeps those scoped), and the audit lists them too (`Query.field(filter.invoice_id)`). An input object that overrides `object_from_id` or defines `load_<argument>` itself is honoured on the interpreter and not seen by the audit.
 

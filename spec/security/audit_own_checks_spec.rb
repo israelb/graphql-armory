@@ -67,6 +67,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
       graphql_name "Query"
       authorize :none, reason: "the root holds nothing"
       field :ping, String, null: true, authorize: :none, reason: "public"
+      field :first_invoice, invoice_type, null: true, authorize: :none, reason: "the type's rule decides"
       field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type" if relay_template
       if input
         input_type = Class.new(GraphQL::Schema::InputObject) do
@@ -210,6 +211,116 @@ RSpec.describe "the audit and the app's own authorization checks" do
 
     expect(problems(declared)).to eq([])
     expect(armory::Audit.(declared).bypasses.map(&:reason)).to include("always runs the rule")
+  end
+
+  # An app's method can sit under another one that only calls super.
+  describe "checks at several levels" do
+    let(:skipping) { Module.new { def authorized?(_object, _context) = true } }
+    let(:passing) { Module.new { def authorized?(object, context) = super } }
+
+    it "reports a parent's check that answers true under a child's that calls super" do
+      own = skipping
+      schema = build(object: proc { extend own }, invoice: proc { def self.authorized?(object, context) = super })
+
+      expect(problems(schema).size).to eq(2)
+      expect(problems(schema).map(&:path)).to all(end_with(".authorized?"))
+    end
+
+    it "does not let a declaration of the outer level hide the inner one" do
+      own = skipping
+      plugin = armory
+      schema = build(object: proc { extend own }, invoice: proc { def self.authorized?(object, context) = super })
+      type = @classes[:invoice]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { type => { authorized?: "calls super" } } }
+
+      expect(problems(declared).size).to eq(1)
+      expect(armory::Audit.(declared).ok?).to be(false)
+    end
+
+    it "accepts a declaration of every level when each one calls super" do
+      own = passing
+      plugin = armory
+      schema = build(object: proc { extend own }, invoice: proc { def self.authorized?(object, context) = super })
+      type = @classes[:invoice]
+      declared = Class.new(schema) do
+        use plugin, adapter: :pundit, own_checks: { type => { authorized?: "calls super" }, own => { authorized?: "calls super" } }
+      end
+
+      expect(problems(declared)).to eq([])
+    end
+
+    it "reports a field's check that answers true under one that calls super" do
+      own = Module.new { def authorized?(*) = true }
+      schema = build(on_field: proc do
+        include own
+        def authorized?(*) = super
+      end)
+
+      expect(problems(schema).size).to eq(2)
+    end
+
+    it "reports a resolver's check that answers true under one that calls super" do
+      own = Module.new { def authorized?(**) = true }
+      schema = build(approve: proc do
+        include own
+        def authorized?(**) = super
+      end)
+
+      expect(problems(schema).size).to eq(2)
+    end
+  end
+
+  describe "visible? over visible_when:" do
+    it "reports a type's own visible? when its rule has visible_when:" do
+      schema = build(invoice: proc do
+        authorize :read, model: ::Invoice, visible_when: :manage
+        def self.visible?(_context) = true
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".visible?"))
+      expect(problems(schema).first.message).to match(/visible_when/)
+    end
+
+    it "reports a base field's own visible? over a field with visible_when:" do
+      schema = build(on_field: proc { def visible?(_context) = true }, invoice: proc do
+        field :secret, String, null: true, authorize: :none, reason: "x", visible_when: :manage
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with("#visible?"))
+    end
+
+    it "does not report an own visible? where no visible_when: depends on it" do
+      schema = build(invoice: proc { def self.visible?(context) = super })
+
+      expect(problems(schema)).to eq([])
+    end
+  end
+
+  def foreign_invoice(schema)
+    execute_query(schema, "{ firstInvoice { id } }", context: { current_user: world.bob },
+                                                     root_value: Struct.new(:first_invoice).new(world.a1)).to_h.dig("data", "firstInvoice")
+  end
+
+  it "reports self.wrap on a type, and pins that on the interpreter it skips the rule" do
+    schema = build(invoice: proc { def self.wrap(object, context) = new(object, context) })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with(".wrap"))
+    expect(problems(schema).first.message).to match(/authorized\?/)
+    expect(foreign_invoice(build)).to be_nil
+    expect(foreign_invoice(schema)).not_to be_nil unless ArmoryEngine.next?
+  end
+
+  it "pins that a parent's check under a child's super serves a record the rule refuses" do
+    own = Module.new { def authorized?(_object, _context) = true }
+
+    expect(foreign_invoice(build(object: proc { extend own }, invoice: proc { def self.authorized?(object, context) = super }))).not_to be_nil
+  end
+
+  it "reports self.authorized_new on a type, which on the interpreter skips the check" do
+    schema = build(invoice: proc { def self.authorized_new(object, context) = new(object, context) })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with(".authorized_new"))
+    expect(problems(schema).first.message).to match(/authorized\?/)
   end
 
   # Recheck probes: the same checks, reached another way.
