@@ -29,14 +29,19 @@ module GraphQL
         # Same token bucket as MemoryStore#take. The bucket expires once a whole window has passed: it is full
         # again by then, the same as no bucket at all. An expiry is only ever pushed later, never brought closer, so
         # a limiter with a shorter window sharing the key cannot cut it short. The points left go back as a string:
-        # Redis would truncate a Lua number past 2**63.
+        # Redis would truncate a Lua number past 2**63. A bucket whose fields are not numbers is an error, so the
+        # limiter calls on_store_error instead of reading it as full.
         TAKE = <<~LUA
           #{CLOCK}
           local cost, limit, window = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
           local force, now = ARGV[4] == "1", clock(ARGV[5])
           local state = redis.call("HMGET", KEYS[1], "level", "at")
           local level, at = tonumber(state[1]), tonumber(state[2])
-          if not level then level, at = limit, now end
+          if not (state[1] or state[2]) then
+            level, at = limit, now
+          elseif not (level and at) or level ~= level or at ~= at or level < 0 or level == math.huge or math.abs(at) == math.huge then
+            return redis.error_reply("graphql-armory: corrupt rate limit bucket at " .. KEYS[1])
+          end
           level = math.min(level + math.max(now - at, 0) * limit / window, limit)
 
           local taken = cost <= level

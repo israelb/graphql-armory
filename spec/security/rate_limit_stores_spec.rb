@@ -60,6 +60,17 @@ RSpec.describe "rate limit stores" do
       expect([redis.pttl("#{prefix}slots:user:1"), redis.pttl("#{prefix}points:user:1")]).to all(be > 599_000)
     end
 
+    it "raises on a bucket whose fields are not numbers instead of reading it as full, so the limiter reports it" do
+      key = "#{prefix}points:user:1"
+      [{ "level" => "abc", "at" => "1000" }, { "level" => "-5", "at" => "1000" }, { "level" => "inf", "at" => "1000" },
+       { "level" => "5", "at" => "nan" }, { "level" => "5" }, { "at" => "1000" }].each do |fields|
+        redis.del(key)
+        redis.hset(key, fields)
+
+        expect { store.take("user:1", cost: 1, limit: 100, window: 60) }.to raise_error(Redis::CommandError, /corrupt rate limit bucket/)
+      end
+    end
+
     it "answers as MemoryStore does for a Rational window or ttl, a Time clock and a huge limit" do
       memory = GraphQL::Armory::RateLimits::MemoryStore.new(clock: -> { Time.at(now[0]) })
       redis_store = GraphQL::Armory::RateLimits::RedisStore.new(redis: redis, prefix: prefix, clock: -> { Time.at(now[0]) })

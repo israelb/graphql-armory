@@ -260,7 +260,7 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - When queries of a multiplex share one context hash, `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` hold the last query's record: give each query its own context hash to read every record.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
 - Field scores are yours: graphql-ruby treats a negative or NaN complexity as 0, so such a field is free, like `complexity: 0`. A complexity that is nil or a String makes graphql-ruby raise before the limiter runs, so the query does not run.
-- When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert.
+- When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert. `RedisStore` also counts a bucket whose fields were changed into something that is not a number as a store failure, rather than reading it as full.
 - `MemoryStore` keeps buckets and slots in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use `RedisStore` in production.
 
 ## Planned
