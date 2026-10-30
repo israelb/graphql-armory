@@ -2,6 +2,6 @@
 
 module GraphQL
   module Armory
-    VERSION = "0.1.0.pre6"
+    VERSION = "0.1.0.pre7"
   end
 end
