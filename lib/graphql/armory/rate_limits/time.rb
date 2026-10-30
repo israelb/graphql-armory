@@ -18,18 +18,32 @@ module GraphQL
         CONTEXT_KEY = :rate_limit_time
         NAMESPACE = :graphql_armory
 
-        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic)
-          build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, clock: clock).install(schema)
+        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false)
+          build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, clock: clock, extensions: extensions).install(schema)
+        end
+
+        # HTTP headers for the budget a result recorded: `RateLimit-Time-Limit` and `RateLimit-Time-Remaining` in
+        # milliseconds, and `RateLimit-Time-Reset` (seconds until the bucket is full again). Prefixed so they never
+        # clash with the `Points` headers. Empty when the query had no limit.
+        def self.headers(result)
+          info = result.context.namespace(NAMESPACE)[:time]
+          return {} unless info && info[:limit] && info[:remaining]
+
+          {
+            "RateLimit-Time-Limit" => info[:limit].to_s,
+            "RateLimit-Time-Remaining" => info[:remaining].to_s,
+            "RateLimit-Time-Reset" => Points.reset_in(info).to_s
+          }
         end
 
         # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
-        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic)
-          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, clock: clock)
+        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false)
+          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, clock: clock, extensions: extensions)
         end
 
         # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
         # configuration lets a query through either.
-        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, clock: Clock.monotonic)
+        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
@@ -41,6 +55,7 @@ module GraphQL
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error)
           @clock = Settings.clock(clock)
+          @extensions = Settings.extensions(extensions)
           @trace = measuring_trace
         end
 
@@ -76,7 +91,8 @@ module GraphQL
           _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
 
           limited = remaining.zero?
-          record(query, key: key, limit: limit, remaining: remaining, limited: limited)
+          info = record(query, key: key, limit: limit, remaining: remaining, limited: limited)
+          announce(query, info) if @extensions
           return refusal(limit) if limited && !@soft
 
           owe(query, key, limit)
@@ -115,9 +131,19 @@ module GraphQL
 
         def charge_one(query, key, limit, cost)
           answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
-          Settings.checked(answer, :take, "the Integer milliseconds left")
+          _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
+          settle(query, key, limit, cost, remaining)
         rescue StandardError => error
           @on_store_error.call(error, query)
+        end
+
+        # What the client has left once the charge is in, in the record and in the extensions announced earlier.
+        def settle(query, key, limit, cost, remaining)
+          space = query.context.namespace(NAMESPACE)
+          info = (space[:time] || base_record(key: key, limit: limit, limited: false)).merge(remaining: remaining, elapsed: cost)
+          space[:time] = info
+          query.context[CONTEXT_KEY] = info
+          space[:time_extension]&.merge!("remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
         end
 
         # Per query, not in the context hash: queries of a multiplex may share one hash.
@@ -126,9 +152,21 @@ module GraphQL
         end
 
         def record(query, **info)
-          info = { **info.slice(:key, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited] }
+          info = base_record(**info)
           query.context.namespace(NAMESPACE)[:time] = info
           query.context[CONTEXT_KEY] = info
+        end
+
+        # `elapsed` is nil until the operation ends and is charged; it stays nil for a refused one.
+        def base_record(key:, limit:, limited:, remaining: nil)
+          { key: key, limit: limit, remaining: remaining, elapsed: nil, window: @window, soft: @soft, limited: limited }
+        end
+
+        # The budget before the run; the charge completes the same hash, which the response already holds.
+        def announce(query, info)
+          extension = { "limit" => info[:limit], "remaining" => info[:remaining], "resetIn" => Points.reset_in(info) }
+          query.context.response_extensions["rateLimitTime"] = extension
+          query.context.namespace(NAMESPACE)[:time_extension] = extension
         end
 
         def refusal(limit)

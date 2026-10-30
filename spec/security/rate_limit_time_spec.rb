@@ -137,6 +137,55 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
     expect { run(schema_for, key: nil) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /rate_limit_key/)
   end
 
+  describe "what it tells the client" do
+    def result_for(schema, key: "user:1")
+      execute_query(schema, "{ cheap }", context: { rate_limit_key: key }, root_value: root)
+    end
+
+    it "records the milliseconds charged and what is left once the operation ends" do
+      _response, info = run(schema_for)
+
+      expect(info).to eq(key: "user:1", limit: 1_000, remaining: 750, elapsed: 250, window: 60, soft: false, limited: false)
+    end
+
+    it "records a refused operation with nothing charged" do
+      drain
+      _response, info = run(schema_for)
+
+      expect(info).to eq(key: "user:1", limit: 1_000, remaining: 0, elapsed: nil, window: 60, soft: false, limited: true)
+    end
+
+    it "records the share of each query of a multiplex" do
+      results = multiplex(schema_for, 2)
+
+      expect(results.map { |result| result.context[:rate_limit_time][:elapsed] }).to eq([250, 250])
+    end
+
+    it "adds nothing to the response unless asked" do
+      expect(result_for(schema_for).to_h.key?("extensions")).to be(false)
+    end
+
+    it "adds the budget to the response extensions when asked" do
+      response = result_for(schema_for(extensions: true)).to_h
+
+      expect(response["extensions"]).to eq(
+        "rateLimitTime" => { "limit" => 1_000, "remaining" => 750, "elapsed" => 250, "resetIn" => 15 }
+      )
+    end
+
+    it "gives the HTTP headers for the budget" do
+      expect(GraphQL::Armory::RateLimits::Time.headers(result_for(schema_for))).to eq(
+        "RateLimit-Time-Limit" => "1000", "RateLimit-Time-Remaining" => "750", "RateLimit-Time-Reset" => "15"
+      )
+    end
+
+    it "gives no headers to a client with no limit" do
+      schema = schema_for(limit: ->(_key, _query) { nil })
+
+      expect(GraphQL::Armory::RateLimits::Time.headers(result_for(schema))).to eq({})
+    end
+  end
+
   describe "soft mode, the default" do
     it "runs operations with no milliseconds left, charges them and records them as limited" do
       query = GraphQL::Armory::RateLimits::Controls::Query.example
@@ -207,6 +256,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
       refused(/window/) { schema_for(window: Float::INFINITY) }
       refused(/soft/) { schema_for(soft: nil) }
       refused(/clock/) { schema_for(clock: 5) }
+      refused(/extensions/) { schema_for(extensions: "yes") }
       refused(/store/) { schema_for(store: Object.new) }
       refused(/store/) { schema_for(store: Class.new { def take(_key, cost:, limit:, window:) = [true, 1] }.new) }
     end

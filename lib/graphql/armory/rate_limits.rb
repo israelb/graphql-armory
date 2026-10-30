@@ -97,6 +97,12 @@ module GraphQL
           raise ConfigurationError, "store: #{method} answered #{answer.inspect}: it must answer [true or false, #{meaning}]"
         end
 
+        def extensions(value)
+          raise ConfigurationError, "extensions: must be true or false, got #{value.inspect}" unless value == true || value == false
+
+          value
+        end
+
         # A callable answering seconds, like `Clock.monotonic`.
         def clock(value)
           raise ConfigurationError, "clock: must be a callable answering seconds, got #{value.inspect}" unless value.respond_to?(:call)
