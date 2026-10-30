@@ -35,7 +35,8 @@ module GraphQL
     module Authorization
       # The schema plugin: `use GraphQL::Armory::Authorization, adapter: :pundit`.
       # Options: `adapter:` (:pundit or an adapter object), `on_unauthorized:` (:null, :error or :raise),
-      # `sinks:` (callables that receive each telemetry signal).
+      # `sinks:` (callables that receive each telemetry signal), `own_denial_hooks:` (the schema's own
+      # `unauthorized_field` or `unauthorized_object`, each with the reason, for the audit).
       def self.use(schema_defn, **options)
         schema_defn.extend(Integration::Schema)
         schema_defn.armory_configuration = Configuration.new(**options)

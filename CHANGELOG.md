@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The authorization audit reports a schema that defines its own `unauthorized_field` or `unauthorized_object` as a `:hook` problem. Such a method wins over the plugin's, so `on_unauthorized:` did not apply to that denial and nothing said so. An app that keeps one on purpose declares it, with its reason: `own_denial_hooks: { unauthorized_field: "..." }`, which the audit lists as a bypass. A schema with its own hook that passed the audit now fails it. Docs: `docs/authorization.md`.
+
 ## 0.1.0.pre7 (2026-10-30)
 
 Keyset connections (roadmap module 5). Docs: `docs/keyset-connections.md`.

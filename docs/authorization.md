@@ -74,6 +74,19 @@ use GraphQL::Armory::Authorization, adapter: :pundit, on_unauthorized: :null # d
 
 Denied non-null fields raise the generic "Not found" error, because GraphQL cannot return `null` there (on Execution::Next a denied object in a non-null position answers graphql-ruby's own "Cannot return null for non-nullable field", and `:raise` messages are prefixed with the field path). `find_by:` lookups always answer `null` in every mode: a missing ID cannot raise, and a foreign ID must look the same.
 
+### If your schema defines its own denial hooks
+
+The modes above run in the plugin's `unauthorized_field` and `unauthorized_object`. A method your schema class defines on itself wins over the plugin's, wherever `use` is in the class, so that denial answers whatever your method answers and `on_unauthorized:` does not apply to it. If your method names the field or the type it refused, it confirms to the client that they exist.
+
+The audit reports each one as a `:hook` problem. Remove the method, or call `super` from it and declare it, with your reason:
+
+```ruby
+use GraphQL::Armory::Authorization, adapter: :pundit,
+  own_denial_hooks: { unauthorized_field: "logs the denial, then calls super" }
+```
+
+A declared hook is listed in the audit as a bypass with that reason. The audit cannot read what your method does: the declaration is your word that it reveals nothing. Naming a hook your schema does not define is also a `:hook` problem. Your own `resolve_type` is not reported: an app with interfaces or unions must define it, and it decides types, not what a denial looks like.
+
 ## Lists, connections and lookups
 
 Lists of a type are narrowed through `InvoicePolicy::Scope` (relations) or by calling the policy per item (arrays). Return a relation when you can: SQL filters before Ruby sees anything.
