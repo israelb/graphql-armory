@@ -50,14 +50,68 @@ A query without a key raises `RateLimits::ConfigurationError`, so a forgotten co
 
 ### What a query costs
 
-graphql-ruby scores a query by its fields: 1 point per field by default, and a connection multiplies the cost of the fields selected under each node by its page size (`first:` or `last:`, variables included). Fractional complexities are charged in whole points, rounded up. Give expensive fields a higher score where you define them:
+graphql-ruby scores a query before running it:
 
-```ruby
-field :report, ReportType, null: false, complexity: 40
-field :invoices, InvoiceType.connection_type, null: false  # the page size multiplies the cost of each node
+- Every field costs **1 point**, unless you give it another score.
+- Inside a connection, the fields selected under each node cost **page size × their points** (`first:` or `last:`, variables included).
+- Fractional complexities are charged in whole points, rounded up.
+
+A worked example:
+
+```graphql
+query {
+  viewer {                            # 1
+    invoices(first: 50) {             # 1
+      nodes {                         # 1
+        number                        # 50 invoices × 1
+        lines(first: 20) {            # 50 × 1
+          nodes {                     # 50 × 1
+            product                   # 50 × 20 lines × 1
+            comments(first: 10) {     # 50 × 20 × 1
+              nodes {                 # 50 × 20 × 1
+                body                  # 50 × 20 × 10 comments × 1
+              }
+            }
+          }
+        }
+      }
+    }
+    followers(first: 10) {            # 1
+      nodes {                         # 1
+        name                          # 10 followers × 1
+      }
+    }
+  }
+}
 ```
 
-See graphql-ruby's [complexity and depth guide](https://graphql-ruby.org/queries/complexity_and_depth) for computed costs. The better the scores reflect real work, the fairer the limit.
+Calculation:
+
+```
+3                                   = viewer, invoices, nodes
++ 50 × 3                 =    150   = number, lines, nodes, for each invoice
++ 50 × 20 × 3            =  3,000   = product, comments, nodes, for each line
++ 50 × 20 × 10 × 1       = 10,000   = body, for each comment
++ 2 + 10 × 1             =     12   = followers, nodes, and name for each follower
+                         = 13,165 points
+```
+
+With `limit: 1_000` this query can never run; asking for `invoices(first: 5)` instead costs about a tenth. The numbers were measured with graphql-ruby's own analysis, so they are exactly what the limiter charges.
+
+Give expensive fields a higher score where you define them, so their cost reflects real work:
+
+```ruby
+field :report, ReportType, null: false, complexity: 40      # 40 points instead of 1
+field :create_invoice, mutation: Mutations::CreateInvoice, complexity: 10  # writes cost more than reads
+```
+
+Three settings make the scores fair. Large public APIs (GitHub, Shopify, see [References](#references)) do the same:
+
+- **Paginate every list.** A plain list field (`[Invoice]`) costs its fields **once**, however many items it returns, so 10,000 invoices cost like one. Use connections for anything that can grow. A connection asked for without `first:` or `last:` is sized by the schema's `default_page_size`, or else by `default_max_page_size`: set one of them so it is never unbounded.
+- **Cap a single query.** graphql-ruby's `max_complexity 1_000` refuses any query above that score, whatever the client's budget. Shopify caps single queries at 1,000 points.
+- **Make writes cost more.** Give mutations a higher `complexity:`. Shopify charges 10 points per mutation by default.
+
+See graphql-ruby's [complexity and depth guide](https://graphql-ruby.org/queries/complexity_and_depth) for computed costs.
 
 ### When a client runs out
 
