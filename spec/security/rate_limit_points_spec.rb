@@ -102,6 +102,32 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
     expect(run(schema, cheap).last).to include(remaining: 99)
   end
 
+  it "charges a fractional complexity in whole points instead of letting it through" do
+    query = Class.new(GraphQL::Schema::Object) do
+      graphql_name "Query"
+      field :half, String, null: false, complexity: 0.5
+    end
+    store = self.store
+    schema = Class.new(ArmoryEngine.base_schema) do
+      query query
+      use GraphQL::Armory::RateLimits::Points, store: store, limit: 1, window: 60, soft: false
+    end
+    result = execute_query(schema, "{ a: half b: half c: half d: half }", context: { rate_limit_key: "u" }, root_value: Class.new { def half = "h" }.new)
+
+    expect(result.to_h["errors"].first["extensions"]["code"]).to eq("RATE_LIMITED")
+    expect(result.context[:rate_limit_points]).to include(cost: 2, limited: true)
+  end
+
+  it "does not hand out points when the clock goes backwards and forwards again" do
+    schema = schema_for
+    2.times { run(schema, report) }
+    now[0] = -30.0
+    run(schema, cheap)
+    now[0] = 0.0
+
+    expect(run(schema, cheap).last).to include(remaining: 18)
+  end
+
   describe "soft mode, the default" do
     it "runs over-limit queries and records them as limited" do
       schema = schema_for(soft: true)
@@ -166,6 +192,15 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
       expect([run(schema, cheap).first, seen]).to eq([{ "data" => { "cheap" => "ok" } }, ["connection refused"]])
     end
 
+    it "raises on a store answer that is not [true or false, Integer], instead of reading it as taken" do
+      [[0, 0], true, "no", [true, "x"], nil, [false], [nil, nil], [true, -1]].each do |answer|
+        store = Class.new { define_method(:take) { |_key, cost:, limit:, window:, force:| answer } }.new
+
+        expect { run(schema_for(store: store), report) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /store/)
+      end
+      expect(resolved).to eq([])
+    end
+
     it "warns by default" do
       expect { run(schema_for(store: broken), cheap) }.to output(/connection refused/).to_stderr
     end
@@ -184,6 +219,8 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
       refused(/window/) { schema_for(window: "60") }
       refused(/soft/) { schema_for(soft: "no") }
       refused(/store/) { schema_for(store: Object.new) }
+      refused(/store/) { schema_for(store: Class.new { def take(key, cost:, limit:, window:) = [true, 0] }.new) }
+      refused(/window/) { schema_for(window: Float::INFINITY) }
       refused(/key/) { schema_for(key: "user") }
       refused(/on_store_error/) { schema_for(on_store_error: "log") }
     end

@@ -24,11 +24,11 @@ module GraphQL
           @mutex.synchronize do
             now = @clock.call
             level, at = @buckets.fetch(key) { [limit, now] }
-            level = [level + ((now - at) * limit / window.to_f), limit].min
+            level = [level + ([now - at, 0].max * limit / window.to_f), limit].min
 
             taken = cost <= level
             level = [level - cost, 0].max if taken || force
-            @buckets[key] = [level, now]
+            @buckets[key] = [level, [now, at].max]
 
             [taken, level.floor]
           end

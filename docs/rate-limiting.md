@@ -50,7 +50,7 @@ A query without a key raises `RateLimits::ConfigurationError`, so a forgotten co
 
 ### What a query costs
 
-graphql-ruby scores a query by its fields: 1 point per field by default, and a connection multiplies the cost of what it holds by its page size (`first:` or `last:`). Give expensive fields a higher score where you define them:
+graphql-ruby scores a query by its fields: 1 point per field by default, and a connection multiplies the cost of the fields selected under each node by its page size (`first:` or `last:`, variables included). Fractional complexities are charged in whole points, rounded up. Give expensive fields a higher score where you define them:
 
 ```ruby
 field :report, ReportType, null: false, complexity: 40
@@ -105,7 +105,7 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 
 ## Guarantees and limits
 
-- A refused query resolves no field and is not charged. A query that fails validation is not charged.
+- A query this limiter refuses resolves no field and is not charged. A query that fails validation is not charged. A query refused by another analyzer (`max_depth`, `max_complexity`) is still charged: graphql-ruby runs every analyzer.
 - Each query in a multiplex is charged on its own.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
 - When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert.
