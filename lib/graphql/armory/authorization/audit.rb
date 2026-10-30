@@ -59,7 +59,7 @@ module GraphQL
               findings.problem(:hook, path, "the schema's own method runs instead of the plugin's, so on_unauthorized: does not apply and a denial " \
                                             "may reveal what it hides: remove it, or declare it in own_denial_hooks: with a reason")
             elsif declared.key?(hook)
-              findings.problem(:hook, path, "named in own_denial_hooks: but the schema does not define it: remove it from the option")
+              findings.problem(:hook, path, "named in own_denial_hooks: but the plugin's hook is the one that runs: remove it from the option")
             end
           end
         end

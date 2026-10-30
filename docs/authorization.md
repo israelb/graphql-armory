@@ -85,7 +85,15 @@ use GraphQL::Armory::Authorization, adapter: :pundit,
   own_denial_hooks: { unauthorized_field: "logs the denial, then calls super" }
 ```
 
-A declared hook is listed in the audit as a bypass with that reason. The audit cannot read what your method does: the declaration is your word that it reveals nothing. Naming a hook your schema does not define is also a `:hook` problem. Your own `resolve_type` is not reported: an app with interfaces or unions must define it, and it decides types, not what a denial looks like.
+A declared hook is listed in the audit as a bypass with that reason. The audit cannot read what your method does: the declaration is your word that it reveals nothing. Naming a hook that does not win over the plugin's is also a `:hook` problem. Your own `resolve_type` is not reported: an app with interfaces or unions must define it, and it decides types, not what a denial looks like.
+
+A declared hook that returns `nil` for a non-null field behaves differently per engine: the interpreter answers "Cannot return null", and `Execution::Next` leaves the null with no error. Call `super`, or raise.
+
+**What the audit does not see.** It checks these two schema hooks when it runs, so a hook defined after that is seen by the next audit. It does not read other code that decides or answers a denial, and it stays clean with all of these. Review them yourself:
+
+- A resolver's own `unauthorized_object`, a public graphql-ruby method that runs before the schema's hook. If it returns the object, a mutation **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
+- `def self.authorized?` on a type, `authorized?` on a base field or on a resolver. Returning `true` opens what the rule closed, and a raised message reaches the client.
+- `rescue_from(NotAuthorizedError)` with `on_unauthorized: :raise`. It can rewrite the message. The interpreter catches field denials there and not object denials; `Execution::Next` catches both.
 
 ## Lists, connections and lookups
 
@@ -123,7 +131,7 @@ load "tasks/graphql_armory.rake"
 # bundle exec rake "graphql_armory:audit[AppSchema]"
 ```
 
-It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, and lists every declared bypass with its reason.
+It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, a schema's own denial hooks, and lists every declared bypass with its reason.
 
 ## CanCanCan
 

@@ -19,7 +19,7 @@ module GraphQL
 
           @adapter = resolve(adapter)
           @on_unauthorized = on_unauthorized
-          @own_denial_hooks = own_denial_hooks
+          @own_denial_hooks = own_denial_hooks.to_h { |hook, reason| [hook, reason.dup.freeze] }.freeze
           Telemetry.build(sinks: sinks) # raises at boot when the sinks are not callables
           @sinks = sinks
         end
