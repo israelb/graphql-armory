@@ -22,7 +22,7 @@ A limit of 100 requests per minute lets a client send 100 of the second kind, by
 - **Per client.** Each client key (a user, an API token, an IP) has its own bucket; you can give each key its own limit.
 - **Safe to roll out.** Soft mode, the default, charges and records but refuses nothing, so you can watch real traffic before turning it on.
 
-`GraphQL::Armory::RateLimits::Concurrency` adds a second rule: at most N operations running at the same time per client ([Operations at the same time](#operations-at-the-same-time)). Both keep their state in a store: `MemoryStore` for tests and one process, `RedisStore` for production ([Sharing limits between processes](#sharing-limits-between-processes)). Planned: a layer that measures processing time (see [Planned](#planned)).
+`GraphQL::Armory::RateLimits::Concurrency` adds a second rule: at most N operations running at the same time per client ([Operations at the same time](#operations-at-the-same-time)). Both keep their state in a store: `MemoryStore` for tests and one process, `RedisStore` for production ([Sharing limits between processes](#sharing-limits-between-processes)). `GraphQL::Armory::RateLimits::Time` adds a third: a budget of wall-clock milliseconds per client, charged for the time its operations really took ([Time spent running](#time-spent-running)).
 
 ## How to use it
 
@@ -192,6 +192,37 @@ It uses the same `rate_limit_key`. Before an operation runs it takes one of the 
 
 A process that crashes never gives its slots back, so each slot expires after `stale_after:` seconds (60 by default). Set it above your longest request timeout. Soft mode, per-key limits (`limit: ->(key, query) { ... }`) and `on_store_error:` work as for `Points`; what happened is in `result.context[:rate_limit_concurrency]` (`{ key:, limit:, active:, soft:, limited: }`).
 
+### Time spent running
+
+The cost of a query is an estimate made before it runs. A field scored 1 that waits three seconds on a slow service still occupies a server thread for three seconds, and points never see it. `Time` charges what really happened: the wall-clock milliseconds each operation took, against a bucket of milliseconds per client that refills over a window.
+
+```ruby
+class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::RateLimits::Time,
+    store: store,      # the same store as Points
+    limit: 10_000,     # milliseconds per window, per client
+    window: 60,
+    soft: false
+end
+```
+
+It uses the same `rate_limit_key`. Before an operation runs it asks the store for the client's balance; a client with no milliseconds left is refused before any field resolves, and charged nothing:
+
+```json
+{
+  "errors": [{
+    "message": "Rate limit exceeded: this client used its 10000 ms of processing time every 60 seconds. Retry in 1 seconds.",
+    "extensions": { "code": "RATE_LIMITED", "limit": 10000, "retryAfter": 1 }
+  }]
+}
+```
+
+When the operation ends, even if it raised, the milliseconds it took (measured with a monotonic clock) are charged. The time is wall-clock, not CPU: waiting on a database or an external service counts, because that is what keeps a server thread busy. A running operation is never interrupted, so the one that spends the last milliseconds finishes and the next one is refused; the balance never goes below zero, and the client recovers `limit` milliseconds per `window`.
+
+Soft mode (the default), per-key limits (`limit: ->(key, query) { ... }`) and `on_store_error:` work as for `Points`. To show clients their budget, pass `extensions: true`, which adds `"rateLimitTime" => { limit, remaining, elapsed, resetIn }` (milliseconds, and seconds for `resetIn`) to the response, or send `Time.headers(result)`: `RateLimit-Time-Limit`, `RateLimit-Time-Remaining` and `RateLimit-Time-Reset`, prefixed so they never clash with the `Points` headers. What happened is in `result.context[:rate_limit_time]`: `{ key:, limit:, remaining:, elapsed:, window:, soft:, limited: }`, where `elapsed` is nil for an operation that was refused.
+
+To test it, inject a clock: `Time` takes `clock:` (a callable answering seconds), and `RateLimits::Clock::Substitute` is one your test moves. `Controls::Time.example(clock, seconds: 0.25)` is a root for `Controls::Query.example` whose every field takes that long on the clock.
+
 ### Rolling it out
 
 1. Install it in soft mode (leave out `soft:`). Queries run as before; each one records what it cost.
@@ -259,6 +290,16 @@ store.calls                                         # [[:take, "user:1", { cost:
 - `soft:`, `key:` and `on_store_error:` as for `Points`. When the store raises on release, `on_store_error` is called and the slot expires after `stale_after`.
 - Instrumentation: `context[:rate_limit_concurrency]`.
 
+`use GraphQL::Armory::RateLimits::Time, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false`
+
+- `store:` as for `Points`: it is asked for the balance with `take(key, cost: 0, ...)` and charged with `take(key, cost: milliseconds, ..., force: true)`. No store changes are needed.
+- `limit:` milliseconds per `window` per client: a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
+- `window:`, `soft:`, `key:` and `on_store_error:` as for `Points`.
+- `clock:` a callable answering seconds, read when a multiplex starts and when it ends. By default a monotonic clock.
+- `extensions:` `true` adds `"rateLimitTime" => { limit, remaining, elapsed, resetIn }` to the response of a limited client.
+- `Time.headers(result)` answers the `RateLimit-Time-*` headers for a result, or `{}`.
+- Instrumentation: `context[:rate_limit_time]`.
+
 `GraphQL::Armory::RateLimits::RedisStore.new(redis:, prefix: "graphql-armory:rate-limits:", clock: nil)`
 
 - `redis:` a redis-rb client (>= 4.8), or anything answering `eval(script, keys:, argv:)` and `evalsha(sha, keys:, argv:)` the same way. Needs Redis 5 or later. Works with Redis Cluster: each script touches one key.
@@ -275,15 +316,20 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - A query run with its own trace (`context: { trace: ... }`) cannot be released by `Concurrency`, so it raises `ConfigurationError` instead of taking a slot.
 - A resolver that runs another query for the same client (a nested `execute`) takes a second slot while the first is held.
 - A subscription holds a slot only while its first result runs, not while it stays subscribed.
-- When queries of a multiplex share one context hash, `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` hold the last query's record: give each query its own context hash to read every record.
-- The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add the processing-time layer when it ships.
+- When queries of a multiplex share one context hash, `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]` hold the last query's record: give each query its own context hash to read every record.
+- The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add `Time` to charge what queries really take.
 - Field scores are yours: graphql-ruby treats a negative or NaN complexity as 0, so such a field is free, like `complexity: 0`. A complexity that is nil or a String makes graphql-ruby raise before the limiter runs, so the query does not run.
 - When the store fails, queries run unlimited and `on_store_error` is called. Choose that hook to alert. `RedisStore` also counts a bucket whose fields were changed into something that is not a number as a store failure, rather than reading it as full.
 - `MemoryStore` keeps buckets and slots in one process and forgets them on restart: with several processes, each one gives a client the full limit. It keeps one entry per client key it has seen. Use `RedisStore` in production.
 
-## Planned
+### Limits of `Time`
 
-- **Processing time, a second layer:** a budget of milliseconds per client per window, measured as queries run, for costs the complexity score does not see.
+- A running operation is never interrupted: the one that exhausts the budget finishes, and only the next one is refused. Operations that start while a long one is still running all see the balance before it is charged, so together they can spend more than the client has; the balance then stops at zero (there is no debt).
+- `retryAfter` is the time the client needs to regain one millisecond (`window / limit` seconds, at least 1). It lets the client in again, not necessarily for an operation that takes long.
+- A multiplex has one measured time, split equally among the queries that ran, rounded up to whole milliseconds: fields of different queries interleave, so their time cannot be told apart. A query refused by `Time` is not part of the split.
+- The time is wall-clock, so it grows when the server is loaded: the same query costs a client more on a busy server. Choose `limit` with that in mind, and start in soft mode.
+- A query run with its own trace (`context: { trace: ... }`) cannot be charged, so it raises `ConfigurationError`, as with `Concurrency`.
+- When the store fails, operations run unlimited and `on_store_error` is called; a failed charge never raises into the query (unless your hook does).
 
 ## References
 

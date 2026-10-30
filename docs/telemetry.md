@@ -152,7 +152,7 @@ The reasons of `:id_refused`:
 
 ### Rate limiting
 
-Rate limiting has no sinks. It records on every query, in the query's context, what it charged and what remains: `context[:rate_limit_points]` and `context[:rate_limit_concurrency]`, which carry `limited: true` for the queries it refused or, in soft mode, would have refused. See [Rolling it out](rate-limiting.md#rolling-it-out) and [Showing clients their budget](rate-limiting.md#showing-clients-their-budget). Send those to the same place as the signals above.
+Rate limiting has no sinks. It records on every query, in the query's context, what it charged and what remains: `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]`, which carry `limited: true` for the queries it refused or, in soft mode, would have refused. See [Rolling it out](rate-limiting.md#rolling-it-out) and [Showing clients their budget](rate-limiting.md#showing-clients-their-budget). Send those to the same place as the signals above.
 
 ## What telemetry does not cover
 
@@ -160,7 +160,7 @@ Signals are counters of the gem's decisions. They are not a replacement for thes
 
 - **Traces.** A signal is a point event, not a span. In Datadog APM (or any tracer) a refused ID does not appear as a span of its own; it shows in the trace of the request that carried it, as the normal "not found" answer. If you want it on the trace, have your sink add a tag to the active span with your tracer's API.
 - **Who asked.** A signal says `id_refused`, not which user or IP. Correlate with your request logs through the request id, or add the user in your own sink from your request context: that is yours to hold, and stays out of the gem.
-- **Rate limiting.** It has no sinks: it records in the query's context. Send `context[:rate_limit_points]` and `context[:rate_limit_concurrency]` from your controller, to the same client. They hold the rate limit `key:` (a user id or an IP): send them somewhere that may hold personal data, or leave the key out.
+- **Rate limiting.** It has no sinks: it records in the query's context. Send `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]` from your controller, to the same client. They hold the rate limit `key:` (a user id or an IP): send them somewhere that may hold personal data, or leave the key out.
 - **Slow or failing requests.** The gem records its decisions. Latency, errors and throughput of your GraphQL endpoint come from your APM or from graphql-ruby's own tracing.
 - **Anything that did not reach the gem.** A request rejected before GraphQL runs (a web application firewall, a body size limit, a parse error) never produces a signal.
 - **A guarantee of delivery.** Sinks run in the request and report nothing if the process dies first. Counters sent to StatsD are best effort by design.
