@@ -94,7 +94,7 @@ A declared hook that returns `nil` for a non-null field behaves differently per 
 - `authorized?` on a base field, a base argument, a resolver or a mutation, and `self.authorized?` on a type, a base object or an input object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
 - `unauthorized_object` on a resolver, a mutation (with or without `Base`), a base field, or `self.unauthorized_object` on an input object. graphql-ruby calls it on whatever loads a record, before the schema's hook. If it returns the object, the code **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
 - `authorizes?` on a base field, a resolver, a type or a base object (`self.authorizes?`). On `Execution::Next`, answering `false` means `authorized?` does not run, so the rule is skipped.
-- `self.authorized_new` on a type. It decides whether `authorized?` runs, so on the interpreter it can skip the rule.
+- `self.authorized_new` or `self.wrap` on a type. Each decides whether `authorized?` runs, so on the interpreter it can skip the rule.
 - `visible?` on a type, a field or an argument whose `visible_when:` depends on it. If it does not call `super`, `visible_when:` hides nothing. Elsewhere your own `visible?` is not reported.
 
 Each level of a chain is reported: a method that calls `super` does not hide one below it that answers true, so declare every level you keep.

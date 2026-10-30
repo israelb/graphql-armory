@@ -80,7 +80,7 @@ module GraphQL
           schema.types.each_value do |type|
             next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
 
-            %i[authorized? authorizes? authorized_new].each { |name| note_class_check(found, type, name) }
+            %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
             note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
@@ -158,7 +158,7 @@ module GraphQL
           case name
           when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
           when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
-          when :authorized_new then "defined by the app: it decides whether authorized? runs, so on the interpreter it can skip the rule"
+          when :authorized_new, :wrap then "defined by the app: it decides whether authorized? runs, so on the interpreter it can skip the rule"
           when :visible? then "defined by the app: if it does not call super, visible_when: does not hide this from a user it should"
           else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
           end

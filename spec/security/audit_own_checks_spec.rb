@@ -67,6 +67,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
       graphql_name "Query"
       authorize :none, reason: "the root holds nothing"
       field :ping, String, null: true, authorize: :none, reason: "public"
+      field :first_invoice, invoice_type, null: true, authorize: :none, reason: "the type's rule decides"
       field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type" if relay_template
       if input
         input_type = Class.new(GraphQL::Schema::InputObject) do
@@ -293,6 +294,26 @@ RSpec.describe "the audit and the app's own authorization checks" do
 
       expect(problems(schema)).to eq([])
     end
+  end
+
+  def foreign_invoice(schema)
+    execute_query(schema, "{ firstInvoice { id } }", context: { current_user: world.bob },
+                                                     root_value: Struct.new(:first_invoice).new(world.a1)).to_h.dig("data", "firstInvoice")
+  end
+
+  it "reports self.wrap on a type, and pins that on the interpreter it skips the rule" do
+    schema = build(invoice: proc { def self.wrap(object, context) = new(object, context) })
+
+    expect(problems(schema).map(&:path)).to contain_exactly(end_with(".wrap"))
+    expect(problems(schema).first.message).to match(/authorized\?/)
+    expect(foreign_invoice(build)).to be_nil
+    expect(foreign_invoice(schema)).not_to be_nil unless ArmoryEngine.next?
+  end
+
+  it "pins that a parent's check under a child's super serves a record the rule refuses" do
+    own = Module.new { def authorized?(_object, _context) = true }
+
+    expect(foreign_invoice(build(object: proc { extend own }, invoice: proc { def self.authorized?(object, context) = super }))).not_to be_nil
   end
 
   it "reports self.authorized_new on a type, which on the interpreter skips the check" do
