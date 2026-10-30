@@ -41,9 +41,14 @@ Rules for the verifier's brief:
 - Never run `docker compose down -v`: the bundle volumes are shared with the workspace by name.
 - Run specs only through `docker compose run --rm test bash bin/test <spec>`, with `GRAPHQL_ARMORY_ENGINE=interpreter|next` and `GRAPHQL_VERSION="~> 2.6.0"`, always `cd` explicitly into the scratch copy.
 - What the feature must guarantee, in the user's security terms, plus the documented limits that are out of scope.
-- A list of concrete ideas for breaking it, never "check it works".
-- Severity: a blocker is a realistic defect that reproduces and is not a documented limit. Silently ignoring an option with success is always a blocker.
-- Output: at most about 600 words, a holds/broken verdict per requirement, each blocker with a minimal reproduction and expected versus actual, advisories separately, and a closing `## Key Learnings` block of 1 to 5 numbered facts.
+- A list of concrete ideas for breaking it, never "check it works". Always include these, where they apply:
+  - Run it, do not only read the verdict: a probe of a check or an audit compares what it says with what the query really returns to a refused user.
+  - Find out who really answers: read `method(name).owner` on the real class, because include order and graphql-ruby's own methods (not only the app's) can win over the plugin's. Try the shapes graphql-ruby generates, such as its install template.
+  - Attack every exemption and filter in the diff: try to hide a real bypass behind each one.
+- Severity: a blocker is a realistic defect that reproduces and is not a documented limit. Silently ignoring an option with success is always a blocker. So is a refused user getting data while a declared rule does not run, whatever part of the code causes it, even outside the diff.
+- Output: at most about 600 words, a holds/broken verdict per requirement, each blocker with a minimal reproduction and expected versus actual, advisories separately, and a closing `## Key Learnings` block of 1 to 5 numbered facts. Any finding with a security effect, advisories included, carries the exact code that reproduces it and its cause, or says the cause is unknown.
+
+Before merging, the parent reproduces each finding with a security effect and knows its cause; a finding with an unknown cause is never merged past. Whatever stays open is named to the user with its impact, as a risk and not as a detail.
 
 Template:
 
@@ -57,10 +62,16 @@ Read first: <files>, <spec files>, the module page in `docs/`, design-proposal s
 Feature: <what it does>.
 Security requirement: <what must hold, in the user's words>.
 Try to BREAK it with inputs the existing specs do not cover: <numbered ideas>.
+Compare what it says with what really runs for a refused user; read `method(name).owner` on the
+real class (include order, graphql-ruby's own methods, its install template); attack every
+exemption and filter in the diff.
 A blocker = a realistic defect that reproduces and is not a documented limit; an option
-silently ignored with success is always a blocker.
+silently ignored with success is always a blocker, and so is a refused user getting data while a
+declared rule does not run, even outside the diff.
 Report at most ~600 words: verdict per requirement (holds/broken), blockers with a minimal
-reproduction and expected vs actual, advisories apart, and a `## Key Learnings` block.
+reproduction and expected vs actual, advisories apart, and a `## Key Learnings` block. Any finding
+with a security effect carries the exact code that reproduces it and its cause, or says the cause
+is unknown.
 ```
 
 Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers. A new finding does not earn another round; open blockers after that become one decision for the user.
