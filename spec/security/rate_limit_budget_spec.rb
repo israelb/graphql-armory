@@ -3,16 +3,11 @@
 # Clients see their budget on every response, not only when they are refused: the points limiter can add it to
 # the response's "extensions", and `Points.headers` turns it into HTTP headers.
 RSpec.describe "the points budget in responses" do
-  let(:now) { [0.0] }
-  let(:store) { GraphQL::Armory::RateLimits::MemoryStore.new(clock: -> { now[0] }) }
-  let(:root) { Class.new { def cheap = "ok"; def report = "big" }.new }
+  let(:store) { GraphQL::Armory::RateLimits::Store::Substitute.new }
+  let(:root) { GraphQL::Armory::RateLimits::Controls::Root.example }
 
   def schema_for(**options)
-    query = Class.new(GraphQL::Schema::Object) do
-      graphql_name "Query"
-      field :cheap, String, null: false
-      field :report, String, null: false, complexity: 40
-    end
+    query = GraphQL::Armory::RateLimits::Controls::Query.example
     store = self.store
     Class.new(ArmoryEngine.base_schema) do
       query query
@@ -73,16 +68,10 @@ RSpec.describe "the points budget in responses" do
     end
 
     it "answers no headers, and keeps no stale record, when the store fails" do
-      store = self.store
-      flaky = Class.new do
-        attr_accessor :down
-
-        define_method(:take) { |key, cost:, limit:, window:, force:| down ? raise(IOError, "down") : store.take(key, cost: cost, limit: limit, window: window, force: force) }
-      end.new
-      schema = schema_for(store: flaky, on_store_error: ->(_error, _query) {})
+      schema = schema_for(on_store_error: ->(_error, _query) {})
       shared = { rate_limit_key: "user:1" }
       execute_query(schema, "{ cheap }", context: shared, root_value: root)
-      flaky.down = true
+      store.fail_with(IOError.new("down"))
 
       result = execute_query(schema, "{ cheap }", context: shared, root_value: root)
 

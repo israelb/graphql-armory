@@ -17,7 +17,7 @@ module GraphQL
         NAMESPACE = :graphql_armory
 
         def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
-          points = new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
+          points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
           schema.query_analyzer(Class.new(Analyzer) { define_method(:points) { points } })
         end
 
@@ -34,24 +34,30 @@ module GraphQL
           ((info[:limit] - info[:remaining]) * info[:window] / info[:limit].to_f).ceil
         end
 
-        def initialize(store:, limit:, window:, soft:, key:, on_store_error:, extensions: false)
+        # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
+        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
+          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
+        end
+
+        # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
+        # configuration lets a query through either.
+        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, extensions: false)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
-
-          @store = store
-          @limit = Settings.limit(limit)
-          @window = Settings.seconds(:window, window)
-          @soft = Settings.soft(soft)
-          @key = Settings.key_reader(key)
-          @on_store_error = Settings.store_error_handler(on_store_error)
           raise ConfigurationError, "extensions: must be true or false, got #{extensions.inspect}" unless extensions == true || extensions == false
 
+          @store = store
+          @limit = Settings.wired_limit(limit, store)
+          @window = Settings.seconds(:window, window)
+          @soft = Settings.wired_soft(soft, store)
+          @key = Settings.key_reader(key)
+          @on_store_error = Settings.store_error_handler(on_store_error)
           @extensions = extensions
         end
 
         # The refusal for a query that costs `cost`, or nil to let it run.
-        def charge(query, cost)
+        def call(query, cost)
           key = Settings.key_for(@key, query)
           limit = Settings.limit_for(@limit, key, query)
           if limit.nil?
@@ -111,7 +117,7 @@ module GraphQL
             end
 
             # Fractional complexities (`complexity: 0.5`) are charged whole points, rounded up.
-            points.charge(query, cost.ceil)
+            points.(query, cost.ceil)
           end
         end
       end

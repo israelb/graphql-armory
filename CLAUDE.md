@@ -8,7 +8,14 @@ Open-source extensions for graphql-ruby, one module at a time. Read `README.md` 
 - **Never modify the graphql-ruby clone** (`../graphql-ruby`). Read-only. Hook only through public extension points; no fork, no monkey patching where a public hook exists.
 - **Commits:** conventional commits, English, no `Co-Authored-By` or AI attribution lines. The commit author email is the GitHub noreply address, never a personal one; do not put a personal email in any file.
 - **Remote operations.** Pushing a branch and opening its PR is expected for every increment. Merging, force-pushing, deleting remote branches and publishing the gem (pushing a `v*` tag publishes it through `release.yml`) are the user's decisions: ask first.
-- **Style.** Useful Objects: `new` is inert, `build` wires real dependencies, `Substitute` classes, `Controls::*.example`. RSpec uses no mocks (`mock_with :nothing`; no `receive`, `instance_double` or `stub_const`).
+- **Style: the [Doctrine of Useful Objects](https://eventide-project.org/user-guide/useful-objects.html#the-doctrine-of-useful-objects), hand-written** (no `evt-*` gems). Every module, not only the first one:
+  - `new` is inert and useful at once: each dependency defaults to a null object (`Adapters::Null`, `Store::Null`) that refuses or does nothing. A misconfigured object never lets anything through.
+  - `self.build(...)` validates the settings and wires the real dependencies; `use` and other entry points go through `build`.
+  - One actuator, `call`: `self.call(...)` is `build(...).(...)` where it makes sense.
+  - Each dependency has a `Substitute` in `lib/` (answers what it is told, records its calls, can be told to fail), used by the specs instead of hand-written fakes.
+  - Telemetry instead of mocks: tests read what the object recorded (sinks or the context record), not call expectations.
+  - Test data lives in `lib/` as `Controls::X.example`, so other projects can reuse it.
+  - RSpec uses no mocks (`mock_with :nothing`; no `receive`, `instance_double` or `stub_const`).
 
 ## Workflow per increment
 

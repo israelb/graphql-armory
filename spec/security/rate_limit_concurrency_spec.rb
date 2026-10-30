@@ -4,23 +4,12 @@
 # client already at its limit is refused before any field resolves; every slot is released when its operation
 # ends, even when it raises.
 RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
-  let(:now) { [0.0] }
-  let(:store) { GraphQL::Armory::RateLimits::MemoryStore.new(clock: -> { now[0] }) }
+  let(:store) { GraphQL::Armory::RateLimits::Store::Substitute.new }
   let(:resolved) { [] }
-  let(:root) do
-    log = resolved
-    Class.new do
-      define_method(:cheap) { log << :cheap; "ok" }
-      define_method(:broken) { raise IOError, "disk on fire" }
-    end.new
-  end
+  let(:root) { GraphQL::Armory::RateLimits::Controls::Root.example(resolved) }
 
   def schema_for(**options)
-    query = Class.new(GraphQL::Schema::Object) do
-      graphql_name "Query"
-      field :cheap, String, null: false
-      field :broken, String, null: false
-    end
+    query = GraphQL::Armory::RateLimits::Controls::Query.example
     store = self.store
     Class.new(ArmoryEngine.base_schema) do
       query query
@@ -35,14 +24,9 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
   end
 
   # An operation of the same client still running elsewhere.
-  def occupy(key = "user:1", token: "elsewhere-#{rand}")
-    store.acquire(key, token: token, limit: 1_000, ttl: 60, force: true)
-    token
-  end
+  def occupy(key = "user:1") = store.occupy(key)
 
-  def active(key = "user:1")
-    store.acquire(key, token: "probe", limit: 1_000, ttl: 60, force: false).last.tap { store.release(key, token: "probe") } - 1
-  end
+  def active(key = "user:1") = store.held(key)
 
   it "runs an operation under the limit, records it, and releases its slot when it ends" do
     occupy
@@ -91,7 +75,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
   it "frees slots left by a crashed process once they are stale" do
     occupy
     occupy
-    now[0] = 61.0
+    store.now = 61.0
 
     expect(run(schema_for).last).to include(active: 1, limited: false)
   end
@@ -126,14 +110,8 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
   end
 
   it "releases every slot of a multiplex even when the hook raises on one release" do
-    store = self.store
-    failing = Class.new do
-      define_method(:acquire) { |key, token:, limit:, ttl:, force:| store.acquire(key, token: token, limit: limit, ttl: ttl, force: force) }
-      define_method(:release) do |key, token:|
-        @failed ? store.release(key, token: token) : (@failed = true) && raise(IOError, "flaky")
-      end
-    end.new
-    schema = schema_for(store: failing, limit: 5, on_store_error: ->(error, _query) { raise error })
+    store.fail_with(IOError.new("flaky"), on: :release, times: 1)
+    schema = schema_for(limit: 5, on_store_error: ->(error, _query) { raise error })
     queries = 3.times.map { { query: "{ cheap }", context: { rate_limit_key: "user:1" }, root_value: root } }
 
     expect { ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries) }.to raise_error(IOError, "flaky")
@@ -169,28 +147,21 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Concurrency" do
   end
 
   describe "when the store fails" do
-    let(:broken) do
-      Class.new do
-        def acquire(_key, token:, limit:, ttl:, force:) = raise(IOError, "connection refused")
-        def release(_key, token:) = nil
-      end.new
-    end
+    before { store.fail_with(IOError.new("connection refused"), on: :acquire) }
 
     it "lets the operation run and reports the error to the hook" do
       seen = []
-      schema = schema_for(store: broken, on_store_error: ->(error, _query) { seen << error.message })
+      schema = schema_for(on_store_error: ->(error, _query) { seen << error.message })
 
       expect([run(schema).first, seen]).to eq([{ "data" => { "cheap" => "ok" } }, ["connection refused"]])
     end
 
     it "raises on an answer that is not [true or false, Integer]" do
+      store.recover
       [[0, 1], nil, [true, "1"]].each do |answer|
-        store = Class.new do
-          define_method(:acquire) { |_key, token:, limit:, ttl:, force:| answer }
-          define_method(:release) { |_key, token:| nil }
-        end.new
+        store.answer(:acquire, answer)
 
-        expect { run(schema_for(store: store)) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /store/)
+        expect { run(schema_for) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /store/)
       end
     end
   end

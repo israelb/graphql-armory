@@ -19,26 +19,33 @@ module GraphQL
         NAMESPACE = :graphql_armory
 
         def self.use(schema, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil)
-          concurrency = new(store: store, limit: limit, stale_after: stale_after, soft: soft, key: key, on_store_error: on_store_error)
+          concurrency = build(store: store, limit: limit, stale_after: stale_after, soft: soft, key: key, on_store_error: on_store_error)
           schema.query_analyzer(Class.new(Analyzer) { define_method(:concurrency) { concurrency } })
           schema.trace_with(Release)
         end
 
-        def initialize(store:, limit:, stale_after:, soft:, key:, on_store_error:)
+        # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
+        def self.build(store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil)
+          new(store: store, limit: limit, stale_after: stale_after, soft: soft, key: key, on_store_error: on_store_error)
+        end
+
+        # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
+        # configuration lets a query through either.
+        def initialize(store: Store::Null.new, limit: 1, stale_after: 60, soft: false, key: nil, on_store_error: nil)
           unless Settings.store_answers?(store, acquire: %i[token limit ttl force], release: %i[token])
             raise ConfigurationError, "store: must answer acquire(key, token:, limit:, ttl:, force:) and release(key, token:), like a MemoryStore"
           end
 
           @store = store
-          @limit = Settings.limit(limit)
+          @limit = Settings.wired_limit(limit, store)
           @stale_after = Settings.seconds(:stale_after, stale_after)
-          @soft = Settings.soft(soft)
+          @soft = Settings.wired_soft(soft, store)
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error)
         end
 
         # Takes a slot for the query: the refusal when none is free, or nil to let it run.
-        def acquire(query)
+        def call(query)
           unless query.current_trace.is_a?(Release)
             raise ConfigurationError, "this query runs with its own trace (context[:trace]), so Concurrency could never release its slot: remove context[:trace] or add trace_with to that trace"
           end
@@ -87,7 +94,7 @@ module GraphQL
         # Takes the slot during analysis, before anything runs.
         class Analyzer < GraphQL::Analysis::Analyzer
           def result
-            concurrency.acquire(query)
+            concurrency.(query)
           end
         end
 

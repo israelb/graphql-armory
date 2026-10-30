@@ -4,26 +4,15 @@
 # a bucket of points per client that refills over a window. A query that costs more than the client has left is
 # refused before any field resolves.
 RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
-  let(:now) { [0.0] }
-  let(:store) { GraphQL::Armory::RateLimits::MemoryStore.new(clock: -> { now[0] }) }
+  let(:store) { GraphQL::Armory::RateLimits::Store::Substitute.new }
   let(:resolved) { [] }
-  let(:root) do
-    log = resolved
-    Class.new do
-      define_method(:cheap) { log << :cheap; "ok" }
-      define_method(:report) { log << :report; "big" }
-    end.new
-  end
+  let(:root) { GraphQL::Armory::RateLimits::Controls::Root.example(resolved) }
   # `cheap` costs 1 point, `report` costs 40.
   let(:cheap) { "{ cheap }" }
   let(:report) { "{ report }" }
 
   def schema_for(**options)
-    query = Class.new(GraphQL::Schema::Object) do
-      graphql_name "Query"
-      field :cheap, String, null: false
-      field :report, String, null: false, complexity: 40
-    end
+    query = GraphQL::Armory::RateLimits::Controls::Query.example
     store = self.store
     Class.new(ArmoryEngine.base_schema) do
       query query
@@ -66,7 +55,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
   it "refills the bucket over the window" do
     schema = schema_for
     2.times { run(schema, report) }
-    now[0] = 12.0
+    store.now = 12.0
 
     expect(run(schema, report).last).to include(remaining: 0, limited: false)
   end
@@ -74,7 +63,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
   it "never refills past the limit" do
     schema = schema_for
     run(schema, report)
-    now[0] = 600.0
+    store.now = 600.0
 
     expect(run(schema, cheap).last).to include(remaining: 99)
   end
@@ -121,9 +110,9 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
   it "does not hand out points when the clock goes backwards and forwards again" do
     schema = schema_for
     2.times { run(schema, report) }
-    now[0] = -30.0
+    store.now = -30.0
     run(schema, cheap)
-    now[0] = 0.0
+    store.now = 0.0
 
     expect(run(schema, cheap).last).to include(remaining: 18)
   end
@@ -183,26 +172,27 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
   end
 
   describe "when the store fails" do
-    let(:broken) { Class.new { def take(*, **) = raise(IOError, "connection refused") }.new }
+    before { store.fail_with(IOError.new("connection refused")) }
 
     it "lets the query run and reports the error to the hook" do
       seen = []
-      schema = schema_for(store: broken, on_store_error: ->(error, _query) { seen << error.message })
+      schema = schema_for(on_store_error: ->(error, _query) { seen << error.message })
 
       expect([run(schema, cheap).first, seen]).to eq([{ "data" => { "cheap" => "ok" } }, ["connection refused"]])
     end
 
     it "raises on a store answer that is not [true or false, Integer], instead of reading it as taken" do
+      store.recover
       [[0, 0], true, "no", [true, "x"], nil, [false], [nil, nil], [true, -1]].each do |answer|
-        store = Class.new { define_method(:take) { |_key, cost:, limit:, window:, force:| answer } }.new
+        store.answer(:take, answer)
 
-        expect { run(schema_for(store: store), report) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /store/)
+        expect { run(schema_for, report) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /store/)
       end
       expect(resolved).to eq([])
     end
 
     it "warns by default" do
-      expect { run(schema_for(store: broken), cheap) }.to output(/connection refused/).to_stderr
+      expect { run(schema_for, cheap) }.to output(/connection refused/).to_stderr
     end
   end
 

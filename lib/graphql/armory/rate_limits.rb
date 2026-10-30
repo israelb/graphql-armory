@@ -34,6 +34,22 @@ module GraphQL
           value
         end
 
+        # A limit callable may answer nil (no limit for that key), so on the Null store it could let queries through.
+        def wired_limit(value, store)
+          limit(value)
+          raise ConfigurationError, "a limit: callable needs a store: on the Null store a nil answer would let queries run unlimited" if value.respond_to?(:call) && store.is_a?(Store::Null)
+
+          value
+        end
+
+        # Soft mode counts but never refuses, so on the Null store it would let everything through uncounted.
+        def wired_soft(value, store)
+          soft(value)
+          raise ConfigurationError, "soft: true needs a store: the Null store counts nothing, so every query would run unlimited" if value && store.is_a?(Store::Null)
+
+          value
+        end
+
         def limit(limit)
           return limit if limit.respond_to?(:call) || positive_integer?(limit)
 
@@ -93,6 +109,8 @@ module GraphQL
 end
 
 require "graphql/armory/rate_limits/memory_store"
+require "graphql/armory/rate_limits/store"
 require "graphql/armory/rate_limits/redis_store"
 require "graphql/armory/rate_limits/points"
 require "graphql/armory/rate_limits/concurrency"
+require "graphql/armory/rate_limits/controls"
