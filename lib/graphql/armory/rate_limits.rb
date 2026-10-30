@@ -34,6 +34,14 @@ module GraphQL
           value
         end
 
+        # Soft mode counts but never refuses, so on the Null store it would let everything through uncounted.
+        def wired_soft(value, store)
+          soft(value)
+          raise ConfigurationError, "soft: true needs a store: the Null store counts nothing, so every query would run unlimited" if value && store.is_a?(Store::Null)
+
+          value
+        end
+
         def limit(limit)
           return limit if limit.respond_to?(:call) || positive_integer?(limit)
 

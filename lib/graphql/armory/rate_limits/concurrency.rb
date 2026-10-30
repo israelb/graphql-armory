@@ -24,27 +24,24 @@ module GraphQL
           schema.trace_with(Release)
         end
 
-        # Checks the settings and wires the store; `use` goes through here.
+        # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
         def self.build(store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil)
+          new(store: store, limit: limit, stale_after: stale_after, soft: soft, key: key, on_store_error: on_store_error)
+        end
+
+        # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
+        # configuration lets a query through either.
+        def initialize(store: Store::Null.new, limit: 1, stale_after: 60, soft: false, key: nil, on_store_error: nil)
           unless Settings.store_answers?(store, acquire: %i[token limit ttl force], release: %i[token])
             raise ConfigurationError, "store: must answer acquire(key, token:, limit:, ttl:, force:) and release(key, token:), like a MemoryStore"
           end
 
-          new(
-            store: store, limit: Settings.limit(limit), stale_after: Settings.seconds(:stale_after, stale_after), soft: Settings.soft(soft),
-            key: Settings.key_reader(key), on_store_error: Settings.store_error_handler(on_store_error)
-          )
-        end
-
-        # `new` is inert: with no store wired it refuses every query.
-        def initialize(store: Store::Null.new, limit: 1, stale_after: 60, soft: false, key: Settings.key_reader(nil),
-                       on_store_error: Settings.store_error_handler(nil))
           @store = store
-          @limit = limit
-          @stale_after = stale_after
-          @soft = soft
-          @key = key
-          @on_store_error = on_store_error
+          @limit = Settings.limit(limit)
+          @stale_after = Settings.seconds(:stale_after, stale_after)
+          @soft = Settings.wired_soft(soft, store)
+          @key = Settings.key_reader(key)
+          @on_store_error = Settings.store_error_handler(on_store_error)
         end
 
         # Takes a slot for the query: the refusal when none is free, or nil to let it run.

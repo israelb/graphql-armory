@@ -40,6 +40,9 @@ module GraphQL
 
           # Raises `error` from `on` (:take, :acquire, :release, or :all) for the next `times` calls, or every call.
           def fail_with(error, on: :all, times: nil)
+            raise ArgumentError, "on: must be :take, :acquire, :release or :all, got #{on.inspect}" unless %i[take acquire release all].include?(on)
+            raise ArgumentError, "times: must be nil (every call) or a positive Integer, got #{times.inspect}" unless times.nil? || (times.is_a?(Integer) && times.positive?)
+
             @failures[on] = [error, times]
           end
 

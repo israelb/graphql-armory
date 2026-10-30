@@ -32,6 +32,16 @@ RSpec.describe "rate limits as useful objects" do
       expect(query.context[:rate_limit_points]).to include(cost: 4, remaining: 6, limited: false)
     end
 
+    it "never lets a query through with a partial configuration given to new" do
+      [{ soft: true }, { limit: 100, soft: true }, { limit: nil }, { store: nil }, { window: 0 }, { extensions: "yes" }].each do |settings|
+        expect { GraphQL::Armory::RateLimits::Points.new(**settings) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError)
+      end
+      [{ soft: true }, { limit: nil }, { store: nil }, { stale_after: 0 }].each do |settings|
+        expect { GraphQL::Armory::RateLimits::Concurrency.new(**settings) }.to raise_error(GraphQL::Armory::RateLimits::ConfigurationError)
+      end
+      expect(GraphQL::Armory::RateLimits::Points.new(limit: 100).(query, 1)).to be_a(GraphQL::AnalysisError)
+    end
+
     it "validates its settings in build" do
       expect { GraphQL::Armory::RateLimits::Points.build(store: Object.new, limit: 10) }
         .to raise_error(GraphQL::Armory::RateLimits::ConfigurationError, /store/)
@@ -66,6 +76,12 @@ RSpec.describe "rate limits as useful objects" do
       expect { store.take("k", cost: 1, limit: 1, window: 1) }.to raise_error(IOError, "gone")
       store.recover
       expect(store.take("k", cost: 1, limit: 1, window: 1)).to eq([true, 0])
+    end
+
+    it "refuses a failure it could never raise or never stop raising" do
+      [{ on: :tke }, { times: 0 }, { times: -1 }, { times: 1.5 }].each do |options|
+        expect { store.fail_with(IOError.new("x"), **options) }.to raise_error(ArgumentError)
+      end
     end
 
     it "answers what it is told instead of the real answer" do

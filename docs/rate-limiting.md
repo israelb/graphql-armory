@@ -233,7 +233,7 @@ store.answer(:take, [0, 0])                         # an answer no real store gi
 store.calls                                         # [[:take, "user:1", { cost: 40, limit: 100, window: 60, force: false }], ...]
 ```
 
-`occupy(key)` holds a slot for an operation running elsewhere and `held(key)` counts the slots held. `RateLimits::Controls::Query.example`, `Root.example` and `Context.example` are a small schema and context to test against. `Points.new` and `Concurrency.new`, with nothing wired, refuse every query (`Store::Null`); `Points.build(...)` and `Concurrency.build(...)` take the same settings as `use`.
+`occupy(key)` holds a slot for an operation running elsewhere and `held(key)` counts the slots held. `RateLimits::Controls::Query.example`, `Root.example` and `Context.example` are a small schema and context to test against. `Points.new` and `Concurrency.new`, with nothing wired, refuse every query (`Store::Null`), and check every setting they are given: `soft: true` with no store raises, since it would count nothing; `Points.build(...)` and `Concurrency.build(...)` take the same settings as `use`.
 
 ## Reference
 

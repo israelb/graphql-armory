@@ -34,29 +34,25 @@ module GraphQL
           ((info[:limit] - info[:remaining]) * info[:window] / info[:limit].to_f).ceil
         end
 
-        # Checks the settings and wires the store; `use` goes through here.
+        # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
         def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
+          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
+        end
+
+        # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
+        # configuration lets a query through either.
+        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, extensions: false)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
-
           raise ConfigurationError, "extensions: must be true or false, got #{extensions.inspect}" unless extensions == true || extensions == false
 
-          new(
-            store: store, limit: Settings.limit(limit), window: Settings.seconds(:window, window), soft: Settings.soft(soft),
-            key: Settings.key_reader(key), on_store_error: Settings.store_error_handler(on_store_error), extensions: extensions
-          )
-        end
-
-        # `new` is inert: with no store wired it refuses every query.
-        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: Settings.key_reader(nil),
-                       on_store_error: Settings.store_error_handler(nil), extensions: false)
           @store = store
-          @limit = limit
-          @window = window
-          @soft = soft
-          @key = key
-          @on_store_error = on_store_error
+          @limit = Settings.limit(limit)
+          @window = Settings.seconds(:window, window)
+          @soft = Settings.wired_soft(soft, store)
+          @key = Settings.key_reader(key)
+          @on_store_error = Settings.store_error_handler(on_store_error)
           @extensions = extensions
         end
 
