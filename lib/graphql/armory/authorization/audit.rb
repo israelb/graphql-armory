@@ -34,6 +34,7 @@ module GraphQL
           findings = Findings.new
           if schema.respond_to?(:armory_configuration) && schema.armory_configuration
             audit_denial_hooks(schema, findings)
+            audit_own_checks(schema, findings)
           else
             findings.problem(:plugin, "Schema", "never installed the plugin: add `use GraphQL::Armory::Authorization, adapter: ...`")
           end
@@ -60,6 +61,49 @@ module GraphQL
                                             "may reveal what it hides: remove it, or declare it in own_denial_hooks: with a reason")
             elsif declared.key?(hook)
               findings.problem(:hook, path, "named in own_denial_hooks: but the plugin's hook is the one that runs: remove it from the option")
+            end
+          end
+        end
+
+        # A method defined on a base class wins over the plugin's module, so an `authorized?` that does not call
+        # `super` skips the rule, and a resolver's `unauthorized_object` can run a mutation on a refused record.
+        # The audit cannot read them: each is reported once, where it is defined, until it is declared.
+        def audit_own_checks(schema, findings)
+          found = {}
+          audited_types(schema).select { |type| type.respond_to?(:armory_rule) }.each do |type|
+            note_own_check(found, type, type.method(:authorized?).owner, :authorized?, ".", Integration::Object)
+            type.all_field_definitions.each do |field|
+              note_own_check(found, type, field.method(:authorized?).owner, :authorized?, "#", Integration::Field) if field.respond_to?(:armory_declared)
+              resolver = field.resolver
+              next unless resolver.respond_to?(:armory_rule)
+
+              note_own_check(found, type, resolver.instance_method(:authorized?).owner, :authorized?, "#", Integration::Resolver)
+              note_own_check(found, type, resolver.instance_method(:unauthorized_object).owner, :unauthorized_object, "#", GraphQL::Schema::Resolver)
+            end
+          end
+          report_own_checks(found, schema.armory_configuration.own_checks, findings)
+        end
+
+        def note_own_check(found, type, owner, name, separator, expected)
+          return if owner == expected
+
+          holder = type.ancestors.find { |ancestor| ancestor.singleton_class == owner } || owner
+          found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}"
+        end
+
+        def report_own_checks(found, declared, findings)
+          found.each do |(holder, name), path|
+            reason = declared.fetch(holder, {})[name]
+            next findings.bypass(path, reason) if reason
+
+            findings.problem(:own_check, path, "defined by the app, it runs instead of the plugin's: if it does not call super it can skip the rule. " \
+                                               "Remove it, or declare it in own_checks: with a reason")
+          end
+          declared.each do |holder, methods|
+            methods.each_key do |name|
+              next if found.key?([holder, name])
+
+              findings.problem(:own_check, "#{holder.name || holder.inspect}##{name}", "named in own_checks: but no check of the schema is defined there: remove it from the option")
             end
           end
         end

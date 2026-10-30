@@ -9,14 +9,18 @@ module GraphQL
 
         DENIAL_HOOKS = %i[unauthorized_field unauthorized_object].freeze
 
-        attr_reader :adapter, :on_unauthorized, :sinks, :own_denial_hooks
+        OWN_CHECKS = %i[authorized? unauthorized_object].freeze
 
-        def initialize(adapter:, on_unauthorized: :null, sinks: [], own_denial_hooks: {})
+        attr_reader :adapter, :on_unauthorized, :sinks, :own_denial_hooks, :own_checks
+
+        def initialize(adapter:, on_unauthorized: :null, sinks: [], own_denial_hooks: {}, own_checks: {})
           unless MODES.include?(on_unauthorized)
             raise ArgumentError, "on_unauthorized must be one of #{MODES.inspect}, got #{on_unauthorized.inspect}"
           end
           check_own_denial_hooks(own_denial_hooks)
+          check_own_checks(own_checks)
 
+          @own_checks = own_checks.to_h { |holder, methods| [holder, methods.to_h { |name, reason| [name, reason.dup.freeze] }.freeze] }.freeze
           @adapter = resolve(adapter)
           @on_unauthorized = on_unauthorized
           @own_denial_hooks = own_denial_hooks.to_h { |hook, reason| [hook, reason.dup.freeze] }.freeze
@@ -33,6 +37,17 @@ module GraphQL
           return if valid
 
           raise ArgumentError, "own_denial_hooks must map #{DENIAL_HOOKS.inspect} to the reason you keep your own, got #{hooks.inspect}"
+        end
+
+        def check_own_checks(checks)
+          valid = checks.is_a?(Hash) && checks.all? do |holder, methods|
+            holder.is_a?(Module) && methods.is_a?(Hash) && methods.all? do |name, reason|
+              OWN_CHECKS.include?(name) && reason.is_a?(String) && !reason.strip.empty?
+            end
+          end
+          return if valid
+
+          raise ArgumentError, "own_checks must map a class to #{OWN_CHECKS.inspect} and the reason you keep each, got #{checks.inspect}"
         end
 
         def resolve(adapter)

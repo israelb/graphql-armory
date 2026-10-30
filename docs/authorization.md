@@ -89,11 +89,21 @@ A declared hook is listed in the audit as a bypass with that reason. The audit c
 
 A declared hook that returns `nil` for a non-null field behaves differently per engine: the interpreter answers "Cannot return null", and `Execution::Next` leaves the null with no error. Call `super`, or raise.
 
-**What the audit does not see.** It checks these two schema hooks when it runs, so a hook defined after that is seen by the next audit. It does not read other code that decides or answers a denial, and it stays clean with all of these. Review them yourself:
+**Your own checks on base classes.** The same applies one level down: `Base` is included in your base classes, so a method you define there wins over the plugin's. The audit reports each as an `:own_check` problem, once, where it is defined:
 
-- A resolver's own `unauthorized_object`, a public graphql-ruby method that runs before the schema's hook. If it returns the object, a mutation **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
-- `def self.authorized?` on a type, `authorized?` on a base field or on a resolver. Returning `true` opens what the rule closed, and a raised message reaches the client.
-- `rescue_from(NotAuthorizedError)` with `on_unauthorized: :raise`. It can rewrite the message. The interpreter catches field denials there and not object denials; `Execution::Next` catches both.
+- `authorized?` on a base field, a resolver or a mutation, and `self.authorized?` on a type or a base object. If it does not call `super`, **it skips the rule**: a `BaseMutation#authorized?` that answers `true` runs a mutation the policy refuses.
+- `unauthorized_object` on a resolver or a mutation, a public graphql-ruby method that runs before the schema's hook. If it returns the object, the mutation **runs on the record the policy refused**. If it raises, the client sees your message. A foreign id outside the scope never reaches it.
+
+Remove the method, or make it call `super` and declare it, by the class that defines it and with your reason:
+
+```ruby
+use GraphQL::Armory::Authorization, adapter: :pundit,
+  own_checks: { Types::BaseMutation => { authorized?: "adds the OTP check, then calls super" } }
+```
+
+A declared check is listed as a bypass. Each method is declared on its own, and naming one the schema does not use is an `:own_check` problem. The audit cannot read what your method does: the declaration is your word.
+
+**What the audit does not see.** It looks at the classes when it runs, so a method defined later is seen by the next audit. It does not report `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
 
 ## Lists, connections and lookups
 
@@ -131,7 +141,7 @@ load "tasks/graphql_armory.rake"
 # bundle exec rake "graphql_armory:audit[AppSchema]"
 ```
 
-It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, a schema's own denial hooks, and lists every declared bypass with its reason.
+It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, your own denial hooks and checks on base classes, and lists every declared bypass with its reason.
 
 ## CanCanCan
 
