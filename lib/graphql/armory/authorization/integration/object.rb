@@ -41,6 +41,8 @@ module GraphQL
 
           # Runs before pagination, so connections page and count the scoped list.
           def scope_items(items, context)
+            return items.rescoped { |relation| scope_items(relation, context) } if items.is_a?(Keyset)
+
             super(Integration.scoped(items, armory_rule, context), context)
           end
 

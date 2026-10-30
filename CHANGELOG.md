@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keyset connections: `GraphQL::Armory::Keyset.build(relation)`, returned from a resolver, pages an ActiveRecord relation by its ordering columns instead of OFFSET, so rows inserted or deleted between pages neither skip nor repeat items. The primary key breaks ties. Orderings it cannot page raise `Keyset::ConfigurationError`. A cursor holds the ordering values, so the default Base64 encoder is refused unless `plain_cursors: true`. Types with authorization scope the relation inside the connection. Docs: `docs/keyset-connections.md`.
 - Docs: new section "Clients that change identity" in `docs/rate-limiting.md`. A limit per key does not stop a client that gets a new IP or a new account for every request; the page now says so, shows how to share one bucket among new accounts or put a ceiling on everyone, and lists what belongs before GraphQL (signup limits, verification, network blocking). No code change.
 - Docs: how to count probes against a strict persisted-queries endpoint. Strict mode refuses before validating, so a detector that counts validation errors goes blind; `:operation_refused` with `reason: :raw_query` is the strike to count instead. New section in `docs/persisted-queries.md` and a row in the "What to watch for" table of `docs/telemetry.md`. No code change.
 

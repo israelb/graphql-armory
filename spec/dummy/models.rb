@@ -42,3 +42,7 @@ end
 # Its policy answers with something that is not a boolean.
 class Odd
 end
+
+# Columns of every kind a keyset connection orders by, or refuses to.
+class KeysetItem < ActiveRecord::Base
+end
