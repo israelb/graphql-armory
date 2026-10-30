@@ -121,22 +121,38 @@ module GraphQL
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
         # The interpreter asks the field's return type, Execution::Next the resolved object. Reported on what sets it.
         def note_reauthorization(found, type)
-          return unless type.reauthorize_scoped_objects == false && reauthorization_skips_a_rule?(type)
+          return if type.respond_to?(:edge_class) && type.node_type.nil? # nothing to serve, and its reader would raise
+          return if type.reauthorize_scoped_objects || !reauthorization_skips_a_rule?(type)
 
-          method = type.method(:reauthorize_scoped_objects)
-          holder = holder_of(type, method)
-          # graphql-ruby's reader: the nearest class that set the value. A connection with none takes it from its node type.
-          holder = type.ancestors.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? } if library_method?(method, holder, GRAPHQL_RUBY_PATH)
+          holder = reauthorization_holder(type)
           found[[holder, :reauthorize_scoped_objects]] = "#{holder.name || holder.inspect}.reauthorize_scoped_objects" if holder
         end
 
-        # A connection or edge has the rule of its node. An interface or union only narrows, and so only skips, with
-        # its own scope_items. An object bypassed with `authorize :none` has no rule to skip.
+        # A connection has the rule of its node, and an edge decides nothing about it. An interface or union only narrows,
+        # and so only skips, with its own scope_items. An object bypassed with `authorize :none` has no rule to skip.
         def reauthorization_skips_a_rule?(type)
-          return true if type.respond_to?(:node_type)
-          return !library_method?(type.method(:scope_items), holder_of(type, type.method(:scope_items)), GRAPHQL_RUBY_PATH, ARMORY_PATH) unless type.kind.object?
+          return type.respond_to?(:edge_class) if type.respond_to?(:node_type)
+          return own_scope_items?(type) unless type.kind.object?
 
           type.respond_to?(:armory_rule) && !type.armory_rule&.none?
+        end
+
+        # graphql-ruby's reader answers with the nearest class that set the value. A connection with none takes it from
+        # its node: an object node is reported on its own, and an abstract one only skips under a connection that narrows.
+        def reauthorization_holder(type)
+          method = type.method(:reauthorize_scoped_objects)
+          holder = holder_of(type, method)
+          return holder unless library_method?(method, holder, GRAPHQL_RUBY_PATH)
+
+          setter = type.ancestors.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? }
+          return setter if setter || !type.respond_to?(:edge_class) || type.node_type.kind.object?
+
+          reauthorization_holder(type.node_type) if own_scope_items?(type)
+        end
+
+        def own_scope_items?(type)
+          method = type.method(:scope_items)
+          !library_method?(method, holder_of(type, method), GRAPHQL_RUBY_PATH, ARMORY_PATH)
         end
 
         # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.
