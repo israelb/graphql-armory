@@ -39,8 +39,8 @@ module GraphQL
 
       # `store:` answers `fetch(id)` with an operation (`body` and `document`) or nil: a Manifest, or your own.
       # `strict: true` refuses raw queries unless the context holds `armory_allow_raw_query: true`.
-      def self.use(schema, store:, strict: false)
-        gate = Gate.build(store: store, strict: strict)
+      def self.use(schema, store:, strict: false, sinks: [])
+        gate = Gate.build(store: store, strict: strict, sinks: sinks)
 
         if schema.singleton_class.include?(Guard)
           raise ConfigurationError, "#{schema} already uses PersistedQueries (here or in a parent schema): use it once"
@@ -56,13 +56,13 @@ module GraphQL
       # as it came.
       class Gate
         # Wires the app's store with `use`'s defaults; `use` goes through here.
-        def self.build(store:, strict: false)
-          new(store: store, strict: strict)
+        def self.build(store:, strict: false, sinks: [])
+          new(store: store, strict: strict, telemetry: Telemetry.build(sinks: sinks))
         end
 
         # `new` is inert: with no store wired it refuses every request. It checks what it is given, so it never
         # lets raw queries through without a store either.
-        def initialize(store: Store::Null.new, strict: true)
+        def initialize(store: Store::Null.new, strict: true, telemetry: Telemetry.new)
           if store.is_a?(Hash) || !store.respond_to?(:fetch)
             raise ConfigurationError, "store: must answer fetch(id) with an operation or nil, like a Manifest"
           end
@@ -71,6 +71,7 @@ module GraphQL
 
           @store = store
           @strict = strict
+          @telemetry = telemetry
         end
 
         def call(context, text, document)
@@ -79,20 +80,28 @@ module GraphQL
           if !operation_id.nil?
             operation = operation_id.is_a?(String) ? @store.fetch(operation_id) : nil
             if operation.nil?
-              [UNKNOWN_OPERATION, nil]
+              refuse(UNKNOWN_OPERATION, :unknown_operation)
             elsif document || (text && !same_query?(text, operation))
-              [MISMATCH, nil]
+              refuse(MISMATCH, :mismatch)
             else
+              @telemetry.record(:operation_persisted)
               [nil, operation.document]
             end
           elsif @strict && !(context.respond_to?(:[]) && context[:armory_allow_raw_query] == true)
-            [RAW_QUERY_REFUSED, nil]
+            refuse(RAW_QUERY_REFUSED, :raw_query)
           else
+            @telemetry.record(@strict ? :raw_query_allowed : :raw_query_run) if text || document
             [nil, nil]
           end
         end
 
         private
+
+        # The signal says why, never which operation id or query: a client chooses those.
+        def refuse(message, reason)
+          @telemetry.record(:operation_refused, reason: reason)
+          [message, nil]
+        end
 
         # Apollo's clients may send the query with its id; graphql-ruby's subscriptions resend it printed.
         def same_query?(text, operation)

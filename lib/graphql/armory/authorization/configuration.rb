@@ -16,6 +16,7 @@ module GraphQL
 
           @adapter = resolve(adapter)
           @on_unauthorized = on_unauthorized
+          Telemetry.build(sinks: sinks) # raises at boot when the sinks are not callables
           @sinks = sinks
         end
 

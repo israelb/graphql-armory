@@ -136,6 +136,23 @@ Relay's example network layer sends the id as `doc_id`. Pass it yourself: `opera
 
 Deploy the server with the new manifest before, or with, the clients that use its new operations: until then they get `Unknown operation id`. Keep old operations in the file while old app versions are still in use.
 
+### Watching the rollout
+
+A refused request tells the client only `Unknown operation id` or `Only persisted operations are allowed`. To know how many, and from whom, pass `sinks:`:
+
+```ruby
+use GraphQL::Armory::PersistedQueries, store: PERSISTED, sinks: [GraphQL::Armory::Telemetry::Notifications]
+```
+
+| Signal | When |
+|---|---|
+| `:operation_persisted` | A request ran the stored operation its id names |
+| `:operation_refused` | Refused, with `reason`: `:unknown_operation`, `:mismatch` or `:raw_query` |
+| `:raw_query_run` | A raw query ran because you are not strict yet |
+| `:raw_query_allowed` | A raw query ran in strict mode because the context holds `armory_allow_raw_query: true` |
+
+While you are in `strict: false`, `:raw_query_run` is the traffic still to migrate: turn on `strict: true` when it reaches zero. After a deploy, `:operation_refused` with `:unknown_operation` is a client build whose operations are not in the manifest. Signals never hold the operation id or the query. See [Telemetry](telemetry.md).
+
 ### Testing with persisted queries
 
 `PersistedQueries::Store::Substitute.new(*queries)` holds the given queries under their SHA-256, like an Apollo manifest, and records the ids it was asked for (`fetched`). `PersistedQueries::Controls::Operations`, `Query.example` and `Root.example` are a small schema and its operations to test against. The decision itself is `PersistedQueries::Gate`: `Gate.build(store:, strict:)` takes the same settings as `use`, and `gate.(context, query_text, document)` answers `[refusal, document]`. `Gate.new`, with nothing wired, refuses every request (`Store::Null`, strict).
@@ -149,10 +166,11 @@ Deploy the server with the new manifest before, or with, the clients that use it
 - `fetch(id)` answers the operation (`id`, `name`, `body`, `document`, all frozen) or nil. `size` counts them.
 - Raises `PersistedQueries::ConfigurationError` at boot for: invalid JSON, an unreadable file, an unknown format or version, an id that is not the digest of its query, a query that does not parse, a duplicate id, an entry that is not an object, or an empty manifest. Messages never quote the file's queries.
 
-`use GraphQL::Armory::PersistedQueries, store:, strict: false`
+`use GraphQL::Armory::PersistedQueries, store:, strict: false, sinks: []`
 
 - `store:` answers `fetch(id)` with an object that has `body` and `document`, or nil. A Manifest, or your own store.
 - `strict:` is `true` or `false`.
+- `sinks:` an Array of callables taking `(signal, data)`; see [Watching the rollout](#watching-the-rollout).
 - Works with your own `query_class`, whether it is set before `use`, after it, or in a child schema: the plugin subclasses it.
 - `use` it once per schema hierarchy. A second `use`, on the same schema or a child, raises instead of replacing the first one's settings.
 - A store whose `fetch` raises or answers something without `document` makes the request raise: it fails closed, as an exception.

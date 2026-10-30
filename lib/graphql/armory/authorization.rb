@@ -4,7 +4,6 @@ require "graphql/armory/authorization/errors"
 require "graphql/armory/authorization/configuration"
 require "graphql/armory/authorization/rule"
 require "graphql/armory/authorization/memo"
-require "graphql/armory/authorization/telemetry"
 require "graphql/armory/authorization/adapters/null"
 require "graphql/armory/authorization/adapters/substitute"
 require "graphql/armory/authorization/authorize"
@@ -24,6 +23,11 @@ module GraphQL
         autoload :Pundit, "graphql/armory/authorization/adapters/pundit"
         autoload :CanCan, "graphql/armory/authorization/adapters/cancan"
       end
+    end
+
+    module Authorization
+      # Authorization's telemetry is the gem's: one Telemetry for every module.
+      Telemetry = Armory::Telemetry
     end
 
     # Deny-by-default authorization. The core (Authorize, Scope) knows nothing about
