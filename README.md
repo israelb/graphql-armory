@@ -25,7 +25,7 @@ Status: ✅ released, 🚧 in progress, ⬜ not started. Update this table in th
 |---|---|---|---|---|
 | 1 | Authorization (Pundit, CanCanCan) | ✅ | [docs/authorization.md](docs/authorization.md) | Released in 0.1.0.pre2 (prerelease). Pundit and CanCanCan (the audit checks less with CanCanCan). Global IDs in `loads:` decoded through `object_from_id`; `loads:` inside input objects scoped with `include Base`. `Execution::Next` needs graphql >= 2.6.2. |
 | 2 | Encrypted, versioned IDs and cursors | ✅ | [docs/encrypted-ids.md](docs/encrypted-ids.md) | Released in 0.1.0.pre3 (prerelease). `Encoder` (AES-256-GCM), versioned chains and `Legacy`, `Encoder.default` (ENV or Rails), `use GraphQL::Armory::IDs`. Composite primary keys not supported. |
-| 3 | Persisted queries / operation whitelisting | ⬜ | | Research not started. |
+| 3 | Persisted queries / operation allowlist | 🚧 | | Research done; allowlist from a build manifest in development. A runtime store (database, sync endpoint) is planned for later. |
 | 4 | Rate limiting | ⬜ | | Research not started. |
 | 5 | Stable (keyset) connections | ⬜ | | Research not started. |
 | 6 | Subscriptions over Pusher / Ably | ⬜ | | Research not started. |

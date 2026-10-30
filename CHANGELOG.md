@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Persisted queries, part 1: `GraphQL::Armory::PersistedQueries::Manifest` loads Apollo's persisted query manifest or Relay's persisted output, checks every id is the digest of its query (sha256, md5 or sha1) and parses each query once; any problem raises at boot.
+
 ## 0.1.0.pre3 (2026-10-29)
 
 Encrypted, versioned IDs and cursors (roadmap module 2), and a docs page per module.

@@ -13,3 +13,4 @@ end
 require "graphql/armory/encoder"
 require "graphql/armory/authorization"
 require "graphql/armory/ids"
+require "graphql/armory/persisted_queries"
