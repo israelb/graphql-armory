@@ -3,9 +3,12 @@
 ## Unreleased
 
 - **Breaking.** A sink that raises no longer takes the request down: the gem's decision stands, the next sink runs, and the new `on_sink_error:` is called, which by default warns with the signal and the error's class. A monitoring failure used to become an API failure. If a record must exist before data is served, raise from `on_sink_error:` to fail closed as before. A sink's `Encoder::InvalidError` is no longer read as a forged ID.
-- A sink that requires three arguments now receives the query's context: `->(signal, data, context) { ... }`. It tells who was refused without a request-global. Sinks of two arguments, or of `*arguments`, are unchanged and never receive it.
+- **Breaking.** A sink that could never be called, such as `->(a) {}`, now raises `Telemetry::ConfigurationError` at boot. It used to fail on the first request.
+- A sink that requires three arguments now receives the query's context: `->(signal, data, context) { ... }`. It tells who was refused without a request-global. It reads through a view that cannot write to the context. Sinks of two arguments, `*arguments` or a defaulted third are unchanged and never receive it.
 - A persisted queries refusal now carries `extensions.code`: `RAW_QUERY_REFUSED`, `UNKNOWN_OPERATION` or `OPERATION_MISMATCH`, so an app can match on it instead of on the message.
 - Rate limiters take `sinks:` and record `:rate_limit_store_failed`, with the limiter and the error's class, when the store fails. A failing store used to reach only `on_store_error:`, or stderr. The query still runs.
+- Fixed: when an object's check raised and a `rescue_from` answered true, graphql-ruby served the object. The handler still runs, and the object is denied.
+- Fixed: the rate limiters' default warning no longer prints the store error's message, which could hold a password.
 
 ## 0.1.0.pre8 (2026-10-31)
 

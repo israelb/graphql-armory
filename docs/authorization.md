@@ -341,6 +341,8 @@ What an interface adds is its fields, declared once and resolved on many types:
 
 ## Telemetry
 
+**When something raises during an object's check.** If a policy raises and a `rescue_from` handles the error, the handler runs and the object is denied, whatever the handler answers. Without a handler the error reaches the request.
+
 The decisions are visible to you and not to the client. Pass `sinks:` to hear each one:
 
 ```ruby

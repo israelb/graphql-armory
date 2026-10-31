@@ -17,6 +17,20 @@ module GraphQL
         new(sinks: sinks, on_sink_error: on_sink_error)
       end
 
+      # What a sink reads the context through: it decides nothing, so it cannot change who the query runs as. An object in
+      # the context is the app's own, and stays as it is. `inspect` stays out of it, so a sink that logs its arguments logs no token.
+      class ContextView
+        def initialize(context)
+          @context = context
+        end
+
+        def [](key) = @context[key]
+        def fetch(key, *default, &block) = @context.fetch(key, *default, &block)
+        def dig(key, *rest) = @context.dig(key, *rest)
+        def key?(key) = @context.key?(key)
+        def inspect = "#<#{self.class.name}>"
+      end
+
       def initialize(sinks: [], on_sink_error: nil)
         # Messages name a class, never `inspect` a value: a metrics client holds its API key.
         raise ConfigurationError, "sinks: must be an Array of callables taking (signal, data), got #{sinks.class}" unless sinks.is_a?(Array)
@@ -39,8 +53,9 @@ module GraphQL
         return nil if @sinks.empty?
 
         data = data.to_h { |key, value| [key, value.is_a?(String) ? value.dup.freeze : value] }.freeze
+        view = ContextView.new(context || {}) if @sinks.any? { |_sink, takes_context| takes_context }
         @sinks.each do |sink, takes_context|
-          takes_context ? sink.call(signal, data, context) : sink.call(signal, data)
+          takes_context ? sink.call(signal, data, view) : sink.call(signal, data)
         rescue StandardError => error
           @on_sink_error.call(error, signal)
         end
@@ -49,12 +64,27 @@ module GraphQL
 
       private
 
-      # Only a sink that asks for it by name: one taking `*arguments` may log whatever it gets.
+      # Only a sink that requires it: one taking `*arguments` or a defaulted third may log whatever it gets. A sink whose
+      # `call` cannot be read (a BasicObject, one behind method_missing) takes two.
       def takes_context?(sink)
-        parameters = sink.is_a?(Proc) || sink.is_a?(Method) ? sink.parameters : sink.method(:call).parameters
-        return parameters.size >= 3 && parameters.first(3).all? { |type, _| type == :opt } if sink.is_a?(Proc) && !sink.lambda?
+        callable = Proc === sink || Method === sink ? sink : ::Kernel.instance_method(:method).bind_call(sink, :call)
+        return callable.arity == 3 if Proc === callable && !callable.lambda?
 
+        parameters = callable.parameters
+        refuse_uncallable(sink, parameters)
         parameters.count { |type, _| type == :req } == 3
+      rescue NameError, TypeError
+        false
+      end
+
+      # It would raise on every signal, and with sinks that no longer fail the request nobody would notice.
+      def refuse_uncallable(sink, parameters)
+        required = parameters.count { |type, _| type == :req }
+        optional = parameters.count { |type, _| type == :opt }
+        rest = parameters.any? { |type, _| type == :rest }
+        return unless required > 3 || parameters.any? { |type, _| type == :keyreq } || (required + optional < 2 && !rest)
+
+        raise ConfigurationError, "sink #{sink.is_a?(Module) ? sink.name : sink.class} must take (signal, data) or (signal, data, context)"
       end
 
       # Reports every signal as an ActiveSupport::Notifications event named "<signal>.graphql_armory", with the

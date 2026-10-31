@@ -31,7 +31,7 @@ module GraphQL
       # A validation error with its code.
       class RefusalError < GraphQL::StaticValidation::Error
         def to_h
-          super.merge("extensions" => { "code" => REFUSAL_CODES.fetch(message) })
+          super.merge("extensions" => { "code" => REFUSAL_CODES.fetch(message, "OPERATION_REFUSED") })
         end
       end
 

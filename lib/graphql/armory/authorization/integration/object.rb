@@ -61,6 +61,13 @@ module GraphQL
             return false if rule.nil?
 
             Integration.allowed?(object, Integration.with_owner_model(rule, self), context) && super
+          rescue GraphQL::UnauthorizedError
+            raise
+          rescue StandardError => error
+            # graphql-ruby reads what a rescue_from answers here as the authorization, on both engines, so a handler that logs
+            # and answers true would serve the object. The handler runs, its answer does not count. No public hook does this.
+            context.query.handle_or_reraise(error)
+            false
           end
         end
       end

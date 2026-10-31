@@ -162,10 +162,10 @@ Every refusal carries a stable code in `extensions.code`: `RAW_QUERY_REFUSED`, `
 In strict mode a raw query is refused before it is validated, so it never produces a validation error. If your abuse detection counts validation errors (`undefinedField`, `argumentNotAccepted`) to spot someone probing your schema, it sees nothing from a strict endpoint. Count the refusal instead: a legitimate client sends operation ids and never a raw query, so `:operation_refused` with `reason: :raw_query` is a clean strike.
 
 ```ruby
-count_probes = lambda do |signal, data|
+count_probes = lambda do |signal, data, context|
   next unless signal == :operation_refused && data[:reason] == :raw_query
 
-  AbuseDetection.strike(Current.client_key) # your detector, with the client from your own request context
+  AbuseDetection.strike(context[:client_key]) # your detector, with a client key your controller put in the context
 end
 
 use GraphQL::Armory::PersistedQueries, store: PERSISTED, strict: true, sinks: [count_probes]

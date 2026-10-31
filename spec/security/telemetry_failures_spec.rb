@@ -51,7 +51,7 @@ RSpec.describe "Telemetry: context, failures and refusal codes" do
       seen = []
       persisted_schema(strict: true, sinks: [->(_signal, _data, context) { seen << context }]).execute(query_text)
 
-      expect(seen).to eq([{}])
+      expect(seen.first[:anything]).to be_nil
     end
 
     it "accepts an object whose call takes three arguments, and a proc" do
@@ -69,6 +69,55 @@ RSpec.describe "Telemetry: context, failures and refusal codes" do
       armory::Telemetry.build(sinks: [->(*arguments) { seen << arguments }]).record(:denied, context: { token: "secret" }, type: "Invoice")
 
       expect(seen).to eq([[:denied, { type: "Invoice" }]])
+    end
+
+    it "never gives the context to a proc whose third argument has a default" do
+      seen = []
+      armory::Telemetry.build(sinks: [proc { |_signal, _data, third = :none| seen << third }]).record(:denied, context: { token: "secret" })
+
+      expect(seen).to eq([:none])
+    end
+
+    it "lets a sink read the context, not change it" do
+      context = { ip: "10.0.0.1", nested: { a: 1 } }
+      seen = []
+      sink = lambda do |_signal, _data, view|
+        seen << [view[:ip], view.fetch(:ip), view.dig(:nested, :a), view.key?(:ip), view.respond_to?(:[]=), view.inspect.include?("10.0.0.1")]
+      end
+
+      armory::Telemetry.build(sinks: [sink]).record(:denied, context: context)
+
+      expect(seen).to eq([["10.0.0.1", "10.0.0.1", 1, true, false, false]])
+    end
+
+    it "cannot let a raw query through by writing the allow flag" do
+      context = {}
+      schema = persisted_schema(strict: true, sinks: [->(_signal, _data, view) { view[:armory_allow_raw_query] = true }], on_sink_error: ->(_error, _signal) {})
+
+      schema.execute(query_text, context: context)
+      result = schema.execute(query_text, context: context)
+
+      expect(context).not_to have_key(:armory_allow_raw_query)
+      expect(result.to_h).not_to have_key("data")
+    end
+
+    it "boots a sink it cannot read the arguments of, as two arguments" do
+      seen = []
+      struct = Struct.new(:method, :log) { def call(signal, _data) = log << signal }.new("POST", seen)
+      fake = Class.new do
+        define_method(:respond_to?) { |name, *| name == :call || super(name) }
+        define_method(:method_missing) { |name, *arguments| name == :call ? seen << arguments.first : super(name, *arguments) }
+      end.new
+
+      armory::Telemetry.build(sinks: [struct, fake]).record(:denied, context: { token: "secret" })
+
+      expect(seen).to eq([:denied, :denied])
+    end
+
+    it "refuses at boot a sink that could never be called" do
+      [->(_a) {}, ->(_a, _b, _c, _d) {}, ->(_a, _b, key:) {}, ->(_a, _b, _c, key:) {}].each do |sink|
+        expect { armory::Telemetry.build(sinks: [sink]) }.to raise_error(armory::Telemetry::ConfigurationError, /sink/)
+      end
     end
 
     it "keeps the context out of the signal's data" do
@@ -227,6 +276,16 @@ RSpec.describe "Telemetry: context, failures and refusal codes" do
       end
     end
 
+    it "never prints the store error's message by default: it may hold a password" do
+      store = Class.new do
+        def take(_key, cost:, limit:, window:, force:) = raise(IOError, "redis://:hunter2@host")
+      end.new
+      output = silently { limited_schema(armory::RateLimits::Points, store: store, limit: 10).execute(query_text) }
+
+      expect(output).to include("IOError")
+      expect(output).not_to include("hunter2")
+    end
+
     it "still calls on_store_error, and still warns without one" do
       handled = []
       silently do
@@ -241,6 +300,48 @@ RSpec.describe "Telemetry: context, failures and refusal codes" do
     it "refuses bad sinks at boot" do
       expect { limited_schema(armory::RateLimits::Points, store: failing_store, limit: 10, sinks: "log") }
         .to raise_error(armory::Telemetry::ConfigurationError, /sinks/)
+    end
+  end
+
+  describe "a rescue_from that answers true, while an object's check raises" do
+    let(:world) { Dummy::World.build }
+
+    def schema_rescuing(**options)
+      schema = IntegrationSchema.build(plugin: false)
+      schema.use(GraphQL::Armory::Authorization, adapter: :pundit, **options)
+      handled = @handled = []
+      schema.rescue_from(StandardError) do |error, *|
+        handled << error.class
+        true
+      end
+      schema
+    end
+
+    def ask(schema)
+      execute_query(schema, "{ myInvoice { number } }", context: { current_user: world.alice }, root_value: IntegrationSchema::Root.new(my_invoice: world.b1))
+    end
+
+    it "does not serve a denied object when on_sink_error raises" do
+      schema = schema_rescuing(sinks: [->(signal, _data) { raise "down" if signal == :denied }], on_sink_error: ->(_error, _signal) { raise IOError, "audit down" })
+
+      expect(ask(schema)["data"]).to eq("myInvoice" => nil)
+      expect(@handled).to eq([IOError])
+    end
+
+    it "does not serve the object when its policy raises" do
+      adapter = armory::Authorization::Adapters::Substitute.new(raises: IOError.new("policy down"))
+      schema = schema_rescuing
+      schema.use(GraphQL::Armory::Authorization, adapter: adapter)
+
+      expect(ask(schema)["data"]).to eq("myInvoice" => nil)
+      expect(@handled).to eq([IOError])
+    end
+
+    it "still lets the error reach the app without a rescue_from" do
+      schema = IntegrationSchema.build(plugin: false)
+      schema.use(GraphQL::Armory::Authorization, adapter: armory::Authorization::Adapters::Substitute.new(raises: IOError.new("policy down")))
+
+      expect { ask(schema) }.to raise_error(IOError)
     end
   end
 end
