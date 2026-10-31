@@ -52,7 +52,7 @@ module GraphQL
 
             model = armory_model
             subject = object.is_a?(model) ? object : model
-            Integration.allowed?(subject, Rule.new(@armory_declared, policy: armory_policy, attribute: keyword), context) && super
+            Integration.allowed?(subject, Rule.new(@armory_declared, policy: armory_policy, attribute: keyword, model: model), context) && super
           end
 
           def visible?(context)

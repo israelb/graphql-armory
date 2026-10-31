@@ -60,7 +60,7 @@ module GraphQL
             rule = armory_rule
             return false if rule.nil?
 
-            Integration.allowed?(object, rule, context) && super
+            Integration.allowed?(object, Integration.with_owner_model(rule, self), context) && super
           end
         end
       end

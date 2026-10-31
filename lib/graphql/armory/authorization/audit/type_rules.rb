@@ -93,9 +93,32 @@ module GraphQL
             return audit_resolver(field, path) if field.resolver.respond_to?(:armory_rule)
 
             audit_declaration(type, field, path, model: model, bypassed: bypassed && !inherited, reported: reported)
+            audit_inherited_rule(type, field, path, model) if model
             audit_visibility(field, path, model: model, reported: reported)
             audit_loads(field, path)
             audit_arguments(field, path, reported: reported)
+          end
+
+          # A field runs under its owner: graphql-ruby never tells it the concrete type. A rule defined above that type asks
+          # the owner's model, or only the record's class, while this audit reads the type's model.
+          def audit_inherited_rule(type, field, path, model)
+            return if field.owner.equal?(type) || [nil, :none].include?(field.armory_declared) || field.armory_policy
+            return if field.owner.respond_to?(:armory_model) && owner_model(field.owner).equal?(model)
+
+            @findings.problem(:foreign_model, path, "its rule is defined on #{name_of(field.owner)}, so it never asks the policy of #{model}, the model of this type: a record of another class " \
+                                                    "or a laxer subclass gets past it. Redefine the field on this type with its `authorize:` and an `override_reason:`, or name the same model on #{name_of(field.owner)}")
+          end
+
+          def owner_model(owner)
+            owner.armory_model
+          rescue ConfigurationError, GraphQL::RequiredImplementationMissingError
+            nil
+          end
+
+          def name_of(owner)
+            owner.respond_to?(:graphql_name) ? owner.graphql_name : owner.inspect
+          rescue GraphQL::RequiredImplementationMissingError
+            owner.inspect
           end
 
           # A resolver or mutation carries its own rule: no rule is denied, `:none` is listed, an action is checked.

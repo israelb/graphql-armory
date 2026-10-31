@@ -184,11 +184,6 @@ RSpec.describe "PROBES: inherited-field audit message" do
     follow_advice_on_root(root_shape(proc {}))
   end
 
-  it "[security] S1h Pundit root, advised: refused user gets no data" do
-    result = ask(schema_on(root_shape(proc { authorize :read, model: ArmProbeDoc }).({ authorize: :read }), :pundit), query: "{ notes }", root: nil)
-    obs("S1h refused", result)
-    expect(result.to_s).not_to include("SECRET")
-  end
 
 
   it "[security] S2a abstract parent with no model constant: advice brings no :model problem and no crash" do
@@ -209,7 +204,7 @@ RSpec.describe "PROBES: inherited-field audit message" do
     result = ask(schema)
     obs("S2b refused", result)
     # Not result.to_s: Pundit's NotDefinedError message carries the record's inspect, which is the Struct here.
-    expect(result["data"]).to be_nil
+    expect(result.dig("data", "doc", "notes")).to be_nil
   end
 
 

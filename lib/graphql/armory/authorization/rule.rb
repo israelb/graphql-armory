@@ -32,6 +32,11 @@ module GraphQL
           freeze
         end
 
+        def with_model(model)
+          self.class.new(action, policy: policy, subject: subject, attribute: attribute, model: model, scope: scope,
+                                 visible_when: visible_when, covers_fields: covers_fields, reason: reason)
+        end
+
         # A bypassed type whose fields are covered by something else, such as the payload of a mutation.
         def covers_fields?
           covers_fields
