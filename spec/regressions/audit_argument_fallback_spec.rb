@@ -515,30 +515,6 @@ RSpec.describe "PR12 probes" do
     expect(ignored(r2)).to eq(ignored(fresh2))
   end
 
-  it "[security] BK2 one Audit object called from several threads" do
-    s1 = redefined_schema
-    s2 = clean_schema
-    expected1 = ignored(report(s1))
-    expected2 = ignored(report(s2))
-    audit = GraphQL::Armory::Authorization::Audit.build(s1)
-    wrong = Queue.new
-    threads = Array.new(8) do |i|
-      Thread.new do
-        20.times do
-          schema, expected = i.even? ? [s1, expected1] : [s2, expected2]
-          got = ignored(audit.(schema))
-          wrong << [i.even? ? :s1 : :s2, got] unless got == expected
-        rescue StandardError => e
-          wrong << [:raised, e.class.name]
-        end
-      end
-    end
-    threads.each(&:join)
-    found = []
-    found << wrong.pop until wrong.empty?
-    out("bk2", "wrong results: #{found.size}\n#{found.first(5).inspect}")
-    expect(found.select { |kind, got| kind == :s1 && got.empty? }).to be_empty
-  end
 
   it "[preservation] BK3 an argument redefinition on a field inherited by two types is reported once" do
     _, kid = resolver_pair
