@@ -5,6 +5,16 @@ class ArmoryGhostRecord
   def inspect = "#<ArmoryGhostRecord secret=SECRET>"
 end
 
+class ArmoryPickedLaxPolicy
+  class Scope
+    def initialize(_user, scope) = @scope = scope
+    def resolve = @scope
+  end
+
+  def initialize(_user, _record); end
+  def read? = true
+end
+
 RSpec.describe "a record with no policy" do
   let(:adapter) { GraphQL::Armory::Authorization::Adapters::Pundit.new }
   let(:read) { GraphQL::Armory::Authorization::Rule.new(:read) }
@@ -32,6 +42,18 @@ RSpec.describe "a record with no policy" do
     [with_member, lying].each do |record|
       expect { adapter.authorized?(:someone, record, read) }.to raise_error(Pundit::NotDefinedError) { |error| expect(error.message).not_to include("SECRET") }
     end
+  end
+
+  # A String a type wraps can be the client's text: it must not name the policy that judges it.
+  it "does not let a String object pick its own policy" do
+    expect { adapter.authorized?(:someone, "ArmoryPickedLax", read) }.to raise_error(Pundit::NotDefinedError, /no policy found for String/)
+  end
+
+  it "still reads a String model the schema author wrote" do
+    with_model = GraphQL::Armory::Authorization::Rule.new(:read, model: "ArmoryPickedLax")
+
+    expect(adapter.check("ArmoryPickedLax", read)).to eq([])
+    expect(adapter.scope(:someone, :items, with_model)).to eq(:items)
   end
 
   it "does not read the items to name a relation with no policy" do

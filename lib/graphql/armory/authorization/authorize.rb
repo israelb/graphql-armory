@@ -44,7 +44,8 @@ module GraphQL
             telemetry.record(allowed ? :allowed : :denied, type: subject.class.name, action: rule.action)
             allowed
           else
-            raise AdapterError, "#{adapter.class} answered #{answer.inspect}; it must answer true, false or nil"
+            # The class alone: the answer may be the record, and on a relation `inspect` runs the query.
+            raise AdapterError, "#{adapter.class} answered a #{::Kernel.instance_method(:class).bind_call(answer)}; it must answer true, false or nil"
           end
         end
 

@@ -51,6 +51,17 @@ RSpec.describe GraphQL::Armory::Authorization::Authorize do
     end
   end
 
+  # A policy that returns the record by mistake must not put it in a message a client may see, nor run its query.
+  it "names the class of a bad answer, and never reads it" do
+    answer = Struct.new(:class) { def inspect = raise("ran the query") }.new("SECRET")
+    authorize = authorize_with(adapters::Substitute.new(allow: answer))
+
+    expect { authorize.(subject_object, rule, context) }.to raise_error(authorization::AdapterError) do |error|
+      expect(error.message).to include("true, false or nil")
+      expect(error.message).not_to include("SECRET")
+    end
+  end
+
   it "lets a declared bypass through without asking the adapter" do
     adapter = adapters::Substitute.new(allow: false)
     bypass = authorization::Rule.none(reason: "public data")
