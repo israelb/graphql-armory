@@ -31,6 +31,9 @@ end
 
 class ArmoryMatrixSamePolicy < ArmoryMatrixStrictPolicy; end
 
+class ArmoryMatrixLaxSame < ArmoryMatrixSame; end
+class ArmoryMatrixLaxSamePolicy < ArmoryMatrixDocPolicy; end
+
 class ArmoryMatrixClientRecord < OpenStruct; end
 class ArmoryMatrixClientRecordPolicy < ArmoryMatrixStrictPolicy; end
 
@@ -291,6 +294,21 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     response = execute_query(schema_of(type), "{ doc { notes } }", root_value: Struct.new(:doc).new(record), context: { current_user: :someone }).to_h
 
     expect(response.dig("data", "doc")).to be_nil
+  end
+
+  [["of another class", -> { ArmoryMatrixDoc.new }], ["of a subclass with a laxer policy", -> { ArmoryMatrixLaxSame.new }]].each do |shape, record|
+    it "does not serve a record #{shape} with the audit ok" do
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :manage, model: ArmoryMatrixSame
+        field :notes, String, null: true
+      end
+      schema = schema_of(type)
+      response = execute_query(schema, "{ doc { notes } }", root_value: Struct.new(:doc).new(record.call), context: { current_user: :someone }).to_h
+
+      expect(armory::Audit.(schema).ok?).to be(true)
+      expect(response.dig("data", "doc")).to be_nil
+    end
   end
 
   it "does not serve a record whose klass method names a laxer model" do

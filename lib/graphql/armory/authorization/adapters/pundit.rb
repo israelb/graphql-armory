@@ -17,13 +17,15 @@ module GraphQL
           end
 
           def authorized?(user, subject, rule)
-            policy = policy_class(rule, subject).new(user, subject)
             query = query_for(rule)
-            unless policy.respond_to?(query)
-              raise AdapterError, "#{policy.class} does not define #{query}"
-            end
+            policies_for(rule, subject).each do |policy_class|
+              policy = policy_class.new(user, subject)
+              raise AdapterError, "#{policy.class} does not define #{query}" unless policy.respond_to?(query)
 
-            policy.public_send(query)
+              answer = policy.public_send(query)
+              return answer unless answer.equal?(true)
+            end
+            true
           end
 
           def scope(user, items, rule)
@@ -56,6 +58,19 @@ module GraphQL
           end
 
           private
+
+          # A rule's `policy:` answers alone. Otherwise the declared model's policy, which is the one the audit reads, and
+          # the record's class's must both allow it: one alone lets a record of another class, or a subclass with a laxer
+          # policy, past the first, or a subclass past its own stricter policy.
+          def policies_for(rule, subject)
+            return [rule.policy] if rule.policy
+
+            declared = finder(normalize(rule.model)).policy if rule.model
+            found = [declared, finder(policy_subject(subject)).policy].compact.uniq
+            return found unless found.empty?
+
+            raise ::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}"
+          end
 
           def policy_class(rule, subject)
             rule.policy || finder(policy_subject(subject)).policy || raise(::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}")

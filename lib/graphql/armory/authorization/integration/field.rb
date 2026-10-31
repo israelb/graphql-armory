@@ -73,7 +73,7 @@ module GraphQL
             rule = armory_rule_for(owner, context)
             return false if rule.nil?
 
-            (rule == :covered || Integration.allowed?(object, rule, context)) && super
+            (rule == :covered || Integration.allowed?(object, Integration.with_owner_model(rule, owner), context)) && super
           end
 
           private
