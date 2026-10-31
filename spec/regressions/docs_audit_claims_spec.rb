@@ -59,9 +59,9 @@ RSpec.describe "docs/authorization.md audit section claims" do
     end
 
     it "preservation: the only callers are the matcher, the rake task and Audit.()" do
-      hits = Dir["#{Dir.pwd}/lib/**/*.rb", "#{Dir.pwd}/lib/**/*.rake"].select { |f| File.read(f).match?(/\bAudit\b/) } - ["#{Dir.pwd}/lib/graphql/armory/authorization/audit.rb"]
+      hits = Dir["#{Dir.pwd}/lib/**/*.rb", "#{Dir.pwd}/lib/**/*.rake"].select { |f| File.read(f).match?(/\bAudit(\.|::)/) } - ["#{Dir.pwd}/lib/graphql/armory/authorization/audit.rb"]
       puts hits.sort
-      expect(hits.map { |f| File.basename(f) }.sort).to eq(%w[command.rb graphql_armory.rake report.rb rspec.rb])
+      expect(hits.map { |f| File.basename(f) }.sort).to eq(%w[command.rb graphql_armory.rake rspec.rb])
     end
   end
 
@@ -207,7 +207,7 @@ RSpec.describe "docs/authorization.md audit section claims" do
     end
 
     it "every kind the code can emit is in the doc table" do
-      src = File.read("#{Dir.pwd}/lib/graphql/armory/authorization/audit.rb")
+      src = Dir["#{Dir.pwd}/lib/graphql/armory/authorization/audit{.rb,/*.rb}"].map { |file| File.read(file) }.join
       emitted = src.scan(/\.problem\(:(\w+)/).flatten.uniq.sort
       doc = File.read("#{Dir.pwd}/docs/authorization.md")
       section = doc[/\| Kind \|.*?\n\n/m]
