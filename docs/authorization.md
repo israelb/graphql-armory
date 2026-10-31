@@ -117,6 +117,8 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
 - A type no definition leads to. The audit follows the schema's roots, `orphan_types` and what each definition references (fields, arguments, interfaces, union members, a connection's node), not filtering by `visible?`, so types hidden with no request and every definition of a duplicated name are audited. A type that only your own `resolve_type` returns, listed nowhere, is not seen. Also not seen: the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly, except for `:foreign_policy`. So its missing policy actions fail at runtime, closed, and an `authorize: :none` on such a field is not listed among the bypasses.
+- A missing action on an argument of an input object, when a plain field takes that input object. It raises at runtime instead of serving.
+- A Base resolver on a field class with no `Base`, under a type with a rule: its rule's actions and its arguments are not read. It raises at runtime instead of serving.
 - A missing policy action on a field of a bypassed type. The audit does not ask the policy there, so a misspelled action passes it and raises at runtime instead of serving.
 - A shadowed definition whose argument names a type that cannot load makes the audit raise `ArgumentError`. A late-bound type that never resolves is skipped instead, with no problem reported.
 - `authorize: true` on a field a bypassed type inherits is reported as denied, while the rule of the class that defines it does run: a user it allows gets the data, a user it refuses does not. Trust the rule, not that message.
