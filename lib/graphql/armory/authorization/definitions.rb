@@ -42,14 +42,11 @@ module GraphQL
         end
         private_class_method :directive_types
 
-        # `introspection(true)` is a flag anyone can set, and graphql-ruby serves such a type like any other: only its own
-        # types, and what an app builds from them through `Schema.introspection`, are exempt.
+        # `introspection(true)` is a flag anyone can set, and graphql-ruby serves such a type like any other. The `__` prefix
+        # is reserved for introspection by the GraphQL spec: built-in types, what `Schema.introspection` replaces them with,
+        # and their copies all carry it.
         def self.introspection?(type)
-          return false unless type.introspection?
-
-          [GraphQL::Introspection::SchemaType, GraphQL::Introspection::TypeType, GraphQL::Introspection::FieldType,
-           GraphQL::Introspection::DirectiveType, GraphQL::Introspection::EnumValueType, GraphQL::Introspection::InputValueType,
-           GraphQL::Introspection::TypeKindEnum, GraphQL::Introspection::DirectiveLocationEnum].any? { |own| type <= own }
+          type.introspection? && type.graphql_name.start_with?("__")
         end
 
         def self.connection?(type)

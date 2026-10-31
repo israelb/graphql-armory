@@ -17,6 +17,7 @@ module GraphQL
             Definitions.fields_at_every_level(type).each do |field|
               path = "#{type.graphql_name}.#{field.original_name}"
               note(field, path, policy, model_or_nil(type)) if field.respond_to?(:armory_declared)
+              note_resolver(field.resolver, path, policy) if field.resolver.respond_to?(:armory_rule)
               arguments(field.all_argument_definitions, path, policy, Set.new)
             end
           end
@@ -43,6 +44,19 @@ module GraphQL
 
           private
 
+          # A Base resolver covers its field and asks its own policy, so the type's `policy:` never sees that rule.
+          def note_resolver(resolver, path, policy)
+            rule = resolver.armory_rule
+            return if rule.nil? || rule.none?
+
+            asked = rule.policy
+            same = asked ? asked.equal?(policy) : found?(model_or_nil(resolver), policy)
+            return if same || !@seen.add?([resolver, path, policy])
+
+            @findings.problem(:foreign_policy, path, "its resolver's rule asks #{asked || "the policy found from its model"}, not #{policy}, the `policy:` of this type. " \
+                                                     "Name the same `policy:` on the resolver")
+          end
+
           def note(member, path, policy, model)
             ruled = member.armory_visible_when || ![nil, :none].include?(member.armory_declared)
             return if !ruled || asks_policy?(member, policy, model) || !@seen.add?([member, path, policy])
@@ -57,6 +71,10 @@ module GraphQL
             asked = member.armory_policy
             return asked.equal?(policy) if asked
 
+            found?(model, policy)
+          end
+
+          def found?(model, policy)
             !model.nil? && @adapter.respond_to?(:found_policy) && @adapter.found_policy(model).equal?(policy)
           end
 
