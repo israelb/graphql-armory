@@ -484,6 +484,91 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     end
   end
 
+  context "with a direct Relay subclass" do
+    let(:node) do
+      Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ArmoryMatrixDoc
+        field :notes, String, null: true
+      end
+    end
+
+    def relay_schema(connection)
+      plugin = armory
+      query_class = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :none, reason: "root", covers_fields: true
+        field :docs, connection, null: true, authorize: :none, reason: "x", connection: false
+      end
+      Class.new(base_schema) do
+        use plugin, adapter: :pundit
+        query query_class
+      end
+    end
+
+    def connection_over(edge, &body)
+      Class.new(GraphQL::Types::Relay::BaseConnection) do
+        graphql_name "DocConnection"
+        edge_type(edge)
+        class_eval(&body) if body
+      end
+    end
+
+    def edge_of(type, &body)
+      Class.new(GraphQL::Types::Relay::BaseEdge) do
+        graphql_name "DocEdge"
+        node_type(type)
+        class_eval(&body) if body
+      end
+    end
+
+    it "does not say ok for a connection that adds a field" do
+      connection = connection_over(edge_of(node)) { field :secret, String, null: true }
+
+      expect(armory::Audit.(relay_schema(connection)).problems.map(&:path)).to include("DocConnection")
+    end
+
+    it "does not say ok for an edge that adds a field" do
+      connection = connection_over(edge_of(node) { field :secret, String, null: true })
+
+      expect(armory::Audit.(relay_schema(connection)).problems.map(&:path)).to include("DocEdge")
+    end
+
+    it "does not say ok for a child whose parent adds the field" do
+      parent = Class.new(GraphQL::Types::Relay::BaseConnection) { field :secret, String, null: true }
+      edge = edge_of(node)
+      child = Class.new(parent) do
+        graphql_name "DocConnection"
+        edge_type(edge)
+      end
+
+      expect(armory::Audit.(relay_schema(child)).problems.map(&:path)).to include("DocConnection")
+    end
+
+    it "does not say ok for a connection that gets a field from an interface" do
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Noted"
+        field :secret, String, null: true
+      end
+      connection = connection_over(edge_of(node)) { implements interface }
+
+      expect(armory::Audit.(relay_schema(connection)).ok?).to be(false)
+    end
+
+    it "leaves a connection and an edge that add nothing alone" do
+      problems = armory::Audit.(relay_schema(connection_over(edge_of(node)))).problems
+
+      expect(problems.map(&:path)).not_to include("DocConnection", "DocEdge")
+    end
+
+    it "leaves the connection a type generates alone" do
+      problems = armory::Audit.(relay_schema(node.connection_type)).problems
+
+      expect(problems.map(&:path)).not_to include("DocConnection", "DocEdge")
+    end
+  end
+
   it "does not say ok for a PageInfo child whose parent adds the field" do
     parent = Class.new(GraphQL::Types::Relay::PageInfo) do
       graphql_name "MiddleInfo"

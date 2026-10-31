@@ -466,14 +466,14 @@ RSpec.describe "verification of the String subject and bad answer change" do
       schema_of(query_with { field :conn, connection, authorize: :none, reason: "root", connection: true })
     end
 
-    it "[preservation] 29 direct BaseConnection: a missing action is silent, fails closed at runtime" do
+    it "[preservation] 29 direct BaseConnection: a missing action is reported, fails closed at runtime" do
       options = legacy
       connection = direct_connection do
         field :total, Integer, null: true, authorize: :misspelled, **options
         define_method(:total) { 1 }
       end
       schema = conn_schema(connection)
-      expect(armory::Audit.(schema).problems).to eq([])
+      expect(armory::Audit.(schema).problems.map(&:kind)).to eq([:adapter])
       %i[ok no].each do |user|
         begin
           STDERR.puts "VP29 #{user}: #{run(schema, "{ conn { total } }", user).inspect}"
@@ -493,14 +493,14 @@ RSpec.describe "verification of the String subject and bad answer change" do
       expect { run(conn_schema(connection), "{ conn { total } }", :ok) }.to raise_error(Pundit::NotDefinedError)
     end
 
-    it "[preservation] 29c direct BaseConnection: authorize: :none is not listed among the bypasses" do
+    it "[preservation] 29c direct BaseConnection: authorize: :none is listed among the bypasses" do
       options = legacy
       connection = direct_connection do
         field :total, Integer, null: true, authorize: :none, reason: "VP-NOT-LISTED", **options
         define_method(:total) { 1 }
       end
       schema = conn_schema(connection)
-      expect(armory::Audit.(schema).bypasses.map(&:reason)).not_to include("VP-NOT-LISTED")
+      expect(armory::Audit.(schema).bypasses.map(&:reason)).to include("VP-NOT-LISTED")
       STDERR.puts "VP29c no: #{run(schema, "{ conn { total } }", :no).inspect}"
       STDERR.puts "VP29c ok: #{run(schema, "{ conn { total } }", :ok).inspect}"
     end
@@ -524,7 +524,7 @@ RSpec.describe "verification of the String subject and bad answer change" do
       expect(armory::Audit.(conn_schema(child)).problems.map(&:kind)).to include(:foreign_policy)
     end
 
-    it "[preservation] 31 direct BaseEdge: a missing action is silent, closed at runtime, :none not listed" do
+    it "[preservation] 31 direct BaseEdge: a missing action is reported, closed at runtime, :none listed" do
       plugin = armory
       field_klass = base_field
       options = legacy
@@ -546,8 +546,8 @@ RSpec.describe "verification of the String subject and bad answer change" do
       end
       schema = conn_schema(connection)
       report = armory::Audit.(schema)
-      expect(report.problems.map(&:to_s).join).not_to include("misspelled")
-      expect(report.bypasses.map(&:reason)).not_to include("VP-EDGE")
+      expect(report.problems.map(&:to_s).join).to include("misspelled")
+      expect(report.bypasses.map(&:reason)).to include("VP-EDGE")
       expect { run(schema, "{ conn { edges { rank } } }", :ok) }.to raise_error(armory::AdapterError, /misspelled/)
     end
 
