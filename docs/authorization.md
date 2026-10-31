@@ -161,7 +161,7 @@ load "tasks/graphql_armory.rake"
 
 **When it runs.** Only when you call it, through one of the three forms above. It never runs when the schema loads or during a request, and it sends nothing to your API's users. Your rules are what protect each request, and they run with or without the audit. The audit is a static check for the team that owns the schema: it reads the classes and tells you where a rule will not run. Put the spec or the rake task in CI, so a change that opens a hole fails the build. Nothing enforces this for you: an app that never runs the audit gets no warning.
 
-**What a pass means.** `report.ok?` means it found none of the problems below, not that every rule is correct: it checks that a rule exists and runs, not that your policy decides well. It also has limits, listed in [What the audit does not see](#what-happens-on-denial).
+**What a pass means.** `report.ok?` means it found none of the problems below, not that every rule is correct: it checks that a rule exists and runs, not that your policy decides well. It also has limits, listed in [What the audit does not see](#if-your-schema-defines-its-own-denial-hooks).
 
 **What it reports.** Each problem has a `kind`, a `path` and a `message`. Every declared bypass is listed apart, with its reason.
 
