@@ -8,12 +8,13 @@ module GraphQL
         class Substitute
           attr_reader :asked, :scoped_for
 
-          def initialize(allow: true, actor: nil, scoped: :itself.to_proc, raises: nil, raises_on_scope: nil)
+          def initialize(allow: true, actor: nil, scoped: :itself.to_proc, raises: nil, raises_on_scope: nil, raises_on_check: nil)
             @allow = allow
             @actor = actor
             @scoped = scoped
             @raises = raises
             @raises_on_scope = raises_on_scope
+            @raises_on_check = raises_on_check
             @asked = []
             @scoped_for = []
           end
@@ -37,6 +38,8 @@ module GraphQL
           end
 
           def check(_type, _rule)
+            raise @raises_on_check if @raises_on_check
+
             []
           end
         end

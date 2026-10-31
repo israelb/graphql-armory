@@ -174,6 +174,96 @@ RSpec.describe "audit of redefined arguments and static profiles" do
     end
   end
 
+  describe "the shadowed definition's own checks" do
+    def abstract_parent(&block)
+      field_klass = base_field
+      Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        class_eval(&block)
+      end
+    end
+
+    def declared_child(parent)
+      Class.new(parent) do
+        graphql_name "Doc"
+        field :notes, String, null: true, authorize: :manage, override_reason: "the parent's field is as strict"
+      end
+    end
+
+    it "reports a shadowed resolver's own authorized?" do
+      plugin = armory
+      open = Class.new(GraphQL::Schema::Resolver) do
+        include plugin::Base
+        graphql_name "OpenNotes"
+        type String, null: true
+        authorize :manage, model: ::Invoice
+        def authorized?(**) = true
+      end
+      child = declared_child(abstract_parent { field :notes, resolver: open })
+
+      expect(report(schema_for(query_of(child))).problems.map(&:kind)).to include(:own_check)
+    end
+
+    it "does not swallow an error raised while checking a shadowed field" do
+      plugin = armory
+      boom = plugin::Adapters::Substitute.new(allow: false, raises_on_check: plugin::ConfigurationError.new("boom"))
+      child = declared_child(abstract_parent { field :notes, String, null: true, authorize: :manage })
+      query = query_of(child)
+      schema = Class.new(base_schema) do
+        use plugin, adapter: boom
+        query query
+      end
+
+      expect { report(schema) }.to raise_error(plugin::ConfigurationError, "boom")
+    end
+  end
+
+  describe "a field inherited by a bypassed type" do
+    # graphql-ruby runs a field under its owner's rule, and the owner's type check never ran here: it is served.
+    it "is reported as served, not as denied" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true
+      end
+      child = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+      end
+      schema = schema_for(query_of(child))
+      root = Struct.new(:doc).new(Struct.new(:notes).new("SECRET"))
+      result = execute_query(schema, "{ doc { notes } }", root_value: root, context: { current_user: :someone }).to_h
+
+      problem = report(schema).problems.find { |candidate| candidate.path == "Doc.notes" }
+
+      expect(problem.kind).to eq(:field_without_rule)
+      expect(problem.message).to include("served with no check")
+      expect(result.dig("data", "doc", "notes")).to eq("SECRET")
+    end
+
+    it "still says denied when the parent has no rule of its own" do
+      plugin = armory
+      field_klass = base_field
+      parent = Class.new(GraphQL::Schema::Object) do
+        include plugin::Base
+        field_class field_klass
+        field :notes, String, null: true
+      end
+      child = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+      end
+      root = Struct.new(:doc).new(Struct.new(:notes).new("SECRET"))
+      schema = schema_for(query_of(child))
+      result = execute_query(schema, "{ doc { notes } }", root_value: root, context: { current_user: :someone }).to_h
+
+      expect(report(schema).problems.find { |candidate| candidate.path == "Doc.notes" }.message).to include("so it is denied")
+      expect(result.dig("data", "doc", "notes")).to be_nil
+    end
+  end
+
   describe "a redefined argument" do
     def filter_over_parent(**child_options)
       parent = Class.new(base_input) do

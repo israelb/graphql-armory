@@ -84,7 +84,7 @@ module GraphQL
 
             %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
             note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
-            type.all_field_definitions.each { |field| note_field_checks(found, field) }
+            Definitions.fields_at_every_level(type).each { |field| note_field_checks(found, field) }
           end
           @definitions.each do |type|
             next if type.introspection? || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
@@ -374,30 +374,21 @@ module GraphQL
         end
 
         # Every definition, the shadowed ones included: a hidden override falls back to them, so they serve requests too.
+        # Nothing here loads a field's type, so a shadowed field whose type cannot load raises nothing.
         def audit_fields(type, findings, model:, bypassed:, reported:)
           Definitions.fields_at_every_level(type).each do |field|
-            path = "#{type.graphql_name}.#{field.original_name}"
-            next audit_shadowed_field(type, field, path, findings, model: model, bypassed: bypassed, reported: reported) if Definitions.shadowed?(type, field)
-
-            audit_field(field, path, findings, model: model, bypassed: bypassed, reported: reported)
+            audit_field(type, field, "#{type.graphql_name}.#{field.original_name}", findings, model: model, bypassed: bypassed, reported: reported)
           end
         end
 
-        # A shadowed field whose type cannot load serves nothing, so it is skipped rather than failing the audit.
-        def audit_shadowed_field(type, field, path, findings, model:, bypassed:, reported:)
-          audit_field(field, path, findings, model: model, bypassed: bypassed, reported: reported)
-        rescue GraphQL::Error
-          raise unless Definitions.shadowed?(type, field)
-        end
-
-        def audit_field(field, path, findings, model:, bypassed:, reported:)
+        def audit_field(type, field, path, findings, model:, bypassed:, reported:)
           # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
           inherited = bypassed && interface_field?(field)
           return findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !inherited && !field.respond_to?(:armory_declared)
           return unless field.respond_to?(:armory_declared)
           return audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)
 
-          audit_declaration(field, path, findings, model: model, bypassed: bypassed && !inherited, reported: reported)
+          audit_declaration(type, field, path, findings, model: model, bypassed: bypassed && !inherited, reported: reported)
           audit_visibility(field, path, findings, model: model, reported: reported)
           audit_loads(field, path, findings)
           audit_arguments(field, path, findings, reported: reported)
@@ -425,17 +416,30 @@ module GraphQL
           check(path.split(".").first, model, Rule.new(field.armory_visible_when, attribute: field.original_name), findings, reported)
         end
 
-        def audit_declaration(field, path, findings, model:, bypassed:, reported:)
+        def audit_declaration(type, field, path, findings, model:, bypassed:, reported:)
           case (declared = field.armory_declared)
           when :none
             findings.bypass(path, field.armory_reason)
           when nil, true
-            if bypassed
+            if bypassed && served_by_owner?(type, field)
+              findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, but it is inherited from #{field.owner.name || field.owner.inspect}, whose rule the " \
+                                                          "field runs under: that rule did not run on this type, so the field is served with no check. Redeclare it here with authorize:, or remove it")
+            elsif bypassed
               findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, so it is denied")
             end
           else
             check(path.split(".").first, model, Rule.new(declared), findings, reported) if model
           end
+        end
+
+        # A field runs under its owner's rule, not the resolved type's. Inherited by a bypassed type from a parent whose
+        # rule covers it, graphql-ruby serves it after a type check that checked nothing.
+        def served_by_owner?(type, field)
+          owner = field.owner
+          return false if owner.equal?(type) || !owner.is_a?(Class) || !owner.respond_to?(:armory_rule)
+
+          rule = owner.armory_rule
+          !rule.nil? && (!rule.none? || rule.covers_fields?)
         end
 
         # An argument that declares a rule is listed (a bypass with its reason) or checked like a field's action.

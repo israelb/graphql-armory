@@ -58,7 +58,7 @@ The actor is `context[:current_user]`. A complete, tested version lives in [`exa
 | `field ..., authorize: :manage` | The field asks another question of the same policy. |
 | `authorize :none, reason: "..."` | Explicit bypass. A reason is required and appears in the audit. |
 
-A bypass does not propagate: a field of a bypassed type still needs its own rule, or it is denied.
+A bypass does not propagate: a field of a bypassed type still needs its own rule, or it is denied. One exception, which the audit names: a field runs under the rule of the class that defines it, so a field a bypassed subclass inherits from a parent with a rule is **served with no check**, because the parent's type check never ran on that record. Redeclare the field on the subclass, with `authorize:`, or remove it.
 
 ## What happens on denial
 
