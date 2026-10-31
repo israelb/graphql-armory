@@ -9,15 +9,18 @@ module GraphQL
         # Answers the core's four questions with CanCanCan's public API.
         #
         # The actor is an Ability: `context[:current_ability]`, else `Ability.new(context[:current_user])`
-        # (or the class given as `ability_class:`). It is built once per query.
+        # (or the class given as `ability_class:`, and the key given as `user_key:`). It is built once per query.
         #
         # A field that declares its own action (`authorize: :manage`) passes its attribute to `can?`: with
         # `can :read, User, [:username]`, `can?(:read, user)`
         # is true even though only one attribute is readable. Fields covered by their type's rule are not asked
         # about their attribute: declare an action on the ones an attribute rule must hide.
         class CanCan
-          def initialize(ability_class: nil)
+          def initialize(ability_class: nil, user_key: :current_user)
+            raise ArgumentError, "user_key must be a Symbol or a String, got #{user_key.class}" unless user_key.is_a?(Symbol) || user_key.is_a?(String)
+
             @ability_class = ability_class
+            @user_key = user_key
           end
 
           def actor(context)
@@ -86,7 +89,7 @@ module GraphQL
 
           def ability_for(context)
             store = context.namespace(:armory)
-            store[:cancan_ability] ||= ability_class.new(context[:current_user])
+            store[:cancan_ability] ||= ability_class.new(context[@user_key])
           end
 
           def ability_class

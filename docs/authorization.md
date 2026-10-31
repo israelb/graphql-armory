@@ -46,7 +46,7 @@ class AppSchema < GraphQL::Schema
 end
 ```
 
-The actor is `context[:current_user]`. A complete, tested version lives in [`examples/invoices.rb`](../examples/invoices.rb).
+The actor is `context[:current_user]`; for another key, pass `adapter: GraphQL::Armory::Authorization::Adapters::Pundit.new(user_key: :viewer)`. A complete, tested version lives in [`examples/invoices.rb`](../examples/invoices.rb).
 
 ## Rules
 
@@ -160,7 +160,8 @@ expect(AppSchema).to be_fully_authorized
 ```
 
 ```ruby
-# Rakefile (or a Rails task file): exits 1 when anything is uncovered
+# Exits 1 when anything is uncovered. In Rails the task loads by itself when the gem is required after Rails, as Bundler does.
+# Elsewhere, in the Rakefile:
 load "tasks/graphql_armory.rake"
 # bundle exec rake "graphql_armory:audit[AppSchema]"
 ```
@@ -227,7 +228,7 @@ Same schema, different adapter. Your types and fields do not change:
 use GraphQL::Armory::Authorization, adapter: :cancan
 ```
 
-The actor is `context[:current_ability]` (it wins over `current_user`), or `Ability.new(context[:current_user])` (pass `Adapters::CanCan.new(ability_class: MyAbility)` for another class). It is built once per query.
+The actor is `context[:current_ability]` (it wins over `current_user`), or `Ability.new(context[:current_user])` (`user_key:` names another key; pass `Adapters::CanCan.new(ability_class: MyAbility)` for another class). It is built once per query.
 
 | Question | CanCanCan call |
 |---|---|

@@ -10,6 +10,7 @@ gem "graphql", ENV["GRAPHQL_VERSION"] unless ENV.fetch("GRAPHQL_VERSION", "").em
 gem "activerecord", ">= 7.1"
 gem "cancancan", "~> 3.5"
 gem "pundit", "~> 2.3"
+gem "railties", ">= 7.1"
 gem "rake", "~> 13.0"
 gem "redis", ">= 4.8"
 gem "rspec", "~> 3.13"

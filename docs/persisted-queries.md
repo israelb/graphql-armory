@@ -101,7 +101,7 @@ class GraphqlController < ApplicationController
 end
 ```
 
-`PersistedQueries.operation_id(params)` reads the id where clients send it: `operationId`, `extensions.operationId`, or Apollo's `extensions.persistedQuery.sha256Hash` (`extensions` may be a JSON string, as in GET requests). The first one present wins, in that order. It answers nil when there is no id, or when it is not a non-empty String. Params must have String keys, as Rack and Rails params do. An empty `query` sent with an id (a GET request with `query=`) counts as no query.
+`PersistedQueries.operation_id(params)` reads the id where clients send it: `operationId`, `extensions.operationId`, Apollo's `extensions.persistedQuery.sha256Hash`, or Relay's `doc_id` (`extensions` may be a JSON string, as in GET requests). The first one present wins, in that order. It answers nil when there is no id, or when it is not a non-empty String. Params must have String keys, as Rack and Rails params do. An empty `query` sent with an id (a GET request with `query=`) counts as no query.
 
 What each request does:
 

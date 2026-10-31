@@ -137,7 +137,7 @@ module GraphQL
       end
 
       # The operation id a request sent, from Rack or Rails params: `operationId`, `extensions.operationId` or
-      # Apollo's `extensions.persistedQuery.sha256Hash` (`extensions` may arrive as a JSON string on GET).
+      # Apollo's `extensions.persistedQuery.sha256Hash`, or Relay's `doc_id` (`extensions` may arrive as a JSON string on GET).
       # Answers nil when there is none, or when it is not a non-empty String.
       def self.operation_id(params)
         params = plain(params)
@@ -146,7 +146,7 @@ module GraphQL
         extensions = plain(extensions)
         persisted_query = plain(extensions["persistedQuery"])
 
-        [params["operationId"], extensions["operationId"], persisted_query["sha256Hash"]].find do |candidate|
+        [params["operationId"], extensions["operationId"], persisted_query["sha256Hash"], params["doc_id"]].find do |candidate|
           candidate.is_a?(String) && !candidate.empty?
         end
       end

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `PersistedQueries.operation_id` now reads Relay's `doc_id`, so Relay clients need no change to send their id.
+- The Pundit and CanCanCan adapters take `user_key:`, for an app whose context holds the user under another key: `Adapters::Pundit.new(user_key: :viewer)`. It used to take a subclass.
+- In Rails, `rake graphql_armory:audit[YourSchema]` now loads by itself, through a Railtie that loads only when Rails is there. The task now runs the app's `:environment` when it runs, not only when it was defined before the task.
 - **Breaking.** A sink that raises no longer takes the request down: the gem's decision stands, the next sink runs, and the new `on_sink_error:` is called, which by default warns with the signal and the error's class. A monitoring failure used to become an API failure. If a record must exist before data is served, raise from `on_sink_error:` to fail closed as before. A sink's `Encoder::InvalidError` is no longer read as a forged ID.
 - **Breaking.** A sink that could never be called, such as `->(a) {}`, now raises `Telemetry::ConfigurationError` at boot. It used to fail on the first request.
 - A sink that requires three arguments now receives the query's context: `->(signal, data, context) { ... }`. It tells who was refused without a request-global. It reads through a view that cannot write to the context. Sinks of two arguments, `*arguments` or a defaulted third are unchanged and never receive it.
