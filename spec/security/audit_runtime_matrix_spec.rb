@@ -484,6 +484,241 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     end
   end
 
+  context "with a read that skips the user's scope" do
+    let(:doc) do
+      Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ArmoryMatrixDoc
+        field :notes, String, null: true
+      end
+    end
+
+    def holder_schema(&body)
+      item = doc
+      plugin = armory
+      holder = Class.new(base_object) do
+        graphql_name "Holder"
+        authorize :none, reason: "holder", covers_fields: true
+        define_singleton_method(:item) { item }
+        class_eval(&body)
+      end
+      query_class = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :none, reason: "root", covers_fields: true
+        field :holder, holder, null: true
+      end
+      Class.new(base_schema) do
+        use plugin, adapter: :pundit
+        query query_class
+      end
+    end
+
+    def kinds_at(schema, path)
+      armory::Audit.(schema).problems.select { |problem| problem.path.start_with?(path) }.map(&:kind)
+    end
+
+    it "does not say ok for a plain field's loads:" do
+      schema = holder_schema do
+        field_class GraphQL::Schema::Field
+        target = item
+        field(:pick, target, null: true) { argument :doc_id, GraphQL::Types::ID, loads: target }
+      end
+
+      expect(kinds_at(schema, "Holder.pick")).to eq([:unscoped_load])
+    end
+
+    it "leaves a plain field with a Base resolver's loads: to the resolver" do
+      plugin = armory
+      item = doc
+      resolver = Class.new(GraphQL::Schema::Resolver) do
+        include plugin::Base
+        graphql_name "Pick"
+        type item, null: true
+        authorize :read, model: ArmoryMatrixDoc
+        argument :doc_id, GraphQL::Types::ID, loads: item
+      end
+      schema = holder_schema do
+        field_class GraphQL::Schema::Field
+        field :pick, resolver: resolver
+      end
+
+      expect(kinds_at(schema, "Holder.pick")).not_to include(:unscoped_load)
+    end
+
+    it "does not say ok for a connection with scope: false" do
+      schema = holder_schema { field :docs, item.connection_type, null: true, scope: false }
+
+      expect(kinds_at(schema, "Holder.docs")).to eq([:unscoped_list])
+    end
+
+    it "does not say ok for a list with scope: false, on a plain field too" do
+      schema = holder_schema do
+        field :docs, [item], null: true, scope: false
+        field_class GraphQL::Schema::Field
+        field :plain_docs, [item], null: true, scope: false
+      end
+
+      expect(kinds_at(schema, "Holder.docs")).to eq([:unscoped_list])
+      expect(kinds_at(schema, "Holder.plain_docs")).to eq([:unscoped_list])
+    end
+
+    it "leaves scoped lists, a lone object and a list of scalars with scope: false alone" do
+      schema = holder_schema do
+        field :docs, [item], null: true
+        field :connection, item.connection_type, null: true
+        field :doc, item, null: true, scope: false
+        field :names, [String], null: true, scope: false
+      end
+
+      expect(armory::Audit.(schema).problems.map(&:kind)).not_to include(:unscoped_list)
+    end
+
+    context "with a hand-written list named like a generated one" do
+      def hand_connection(&body)
+        plugin = armory
+        field_base = base_field
+        Class.new(GraphQL::Schema::Object) do
+          include plugin::Base
+          field_class field_base
+          include GraphQL::Types::Relay::ConnectionBehaviors
+          graphql_name "HandConnection"
+          authorize :none, reason: "hand", covers_fields: true
+          class_eval(&body)
+        end
+      end
+
+      it "does not exempt one that reads its own method" do
+        item = doc
+        connection = hand_connection do
+          edge_type(item.edge_type, nodes_field: false)
+          field :nodes, [item, { null: true }], null: false, scope: false
+          define_method(:nodes) { [] }
+        end
+        schema = holder_schema { field :docs, connection, null: true }
+
+        expect(kinds_at(schema, "HandConnection.nodes")).to eq([:unscoped_list])
+      end
+
+      it "does not exempt one whose element is not the node" do
+        item = doc
+        other = Class.new(base_object) do
+          graphql_name "Other"
+          authorize :read, model: ArmoryMatrixDoc
+          field :notes, String, null: true
+        end
+        connection = hand_connection do
+          edge_type(item.edge_type, nodes_field: false)
+          field :nodes, [other, { null: true }], null: false, scope: false
+        end
+        schema = holder_schema { field :docs, connection, null: true }
+
+        expect(kinds_at(schema, "HandConnection.nodes")).to eq([:unscoped_list])
+      end
+    end
+
+    it "does not say ok for a connection type with connection: false" do
+      schema = holder_schema { field :docs, item.connection_type, null: true, connection: false, scope: false }
+
+      expect(kinds_at(schema, "Holder.docs")).to eq([:unscoped_list])
+    end
+
+    it "leaves a connection of scalars with scope: false alone" do
+      schema = holder_schema { field :names, GraphQL::Types::String.connection_type, null: true, scope: false }
+
+      expect(kinds_at(schema, "Holder.names")).to eq([])
+    end
+
+    context "with a resolver's loads:" do
+      let(:plain_resolver) do
+        item = doc
+        Class.new(GraphQL::Schema::Resolver) do
+          graphql_name "Peek"
+          type String, null: true
+          argument :doc_id, GraphQL::Types::ID, loads: item
+        end
+      end
+      let(:base_resolver) do
+        plugin = armory
+        item = doc
+        Class.new(GraphQL::Schema::Resolver) do
+          include plugin::Base
+          graphql_name "Peek"
+          type String, null: true
+          authorize :none, reason: "peek"
+          argument :doc_id, GraphQL::Types::ID, loads: item
+        end
+      end
+
+      it "does not say ok for a plain resolver on a Base field" do
+        resolver = plain_resolver
+        schema = holder_schema { field :peek, resolver: resolver, authorize: :none, reason: "r" }
+
+        expect(kinds_at(schema, "Holder.peek")).to eq([:unscoped_load])
+      end
+
+      it "does not say ok for an argument a plain field adds beside a Base resolver" do
+        resolver = base_resolver
+        target = doc
+        schema = holder_schema do
+          field_class GraphQL::Schema::Field
+          field(:peek, resolver: resolver) { argument :other_id, GraphQL::Types::ID, required: false, loads: target }
+        end
+
+        expect(armory::Audit.(schema).problems.map(&:path)).to include("Holder.peek(other_id)")
+      end
+
+      it "does not say ok for load_through_scope: false beside a Base resolver" do
+        resolver = base_resolver
+        target = doc
+        schema = holder_schema do
+          field(:peek, resolver: resolver, load_through_scope: false) { argument :other_id, GraphQL::Types::ID, required: false, loads: target }
+        end
+
+        expect(armory::Audit.(schema).problems.map(&:path)).to include("Holder.peek(other_id)")
+      end
+
+      it "leaves a Base resolver's own loads: on a Base field alone" do
+        resolver = base_resolver
+        schema = holder_schema { field :peek, resolver: resolver }
+
+        expect(armory::Audit.(schema).problems.map(&:kind)).not_to include(:unscoped_load)
+      end
+    end
+
+    it "does not raise on a shadowed plain field with a late-bound argument" do
+      parent = Class.new(base_object) do
+        graphql_name "Parent"
+        authorize :none, reason: "parent", covers_fields: true
+        field_class GraphQL::Schema::Field
+        field(:peek, String, null: true) { argument :input, GraphQL::Schema::LateBoundType.new("Nowhere"), required: false }
+      end
+      child = Class.new(parent) do
+        graphql_name "Child"
+        field :peek, String, null: true
+      end
+      plugin = armory
+      query_class = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :none, reason: "root", covers_fields: true
+        field :child, child, null: true
+      end
+      schema = Class.new(base_schema) do
+        use plugin, adapter: :pundit
+        query query_class
+      end
+
+      expect { armory::Audit.(schema) }.not_to raise_error
+    end
+
+    it "leaves the fields a connection generates alone" do
+      schema = holder_schema { field :docs, item.connection_type, null: true }
+      connection = doc.connection_type
+
+      expect(connection.fields["edges"].scoped?).to be(false)
+      expect(armory::Audit.(schema).problems.map(&:path)).not_to include(/edges|nodes/)
+    end
+  end
+
   context "with a direct Relay subclass" do
     let(:node) do
       Class.new(base_object) do

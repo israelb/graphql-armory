@@ -83,6 +83,8 @@ module GraphQL
           end
 
           def audit_field(type, field, path, model:, bypassed:, reported:)
+            audit_scope(type, field, path)
+            audit_loads(field, path)
             # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
             inherited = bypassed && interface_field?(field)
             if bypassed && !inherited && !field.respond_to?(:armory_declared)
@@ -95,7 +97,6 @@ module GraphQL
             audit_declaration(type, field, path, model: model, bypassed: bypassed && !inherited, reported: reported)
             audit_inherited_rule(type, field, path, model) if model
             audit_visibility(field, path, model: model, reported: reported)
-            audit_loads(field, path)
             audit_arguments(field.all_argument_definitions, path, reported: reported)
           end
 
@@ -194,12 +195,51 @@ module GraphQL
             @findings.problem(:model, path, error.message)
           end
 
-          def audit_loads(field, path)
-            return if field.armory_load_through_scope?
+          # A list that skips the scope hands over every record: a rule on each one hides its fields, not how many there are.
+          def audit_scope(type, field, path)
+            return if field.scoped? || generated_list?(type, field) || !list_of_records?(field)
 
-            opted_out_loads(field.all_argument_definitions, Set.new).each do |name|
+            @findings.problem(:unscoped_list, path, "skips the user's scope, with scope: false or a list type graphql-ruby does not detect, so a refused user sees how many records it holds: " \
+                                                    "remove the option, or write the type as [Type]")
+          end
+
+          # A connection applies the scope on the field that returns it, and graphql-ruby generates these two with scope: false.
+          # A hand-written one of the same name returns something else or reads another method.
+          def generated_list?(type, field)
+            owner = field.owner
+            return false unless Definitions.connection?(owner) && %i[edges nodes].include?(field.original_name)
+
+            element = field.type.unwrap
+            element = element.node_type if field.original_name == :edges && element.is_a?(Class) && element.include?(GraphQL::Types::Relay::EdgeBehaviors)
+            field.method_sym == field.original_name && element.equal?(owner.node_type) &&
+              type.instance_method(field.original_name).owner == GraphQL::Types::Relay::ConnectionBehaviors
+          end
+
+          def list_of_records?(field)
+            type = field.type
+            connection = Definitions.connection?(type.unwrap)
+            return false unless connection || field.connection? || (type.respond_to?(:list?) && type.list?)
+
+            # A late-bound element has no kind yet: it may be a record.
+            element = (type.unwrap.node_type if connection) || type.unwrap
+            !(element.respond_to?(:kind) && element.kind.leaf?)
+          rescue GraphQL::Error
+            false
+          end
+
+          # Whoever owns an argument loads it: the field, or its resolver. Only Base owners go through the scope.
+          def audit_loads(field, path)
+            arguments = field.all_argument_definitions.reject do |argument|
+              argument.owner.equal?(field) ? scoped_field?(field) : field.resolver.respond_to?(:armory_rule)
+            end
+
+            opted_out_loads(arguments, Set.new).each do |name|
               @findings.problem(:unscoped_load, "#{path}(#{name})", "loads through the app's object_from_id, not through the user's scope")
             end
+          end
+
+          def scoped_field?(field)
+            field.respond_to?(:armory_load_through_scope?) && field.armory_load_through_scope?
           end
 
           # Execution::Next loads `loads:` nested in input objects with the field's loader, so a field's opt-out
@@ -210,7 +250,7 @@ module GraphQL
               next [name] if argument.loads
 
               input = argument.type.unwrap
-              next [] unless input.kind.input_object? && seen.add?(input)
+              next [] unless input.respond_to?(:kind) && input.kind.input_object? && seen.add?(input)
 
               opted_out_loads(input.all_argument_definitions, seen, name)
             end
