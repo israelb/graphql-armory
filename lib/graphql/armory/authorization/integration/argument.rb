@@ -41,7 +41,10 @@ module GraphQL
           attr_reader :armory_declared, :armory_reason, :armory_visible_when, :armory_override_reason
 
           def armory_model
-            @armory_model || armory_field_model
+            return armory_field_model unless @armory_model
+            return @armory_model unless @armory_model.is_a?(String)
+
+            armory_named_model
           end
 
           def authorized?(object, value, context)
@@ -65,6 +68,13 @@ module GraphQL
           end
 
           private
+
+          # `is_a?` needs a Module, and Pundit reads a String as a record. A name with no constant stays a model name.
+          def armory_named_model
+            Object.const_get(@armory_model)
+          rescue NameError
+            @armory_model.to_sym
+          end
 
           def armory_field_model
             type = owner.respond_to?(:owner) ? owner.owner : owner

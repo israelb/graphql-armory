@@ -52,7 +52,7 @@ module GraphQL
 
           # The policy a rule that names none asks about this model.
           def found_policy(model)
-            finder(model).policy
+            finder(normalize(model)).policy
           end
 
           private
