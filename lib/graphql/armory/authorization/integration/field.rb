@@ -60,8 +60,13 @@ module GraphQL
               raise ConfigurationError, "#{owner.graphql_name}.#{original_name} uses visible_when:, so its type must include Base"
             end
 
-            rule = Rule.new(@armory_visible_when, attribute: original_name)
+            rule = Rule.new(@armory_visible_when, policy: armory_policy, attribute: original_name)
             super && Integration.visible?(owner.armory_model, rule, context)
+          end
+
+          # The `policy:` of the type that defines the field: a rule on the field asks it another question.
+          def armory_policy
+            owner.armory_rule&.policy if owner.respond_to?(:armory_rule)
           end
 
           def authorized?(object, args, context)
@@ -95,7 +100,7 @@ module GraphQL
             when :none
               Rule.none(reason: @armory_reason)
             else
-              Rule.new(@armory_declared, attribute: original_name)
+              Rule.new(@armory_declared, policy: armory_policy, attribute: original_name)
             end
           end
         end
