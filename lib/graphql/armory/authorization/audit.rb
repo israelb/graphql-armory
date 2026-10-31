@@ -121,12 +121,20 @@ module GraphQL
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
         # The interpreter asks the field's return type, Execution::Next the resolved object, and each path differs, so it
         # is reported wherever it is off, without judging whether it skips anything: declaring it takes one line.
-        def note_reauthorization(found, type)
+        def note_reauthorization(found, type, seen = [])
+          return if seen.include?(type)
+
+          seen << type
           readers = type.is_a?(Class) ? [type] : type.ancestors.select { |ancestor| ancestor.respond_to?(:reauthorize_scoped_objects, true) }
           readers.each { |reader| note_class_check(found, reader, :reauthorize_scoped_objects) }
 
           setter = reauthorization_setter(type)
           found[[setter, :reauthorize_scoped_objects]] = "#{setter.name || setter.inspect}.reauthorize_scoped_objects" if setter&.instance_variable_get(:@reauthorize_scoped_objects) == false
+          return unless relay_connection?(type) && setter.instance_variable_get(:@reauthorize_scoped_objects).nil?
+
+          # With no value of its own a connection answers its node's, and that node may not be in `schema.types`.
+          node = type.node_type
+          note_reauthorization(found, node, seen) if node
         end
 
         def relay_connection?(type)
@@ -134,8 +142,7 @@ module GraphQL
         end
 
         # The nearest that set the value, read from the classes so no method of the app runs: graphql-ruby's reader follows
-        # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's, which is
-        # audited as a type of its own.
+        # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's.
         def reauthorization_setter(type)
           return type if relay_connection?(type)
 

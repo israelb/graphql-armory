@@ -438,6 +438,38 @@ RSpec.describe "the audit and the app's own authorization checks" do
       expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
     end
 
+    it "reports the flag of a connection's node even when that node is absent from schema.types" do
+      schema = build(on_query: lambda do |query, invoice|
+        hidden = Class.new(GraphQL::Schema::Object) do
+          graphql_name "Hidden"
+          reauthorize_scoped_objects(false)
+          field :number, String, null: true
+        end
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "SwappedConnection"
+          edge_type(invoice.edge_type)
+          define_singleton_method(:node_type) { hidden }
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(schema.types.keys).not_to include("Hidden")
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "does not loop on a connection whose node is itself" do
+      schema = build(on_query: lambda do |query, invoice|
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "SelfConnection"
+          edge_type(invoice.edge_type)
+          define_singleton_method(:node_type) { self }
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema)).to eq([])
+    end
+
     it "reports the flag on a subclass of a named connection, whose node_type is reset to nil" do
       schema = build(on_query: lambda do |query, invoice|
         named = Class.new(GraphQL::Types::Relay::BaseConnection) do
