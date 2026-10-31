@@ -243,6 +243,72 @@ RSpec.describe "audit of redefined arguments and static profiles" do
       expect(result.dig("data", "doc", "notes")).to eq("SECRET")
     end
 
+    # `armory_rule_for` covers a field whose owner knows no rule at all; nothing checks it on the bypassed type.
+    it "is reported as served when the parent does not include Base" do
+      plugin = armory
+      field_klass = base_field
+      parent = Class.new(GraphQL::Schema::Object) do
+        field_class field_klass
+        field :notes, String, null: true
+      end
+      child = Class.new(parent) do
+        include plugin::Base
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+      end
+      schema = schema_for(query_of(child))
+      root = Struct.new(:doc).new(Struct.new(:notes).new("SECRET"))
+      result = execute_query(schema, "{ doc { notes } }", root_value: root, context: { current_user: :someone }).to_h
+
+      expect(report(schema).problems.find { |candidate| candidate.path == "Doc.notes" }.message).to include("served with no check")
+      expect(result.dig("data", "doc", "notes")).to eq("SECRET")
+    end
+
+    # graphql-ruby's own `Field#authorized?` answers true: a field class without Base checks nothing, own or inherited.
+    it "is reported as served when the field class does not include Base" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field_class GraphQL::Schema::Field
+        field :notes, String, null: true
+      end
+      child = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+        field_class GraphQL::Schema::Field
+        field :own, String, null: true
+      end
+      schema = schema_for(query_of(child))
+      root = Struct.new(:doc).new(Struct.new(:notes, :own).new("SECRET", "MINE"))
+      result = execute_query(schema, "{ doc { notes own } }", root_value: root, context: { current_user: :someone }).to_h
+      messages = report(schema).problems.select { |candidate| candidate.path.start_with?("Doc.") }.to_h { |problem| [problem.path, problem.message] }
+
+      expect(messages.fetch("Doc.notes")).to include("does not include Base", "served with no check")
+      expect(messages.fetch("Doc.own")).to include("does not include Base", "served with no check")
+      expect(result.dig("data", "doc").values).to eq(%w[SECRET MINE])
+    end
+
+    it "does not call authorize: true served, since it runs under the owner's rule" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true, authorize: true
+      end
+      doc = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+      end
+      schema = schema_for(query_of(doc))
+      root = Struct.new(:doc).new(Struct.new(:notes).new("SECRET"))
+      result = execute_query(schema, "{ doc { notes } }", root_value: root, context: { current_user: :someone }).to_h
+      problem = report(schema).problems.find { |candidate| candidate.path == "Doc.notes" }
+
+      expect(problem&.message.to_s).not_to include("served")
+      expect(result.dig("data", "doc", "notes")).to be_nil
+    end
+
     it "still says denied when the parent has no rule of its own" do
       plugin = armory
       field_klass = base_field

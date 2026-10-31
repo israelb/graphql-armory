@@ -384,7 +384,10 @@ module GraphQL
         def audit_field(type, field, path, findings, model:, bypassed:, reported:)
           # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
           inherited = bypassed && interface_field?(field)
-          return findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !inherited && !field.respond_to?(:armory_declared)
+          if bypassed && !inherited && !field.respond_to?(:armory_declared)
+            return findings.problem(:field_without_rule, path, "its field class does not include Base, so no rule runs on it: its type is bypassed and graphql-ruby's own " \
+                                                               "authorized? answers true, so the field is served with no check. Use a field class that includes Base")
+          end
           return unless field.respond_to?(:armory_declared)
           return audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)
 
@@ -421,7 +424,7 @@ module GraphQL
           when :none
             findings.bypass(path, field.armory_reason)
           when nil, true
-            if bypassed && served_by_owner?(type, field)
+            if bypassed && declared.nil? && served_by_owner?(type, field)
               findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, but it is inherited from #{field.owner.name || field.owner.inspect}, whose rule the " \
                                                           "field runs under: that rule did not run on this type, so the field is served with no check. Redeclare it here with authorize:, or remove it")
             elsif bypassed
@@ -433,10 +436,11 @@ module GraphQL
         end
 
         # A field runs under its owner's rule, not the resolved type's. Inherited by a bypassed type from a parent whose
-        # rule covers it, graphql-ruby serves it after a type check that checked nothing.
+        # rule covers it, or that knows no rule at all, graphql-ruby serves it after a type check that checked nothing.
         def served_by_owner?(type, field)
           owner = field.owner
-          return false if owner.equal?(type) || !owner.is_a?(Class) || !owner.respond_to?(:armory_rule)
+          return false if owner.equal?(type) || !owner.is_a?(Class)
+          return true unless owner.respond_to?(:armory_rule)
 
           rule = owner.armory_rule
           !rule.nil? && (!rule.none? || rule.covers_fields?)
