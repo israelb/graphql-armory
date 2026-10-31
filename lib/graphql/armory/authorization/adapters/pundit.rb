@@ -50,6 +50,11 @@ module GraphQL
             problems
           end
 
+          # The policy a rule that names none asks about this model.
+          def found_policy(model)
+            finder(model).policy
+          end
+
           private
 
           def policy_class(rule, subject)

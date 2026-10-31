@@ -52,7 +52,7 @@ Rules for the verifier's brief:
 - Negative control: each probe is labelled "security" (the feature must change its outcome) or "preservation" (existing behaviour or a schema that must stay clean). A security probe that passes on the branch runs again on the `origin/main` copy: if it also passes there, it did not exercise the feature and is reported as "no coverage", not as "holds". A preservation probe is expected to pass on both.
 - Finding a blocker does not end the verification: the whole probe list is run.
 - Probe files: the verifier keeps each spec-shaped file in a third `mktemp -d` directory that it does not remove, and reports that path with a one-line index of its files. Docker mounts only the scratch copy, so it copies them there to run them. These are the inputs for `spec/security/`.
-- Severity: a blocker is a realistic defect that reproduces and is not a documented limit. Silently ignoring an option with success is always a blocker. So is a refused user getting data while a declared rule does not run, whatever part of the code causes it, even outside the diff. A refusal for the wrong reason (right outcome, wrong rule or message) is an advisory.
+- Severity: a blocker is a realistic defect that reproduces, is not a documented limit, and this diff causes or leaves unfixed in what it claims to fix. Silently ignoring an option with success, or a refused user getting data, is always a blocker under that test. The same defect already on `origin/main` and outside what the PR claims to fix is a pre-existing finding: it does not stop the merge, and it must carry its reproduction and go to the backlog. A refusal for the wrong reason (right outcome, wrong rule or message) is an advisory.
 - Output: at most about 600 words of analysis; code blocks, the probe-file index and the environment report do not count. Per requirement a verdict of holds / broken / no coverage; each blocker with a minimal reproduction and expected versus actual; advisories separately; a `## Not probed` block naming the surfaces not explored; and a closing `## Key Learnings` block of 1 to 5 numbered facts. Any finding with a security effect, advisories included, carries the exact code that reproduces it and its cause, or says the cause is unknown.
 
 Before merging, the parent reproduces each finding with a security effect and knows its cause; a finding with an unknown cause is never merged past. A "holds" is read as "not broken by these probes", never as a guarantee. Whatever stays open, including the `## Not probed` surfaces that matter, is named to the user with its impact, as a risk and not as a detail.
@@ -93,9 +93,11 @@ next on 2.6, interpreter on 2.4; report any difference between them. Every secur
 in A runs again in B: if it also passes in B it is "no coverage", not "holds". Do not stop at the
 first blocker.
 
-Blocker = a realistic defect that reproduces and is not a documented limit; an option silently
-ignored with success is always a blocker, and so is a refused user getting data while a declared
-rule does not run, even outside the diff. Refusing for the wrong reason is an advisory.
+Blocker = a realistic defect that reproduces, is not a documented limit, and this diff causes or
+leaves unfixed in what it claims to fix; an option silently ignored with success, or a refused user
+getting data, is always a blocker under that test. The same defect already in B and outside what the
+PR claims to fix is a pre-existing finding: report it with its reproduction, it does not stop the
+merge. Refusing for the wrong reason is an advisory.
 
 Cleanup: `docker compose down --rmi local` (no -v) inside A and B, confirm their containers are
 gone, remove A and B and confirm, keep P.
@@ -107,7 +109,13 @@ actual, advisories apart, `## Not probed`, path of P with a one-line index of it
 code that reproduces it and its cause, or says the cause is unknown.
 ```
 
-Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers. A new finding does not earn another round; open blockers after that become one decision for the user.
+Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Open blockers after that become one decision for the user. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier stays on `opus`, so another model reviews the code.
+
+Depth by change: security behavior gets the full verifier and that recheck. Docs get their claims checked against the code on `sonnet`, with no probe list.
+
+**Audit-versus-runtime matrix.** `spec/security/audit_runtime_matrix_spec.rb` crosses where a rule lives, where its `policy:` lives and whether a bypass applies, on both engines. Its invariant: if a refused user gets the data, the audit must not say ok. A finding of a new shape adds a shape to it, not only a spec of its own.
+
+**Backlog.** Pre-existing findings with a security effect are listed in the private notes with their reproduction, and each gets a shape in the matrix. Before a release, each open one is fixed, documented as a limit, or accepted by the user by name. None is published silently.
 
 ## Releases: CHANGELOG and tags
 

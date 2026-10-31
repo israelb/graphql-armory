@@ -38,6 +38,7 @@ module GraphQL
         def call(schema)
           findings = Findings.new
           @definitions = Definitions.(schema)
+          @foreign_policies = Set.new
           if schema.respond_to?(:armory_configuration) && schema.armory_configuration
             audit_denial_hooks(schema, findings)
             audit_own_checks(schema, findings)
@@ -279,6 +280,7 @@ module GraphQL
           elsif rule.none?
             findings.bypass(path, rule.reason)
             audit_fields(type, findings, model: nil, bypassed: !rule.covers_fields?, reported: Set.new)
+            audit_foreign_policies(type, rule.policy, findings) if rule.policy
           elsif (answer = graphql_ruby_answer(type, :authorized?))
             findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers authorized? here, so this rule never runs: " \
                                                   "put the rule on the field that returns it (on a root field, on a resolver: a field rule asks " \
@@ -288,6 +290,7 @@ module GraphQL
             reported = Set.new
             check(path, model, rule, findings, reported) if model
             check(path, model, Rule.new(rule.visible_when, policy: rule.policy), findings, reported) if model && rule.visible_when
+            audit_foreign_policies(type, rule.policy, findings) if rule.policy
             audit_fields(type, findings, model: model, bypassed: false, reported: reported)
           end
         end
@@ -401,6 +404,7 @@ module GraphQL
         def audit_resolver(field, path, findings)
           resolver = field.resolver
           rule = resolver.armory_rule
+          audit_foreign_arguments(field.all_argument_definitions, path, rule.policy, findings, Set.new) if rule&.policy
           return findings.problem(:no_rule, path, "its mutation or resolver declares no `authorize`, so it is denied") if rule.nil?
           return findings.bypass(path, rule.reason) if rule.none?
 
@@ -433,6 +437,53 @@ module GraphQL
           else
             check(path.split(".").first, model, Rule.new(declared, policy: field.armory_policy), findings, reported) if model
           end
+        end
+
+        # A rule asks the policy of the class that defines it, and a field never sees its resolved type: a rule on an
+        # interface, a parent, an input object or a plain resolver does not ask the `policy:` of the type that uses it.
+        def audit_foreign_policies(type, policy, findings)
+          Definitions.fields_at_every_level(type).each do |field|
+            path = "#{type.graphql_name}.#{field.original_name}"
+            note_foreign_policy(field, path, policy, findings, model_or_nil(type)) if field.respond_to?(:armory_declared)
+            audit_foreign_arguments(field.all_argument_definitions, path, policy, findings, Set.new)
+          end
+        end
+
+        # A class without Base has no rule of its own, but what it leads to still runs its rules. A Base resolver's own
+        # arguments ask the resolver's policy, on purpose; the input objects they take do not.
+        def audit_foreign_arguments(arguments, path, policy, findings, seen)
+          arguments.each do |argument|
+            if argument.respond_to?(:armory_declared) && !argument.owner.respond_to?(:armory_rule)
+              note_foreign_policy(argument, "#{path}(#{argument.keyword})", policy, findings, model_or_nil(argument))
+            end
+            input = argument.type.unwrap
+            next unless input.respond_to?(:kind) && input.kind.input_object? && seen.add?(input)
+
+            audit_foreign_arguments(input.all_argument_definitions, path, policy, findings, seen)
+          end
+        end
+
+        def note_foreign_policy(member, path, policy, findings, model)
+          ruled = member.armory_visible_when || ![nil, :none].include?(member.armory_declared)
+          return if !ruled || asks_policy?(member, policy, model) || !@foreign_policies.add?([member, path, policy])
+
+          asked = member.armory_policy || "the policy found from the record"
+          findings.problem(:foreign_policy, path, "its rule asks #{asked}, not #{policy}, the `policy:` of this type: it is defined on a class that does not name that policy. " \
+                                                  "Move the rule to the class that names it and remove the original, or name the `policy:` on the class that defines the rule, if it can hold one")
+        end
+
+        # With no `policy:` of its own, a rule asks what the adapter finds from the model, which may be the same policy.
+        def asks_policy?(member, policy, model)
+          asked = member.armory_policy
+          return asked.equal?(policy) if asked
+
+          !model.nil? && adapter.respond_to?(:found_policy) && adapter.found_policy(model).equal?(policy)
+        end
+
+        def model_or_nil(owner)
+          owner.armory_model
+        rescue ConfigurationError
+          nil
         end
 
         # A field runs under its owner's rule, not the resolved type's. Inherited by a bypassed type from a parent whose
