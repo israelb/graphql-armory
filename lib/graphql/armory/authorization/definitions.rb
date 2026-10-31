@@ -42,6 +42,13 @@ module GraphQL
         end
         private_class_method :directive_types
 
+        # `introspection(true)` is a flag anyone can set, and graphql-ruby serves such a type like any other. The `__` prefix
+        # is reserved for introspection by the GraphQL spec: built-in types, what `Schema.introspection` replaces them with,
+        # and their copies all carry it.
+        def self.introspection?(type)
+          type.introspection? && type.graphql_name.start_with?("__")
+        end
+
         def self.connection?(type)
           type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
         end

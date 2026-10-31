@@ -18,7 +18,7 @@ module GraphQL
 
           def call(schema, definitions)
             definitions.each do |type|
-              next if type.introspection?
+              next if Definitions.introspection?(type)
 
               note_type(type)
               note_arguments(type.graphql_name, type.all_argument_definitions) if type.kind.input_object?

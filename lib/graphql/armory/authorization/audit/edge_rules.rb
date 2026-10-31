@@ -21,7 +21,7 @@ module GraphQL
 
           def self.nodes_field_beside?(edge, definitions)
             definitions.any? do |type|
-              next false unless type.kind.object? && !type.introspection?
+              next false unless type.kind.object? && !Definitions.introspection?(type)
 
               fields = type.all_field_definitions
               fields.any? { |field| field.graphql_name == "nodes" } &&

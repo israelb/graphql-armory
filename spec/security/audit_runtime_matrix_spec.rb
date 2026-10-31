@@ -329,6 +329,130 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     expect(armory::Audit.(schema_of(type)).problems.map(&:kind)).not_to include(:foreign_model)
   end
 
+  it "does not say ok for an app's type marked as introspection" do
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc
+      field :notes, String, null: true
+      introspection(true)
+      reauthorize_scoped_objects(false)
+    end
+
+    expect(armory::Audit.(schema_of(type)).ok?).to be(false)
+  end
+
+  it "does not say ok for a redefinition on a type that inherits graphql-ruby's introspection base" do
+    plugin = armory
+    field_base = base_field
+    parent = Class.new(GraphQL::Introspection::BaseObject) do
+      include plugin::Base
+      field_class field_base
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc
+      field :notes, String, null: true
+    end
+    type = Class.new(parent) do
+      graphql_name "Doc"
+      field :notes, String, null: true, authorize: :manage
+    end
+
+    expect(armory::Audit.(schema_of(type)).ok?).to be(false)
+  end
+
+  it "leaves graphql-ruby's own introspection types alone" do
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc
+      field :notes, String, null: true
+    end
+
+    expect(armory::Audit.(schema_of(type)).ok?).to be(true)
+  end
+
+  it "does not say ok when a Base resolver's argument asks another policy than the type's" do
+    plugin = armory
+    argument_base = base_argument
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      include plugin::Base
+      argument_class argument_base
+      graphql_name "Via"
+      type String, null: true
+      authorize :read, model: ArmoryMatrixDoc
+      argument :raw, GraphQL::Types::Boolean, required: false, authorize: :manage
+      define_method(:resolve) { |**| "SECRET" }
+    end
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc, policy: ArmoryMatrixStrictPolicy
+      field :via, resolver: resolver
+    end
+    schema = schema_of(type)
+    response = execute_query(schema, "{ doc { via(raw: true) } }", root_value: Struct.new(:doc).new(ArmoryMatrixDoc.new), context: { current_user: :someone }).to_h
+
+    expect(response.dig("data", "doc", "via")).to eq("SECRET")
+    expect(armory::Audit.(schema).problems.map(&:kind)).to include(:foreign_policy)
+  end
+
+  it "stays quiet for a Base resolver's argument under the policy the resolver and the type share" do
+    plugin = armory
+    argument_base = base_argument
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      include plugin::Base
+      argument_class argument_base
+      graphql_name "Via"
+      type String, null: true
+      authorize :read, model: ArmoryMatrixDoc, policy: ArmoryMatrixStrictPolicy
+      argument :raw, GraphQL::Types::Boolean, required: false, authorize: :manage
+    end
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc, policy: ArmoryMatrixStrictPolicy
+      field :via, resolver: resolver
+    end
+
+    expect(armory::Audit.(schema_of(type)).problems.map(&:kind)).not_to include(:foreign_policy)
+  end
+
+  it "does not say ok when a Base resolver's own rule asks another policy than the type's" do
+    plugin = armory
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      include plugin::Base
+      graphql_name "Via"
+      type String, null: true
+      authorize :manage, model: ArmoryMatrixDoc
+      define_method(:resolve) { |**| "SECRET" }
+    end
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc, policy: ArmoryMatrixStrictPolicy
+      field :via, resolver: resolver
+    end
+    schema = schema_of(type)
+    response = execute_query(schema, "{ doc { via } }", root_value: Struct.new(:doc).new(ArmoryMatrixDoc.new), context: { current_user: :someone }).to_h
+
+    expect(response.dig("data", "doc", "via")).to eq("SECRET")
+    expect(armory::Audit.(schema).problems.map(&:kind)).to include(:foreign_policy)
+  end
+
+  it "leaves a schema that replaces a built-in introspection type alone" do
+    replacement = Module.new
+    replacement.const_set(:EnumValueType, Class.new(GraphQL::Introspection::BaseObject) do
+      graphql_name "__EnumValue"
+      field :name, String, null: false, method: :graphql_name
+      field :description, String, null: true
+      field :is_deprecated, GraphQL::Types::Boolean, null: false
+      field :deprecation_reason, String, null: true
+    end)
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc
+      field :notes, String, null: true
+    end
+    schema = Class.new(schema_of(type)) { introspection replacement }
+
+    expect(armory::Audit.(schema).ok?).to be(true)
+  end
+
   it "does not serve a record whose klass method names a laxer model" do
     type = Class.new(base_object) do
       graphql_name "Doc"

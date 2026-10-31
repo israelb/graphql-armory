@@ -22,7 +22,7 @@ module GraphQL
 
           def call(schema)
             @definitions.each do |type|
-              next if type.introspection?
+              next if Definitions.introspection?(type)
 
               note_redefinitions(type.graphql_name, type.ancestors, :own_fields, :original_name)
               note_redefinitions(type.graphql_name, type.ancestors, :own_arguments, :graphql_name) if type.kind.input_object?

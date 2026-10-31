@@ -10,7 +10,7 @@ module GraphQL
         module InterfaceRules
           def self.call(definitions, findings)
             definitions.each do |type|
-              audit(type, definitions, findings) if type.kind.interface? && !type.introspection?
+              audit(type, definitions, findings) if type.kind.interface? && !Definitions.introspection?(type)
             end
           end
 

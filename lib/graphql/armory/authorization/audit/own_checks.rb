@@ -21,20 +21,20 @@ module GraphQL
 
           def call(declared)
             @definitions.each do |type|
-              next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
+              next unless type.kind.object? && !Definitions.introspection?(type) && type.respond_to?(:armory_rule)
 
               %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(type, name) }
               note_class_check(type, :visible?) if type.armory_rule&.visible_when
               Definitions.fields_at_every_level(type).each { |field| note_field_checks(field) }
             end
             @definitions.each do |type|
-              next if type.introspection? || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
+              next if Definitions.introspection?(type) || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
 
               note_class_check(type, :scope_items)
               note_reauthorization(type)
             end
             @definitions.each do |type|
-              next unless type.kind.input_object? && !type.introspection?
+              next unless type.kind.input_object? && !Definitions.introspection?(type)
 
               %i[authorized? unauthorized_object].each { |name| note_class_check(type, name) }
               note_argument_checks(type.all_argument_definitions)
