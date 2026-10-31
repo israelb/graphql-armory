@@ -29,9 +29,9 @@ module GraphQL
           end
 
           def scope(user, items, rule)
-            return items.select { |item| authorized?(user, item, rule) == true } if items.is_a?(Array)
+            return items.select { |item| true.equal?(authorized?(user, item, rule)) } if items.is_a?(Array)
 
-            policy = policy_class(rule, normalize(rule.model) || items)
+            policy = policy_class(rule, normalize(rule.model) || record_target(items))
             scope_class = scope_constant(policy)
             raise MissingScopeError, "#{policy} has no Scope class" if scope_class.nil?
 
@@ -67,11 +67,22 @@ module GraphQL
 
             model = normalize(rule.model) if rule.model
             declared = finder(model).policy if model
-            own = finder(policy_subject(subject)).policy
+            target = model_named?(subject, model) ? subject : record_target(subject)
+            own = finder(target).policy
             return [declared, own].compact.uniq if own
             return [declared] if declared && kind_of_model?(subject, model)
 
-            raise ::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}"
+            raise ::Pundit::NotDefinedError, "no policy found for #{subject_name(target)}"
+          end
+
+          # A Symbol names a policy only when it is the `model:` the schema author wrote: any other is a record, maybe the
+          # client's text, as a String is.
+          def model_named?(subject, model)
+            Symbol === subject && subject.equal?(model)
+          end
+
+          def record_target(subject)
+            Symbol === subject ? ::Symbol : policy_subject(subject)
           end
 
           # Only a record of the model inherits its policy: anything else with no policy of its own raises, as it always did.

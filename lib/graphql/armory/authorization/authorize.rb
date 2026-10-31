@@ -31,8 +31,13 @@ module GraphQL
         private
 
         def bypass(subject, rule)
-          telemetry.record(:bypassed, type: subject.class.name, reason: rule.reason)
+          telemetry.record(:bypassed, type: class_name(subject), reason: rule.reason)
           true
+        end
+
+        # The record's own `class` can be a data member, and the error for it quotes the record.
+        def class_name(subject)
+          ::Kernel.instance_method(:class).bind_call(subject).name
         end
 
         def decide(subject, rule, context)
@@ -41,7 +46,7 @@ module GraphQL
           case answer
           when true, false, nil
             allowed = answer == true
-            telemetry.record(allowed ? :allowed : :denied, type: subject.class.name, action: rule.action)
+            telemetry.record(allowed ? :allowed : :denied, type: class_name(subject), action: rule.action)
             allowed
           else
             # The class alone: the answer may be the record, and on a relation `inspect` runs the query.
