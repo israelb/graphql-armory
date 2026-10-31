@@ -17,10 +17,11 @@ module GraphQL
         # The question is asked of the parent object when it is an instance of the model, else of the model's
         # class (a root field has no record). The model is the one the field's type wraps, or `model:`.
         module Argument
-          def initialize(*args, authorize: nil, reason: nil, model: nil, visible_when: nil, **kwargs, &block)
+          def initialize(*args, authorize: nil, reason: nil, model: nil, visible_when: nil, override_reason: nil, **kwargs, &block)
             unless [nil, :none].include?(authorize) || authorize.is_a?(Symbol)
               raise ArgumentError, "an argument's `authorize:` is an action or :none, not #{authorize.inspect}"
             end
+            raise ConfigurationError, "override_reason: must say why the override is safe" if !override_reason.nil? && override_reason.to_s.strip.empty?
 
             if authorize && authorize != :none && kwargs.key?(:default_value)
               raise ArgumentError,
@@ -32,11 +33,12 @@ module GraphQL
             @armory_reason = reason
             @armory_model = model
             @armory_visible_when = visible_when&.to_sym
+            @armory_override_reason = override_reason
             Rule.none(reason: reason) if authorize == :none
             super(*args, **kwargs, &block)
           end
 
-          attr_reader :armory_declared, :armory_reason, :armory_visible_when
+          attr_reader :armory_declared, :armory_reason, :armory_visible_when, :armory_override_reason
 
           def armory_model
             @armory_model || armory_field_model

@@ -11,7 +11,7 @@ module GraphQL
       module Definitions
         def self.call(schema)
           found = Set.new.compare_by_identity
-          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *schema.types.values]
+          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *listed_types(schema)]
           until pending.empty?
             type = pending.pop
             next if !type.respond_to?(:kind) || !found.add?(type)
@@ -20,6 +20,14 @@ module GraphQL
           end
           found.to_a
         end
+
+        # With only static profiles, graphql-ruby refuses to list types without naming one: the roots still lead everywhere.
+        def self.listed_types(schema)
+          schema.types.values
+        rescue ArgumentError
+          []
+        end
+        private_class_method :listed_types
 
         def self.connection?(type)
           type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)

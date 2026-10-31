@@ -124,36 +124,55 @@ module GraphQL
         # rule, arguments, return type and extensions. Many things can hide it (the field, its resolver, its return type,
         # the schema) and only a request knows, so every redefinition is reported until it declares `override_reason:`.
         def audit_overrides(schema, findings)
-          paths = {}.compare_by_identity
-          falling_back = {}.compare_by_identity
+          @override_paths = {}.compare_by_identity
+          @falling_back = {}.compare_by_identity
           @definitions.each do |type|
             next if type.introspection?
 
-            levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
-            levels.flat_map { |level| level.own_fields.keys }.uniq.each do |name|
-              definitions = levels.filter_map { |level| [level.own_fields[name]].flatten if level.own_fields.key?(name) }
-              definitions.flatten.each { |field| paths[field] ||= "#{type.graphql_name}.#{field.original_name}" }
-              fall_back_from(definitions).each { |field| falling_back[field] ||= "#{type.graphql_name}.#{field.original_name}" }
+            note_redefinitions(type.graphql_name, type.ancestors, :own_fields, :original_name)
+            note_redefinitions(type.graphql_name, type.ancestors, :own_arguments, :graphql_name) if type.kind.input_object?
+            next unless type.respond_to?(:all_field_definitions)
+
+            type.all_field_definitions.each do |field|
+              levels = [field] + (field.resolver ? field.resolver.ancestors : [])
+              note_redefinitions("#{type.graphql_name}.#{field.original_name}", levels, :own_arguments, :graphql_name)
             end
           end
-          paths.each do |field, path|
-            falls_back = !schema.visibility && falling_back.key?(field)
-            note_override(findings, falls_back ? falling_back[field] : path, field, falls_back)
+          no_fallback = visibility_without_fallback?(schema)
+          @override_paths.each do |member, path|
+            falls_back = !no_fallback && @falling_back.key?(member)
+            note_override(findings, falls_back ? @falling_back[member] : path, member, falls_back)
           end
         end
 
-        # Nearest level first. Only a lone definition on the farthest level has nothing to fall back to.
-        def fall_back_from(definitions)
-          definitions.last.size == 1 ? definitions.flatten[0...-1] : definitions.flatten
+        # Nearest level first; only a lone definition on the farthest level has nothing to fall back to.
+        def note_redefinitions(prefix, ancestors, reader, name_reader)
+          levels = ancestors.select { |ancestor| ancestor.respond_to?(reader) }
+          levels.flat_map { |level| level.public_send(reader).keys }.uniq.each do |name|
+            definitions = levels.filter_map { |level| [level.public_send(reader)[name]].flatten if level.public_send(reader).key?(name) }
+            definitions.flatten.each { |member| @override_paths[member] ||= "#{prefix}.#{member.public_send(name_reader)}" }
+            falling = definitions.last.size == 1 ? definitions.flatten[0...-1] : definitions.flatten
+            falling.each { |member| @falling_back[member] ||= "#{prefix}.#{member.public_send(name_reader)}" }
+          end
         end
 
-        def note_override(findings, path, field, falls_back)
-          reason = field.armory_override_reason if field.respond_to?(:armory_override_reason)
+        # graphql-ruby skips the fallback only when the request carries a visibility profile. A static profile runs with a
+        # plain Hash, so only `Schema::Visibility` with no profiles, and not turned off below, rules the fallback out.
+        def visibility_without_fallback?(schema)
+          visibility = schema.visibility
+          return false unless visibility
+          return false if schema.respond_to?(:use_visibility_profile?) && !schema.use_visibility_profile?
+
+          visibility.instance_variable_get(:@profiles).to_h.empty?
+        end
+
+        def note_override(findings, path, member, falls_back)
+          reason = member.armory_override_reason if member.respond_to?(:armory_override_reason)
           if falls_back && reason
             findings.bypass(path, reason)
           elsif falls_back
-            findings.problem(:ignored_rule, path, "redefines a field: hidden from a user, it falls back to the other definition, and its own rule, arguments, return type and extensions do not apply. " \
-                                                  "Remove one, use Schema::Visibility, or declare override_reason:")
+            findings.problem(:ignored_rule, path, "is defined more than once: hidden from a user, it falls back to the other definition, and its own rule, arguments, type and extensions do not apply. " \
+                                                  "Remove one, use Schema::Visibility with dynamic: true and no profiles, or declare override_reason:")
           elsif reason
             findings.problem(:ignored_rule, path, "declares override_reason: but nothing falls back from it: remove it")
           end
