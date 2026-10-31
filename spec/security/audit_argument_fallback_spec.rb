@@ -239,8 +239,46 @@ RSpec.describe "audit of redefined arguments and static profiles" do
       problem = report(schema).problems.find { |candidate| candidate.path == "Doc.notes" }
 
       expect(problem.kind).to eq(:field_without_rule)
-      expect(problem.message).to include("served with no check")
+      expect(problem.message).to include("served with no check", "Give it authorize: where it is defined")
+      expect(problem.message).not_to include("Redeclare")
       expect(result.dig("data", "doc", "notes")).to eq("SECRET")
+    end
+
+    it "clears, and refuses the user, once the parent's field has its own rule, as the message asks" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true, authorize: :read
+      end
+      child = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+      end
+      schema = schema_for(query_of(child))
+      root = Struct.new(:doc).new(Struct.new(:notes).new("SECRET"))
+      result = execute_query(schema, "{ doc { notes } }", root_value: root, context: { current_user: :someone }).to_h
+
+      expect(report(schema).problems.map(&:path)).not_to include("Doc.notes")
+      expect(result.dig("data", "doc", "notes")).to be_nil
+    end
+
+    it "still reports the parent's definition when the child redeclares the field with a rule" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true
+      end
+      child = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :none, reason: "public"
+        field :notes, String, null: true, authorize: :read
+      end
+
+      messages = report(schema_for(query_of(child))).problems.select { |candidate| candidate.path == "Doc.notes" }.map(&:message)
+
+      expect(messages).to include(a_string_including("served with no check"))
     end
 
     # `armory_rule_for` covers a field whose owner knows no rule at all; nothing checks it on the bypassed type.

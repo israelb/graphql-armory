@@ -425,8 +425,8 @@ module GraphQL
             findings.bypass(path, field.armory_reason)
           when nil, true
             if bypassed && declared.nil? && served_by_owner?(type, field)
-              findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, but it is inherited from #{field.owner.name || field.owner.inspect}, whose rule the " \
-                                                          "field runs under: that rule did not run on this type, so the field is served with no check. Redeclare it here with authorize:, or remove it")
+              findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, but it is inherited from #{field.owner.name || field.owner.inspect}: a field runs " \
+                                                          "under the class that defines it, and no rule ran on this type, so the field is served with no check. Give it authorize: where it is defined, or remove it")
             elsif bypassed
               findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, so it is denied")
             end
