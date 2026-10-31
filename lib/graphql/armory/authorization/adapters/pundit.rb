@@ -8,7 +8,7 @@ module GraphQL
       module Adapters
         # Answers the core's four questions with Pundit's public API.
         #
-        # The policy is found from the model through Pundit::PolicyFinder, so `policy_class`
+        # The policy is found from the model's class through Pundit::PolicyFinder, so `self.policy_class`
         # overrides and namespaced models work. A policy must answer `true`, `false` or `nil`:
         # anything else (a lazy, a record) is handed back as is and the core refuses it.
         class Pundit
@@ -58,7 +58,17 @@ module GraphQL
           private
 
           def policy_class(rule, subject)
-            rule.policy || finder(subject).policy || raise(::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}")
+            rule.policy || finder(policy_subject(subject)).policy || raise(::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}")
+          end
+
+          # Pundit asks the object for `policy_class` and `model_name`, and reads an Array as a namespace. A record's
+          # answers can be the client's data (an OpenStruct from JSON), so only its class is asked. A relation's class
+          # names no model, so its `klass` is read, but only on a real relation: `klass` on anything else is an answer too.
+          def policy_subject(subject)
+            return subject if Module === subject || Symbol === subject
+            return subject.klass if defined?(::ActiveRecord::Relation) && ::ActiveRecord::Relation === subject
+
+            ::Kernel.instance_method(:class).bind_call(subject)
           end
 
           # Never `inspect`: Pundit's own message quotes the record, and on a relation it runs the query.
