@@ -360,7 +360,7 @@ RSpec.describe "recheck of the String model correction" do
       expect(answer).to match(/RAISED Pundit::NotDefinedError/)
     end
 
-    it "[preservation] 5b D2: a misspelled action on a resolver's argument passes the audit, raises, never serves" do
+    it "[preservation] 5b D2: a misspelled action on a resolver's argument is reported, raises, never serves" do
       plugin = armory
       arg = base_argument
       resolver = Class.new(GraphQL::Schema::Resolver) do
@@ -373,7 +373,7 @@ RSpec.describe "recheck of the String model correction" do
         def resolve(**) = "SECRET"
       end
       schema = schema_of(query_with { field :text, resolver: resolver })
-      expect(armory::Audit.(schema).problems).to eq([])
+      expect(armory::Audit.(schema).problems.map(&:kind)).to eq([:adapter])
       expect(outcome { rooted(schema, :admin) }).to match(/RAISED GraphQL::Armory::Authorization::AdapterError.*misspelled/)
     end
 

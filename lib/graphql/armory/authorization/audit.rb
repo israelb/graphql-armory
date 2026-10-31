@@ -74,9 +74,14 @@ module GraphQL
 
         private
 
+        # PageInfo holds no data of the app, until a subclass adds a field.
+        def extended_page_info?(type)
+          type < GraphQL::Types::Relay::PageInfo && !type.own_fields.empty?
+        end
+
         def audited_types(definitions)
           definitions.select do |type|
-            type.kind.object? && !Definitions.introspection?(type) && RELAY_TYPES.none? { |relay| type <= relay }
+            type.kind.object? && !Definitions.introspection?(type) && (extended_page_info?(type) || RELAY_TYPES.none? { |relay| type <= relay })
           end
         end
 

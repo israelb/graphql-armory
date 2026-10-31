@@ -127,6 +127,7 @@ module GraphQL
             rule = resolver.armory_rule
             @foreign_policies.arguments(field.all_argument_definitions, path, rule.policy, Set.new) if rule&.policy
             return @findings.problem(:no_rule, path, "its mutation or resolver declares no `authorize`, so it is denied") if rule.nil?
+            audit_arguments(field, path, reported: Set.new)
             return @findings.bypass(path, rule.reason) if rule.none?
 
             model = begin

@@ -117,7 +117,7 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
 - A type no definition leads to. The audit follows the schema's roots, `orphan_types` and what each definition references (fields, arguments, interfaces, union members, a connection's node), not filtering by `visible?`, so types hidden with no request and every definition of a duplicated name are audited. A type that only your own `resolve_type` returns, listed nowhere, is not seen. Also not seen: the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly, except for `:foreign_policy`. So its missing policy actions fail at runtime, closed, and an `authorize: :none` on such a field is not listed among the bypasses.
-- A missing policy action on a field of a bypassed type, or on a resolver's argument. The audit does not ask the policy there, so a misspelled action passes it and raises at runtime instead of serving.
+- A missing policy action on a field of a bypassed type. The audit does not ask the policy there, so a misspelled action passes it and raises at runtime instead of serving.
 - A shadowed definition whose argument names a type that cannot load makes the audit raise `ArgumentError`. A late-bound type that never resolves is skipped instead, with no problem reported.
 - `authorize: true` on a field a bypassed type inherits is reported as denied, while the rule of the class that defines it does run: a user it allows gets the data, a user it refuses does not. Trust the rule, not that message.
 - Code written to get past it. The audit reads the classes, it does not run your methods: a declared alias of a library method, a class of yours named under `GraphQL::`, or a forged `__FILE__` are not caught. The audit protects against mistakes, not against the app's own code.
@@ -356,6 +356,10 @@ With Pundit, a record's policy comes from its class, never from the record: `sel
 <<<<<<< HEAD
 
 `use_visibility_profile: false` on one query (`multiplex_next` on `Execution::Next`) brings back graphql-ruby's fallback to a hidden field's other definitions, and the audit reads only the schema: it cannot see that option in your code. Do not combine it with a field redefined under `Schema::Visibility`.
+
+`reauthorize_scoped_objects(false)` skips the rule, which is why the audit reports it. On connections nested inside connections the engines differ: the interpreter skips it and `Execution::Next` may still refuse, so never rely on either.
+
+A parent with `model: "Note"` and a child with `model: Note` keep the parent's spelling on the parent's field rules: a subclass with no policy of its own raises `Pundit::NotDefinedError` there, even for an allowed user. Name the model the same way on both.
 
 The audit exempts only types flagged `introspection` whose name starts with `__`, the prefix the GraphQL spec reserves. A subclass of a built-in such as `GraphQL::Introspection::TypeType` keeps that name, so a data field added to one, or to a `__Helper`, is not audited: do not put data there.
 
