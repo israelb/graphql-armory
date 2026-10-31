@@ -22,8 +22,11 @@ module GraphQL
         end
 
         # With only static profiles, graphql-ruby refuses to list types without naming one: the roots still lead everywhere.
+        # A `visible_when:` that cannot name its model raises only here, on the first listing: the audit reports it from the roots.
         def self.listed_types(schema)
           schema.types.values
+        rescue ConfigurationError
+          []
         rescue ArgumentError
           raise unless schema.visibility
 

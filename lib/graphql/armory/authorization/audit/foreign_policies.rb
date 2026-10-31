@@ -7,7 +7,7 @@ module GraphQL
         # A rule asks the policy of the class that defines it, and a field never sees its resolved type: a rule on an
         # interface, a parent, an input object or a plain resolver does not ask the `policy:` of the type that uses it.
         class ForeignPolicies
-          def initialize(adapter, findings)
+          def initialize(adapter = Adapters::Null.new, findings = Findings.new)
             @adapter = adapter
             @findings = findings
             @seen = Set.new

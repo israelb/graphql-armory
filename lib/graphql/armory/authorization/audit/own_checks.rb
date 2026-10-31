@@ -13,7 +13,7 @@ module GraphQL
             new(definitions, findings).(schema.armory_configuration.own_checks)
           end
 
-          def initialize(definitions, findings)
+          def initialize(definitions = [], findings = Findings.new)
             @definitions = definitions
             @findings = findings
             @found = {}
