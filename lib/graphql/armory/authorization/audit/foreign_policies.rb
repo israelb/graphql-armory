@@ -27,11 +27,11 @@ module GraphQL
             call(type, policy) if policy
           end
 
-          # A class without Base has no rule of its own, but what it leads to still runs its rules. A Base resolver's own
-          # arguments ask the resolver's policy, on purpose; the input objects they take do not.
+          # A class without Base has no rule of its own, but what it leads to still runs its rules. An argument, a Base
+          # resolver's included, asks the policy of the class that defines it, not of the type that uses it.
           def arguments(arguments, path, policy, seen)
             arguments.each do |argument|
-              if argument.respond_to?(:armory_declared) && !argument.owner.respond_to?(:armory_rule)
+              if argument.respond_to?(:armory_declared)
                 note(argument, "#{path}(#{argument.keyword})", policy, model_or_nil(argument))
               end
               input = argument.type.unwrap

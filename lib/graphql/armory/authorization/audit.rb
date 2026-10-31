@@ -76,7 +76,7 @@ module GraphQL
 
         def audited_types(definitions)
           definitions.select do |type|
-            type.kind.object? && !type.introspection? && RELAY_TYPES.none? { |relay| type <= relay }
+            type.kind.object? && !Definitions.introspection?(type) && RELAY_TYPES.none? { |relay| type <= relay }
           end
         end
 

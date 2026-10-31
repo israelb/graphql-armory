@@ -42,6 +42,16 @@ module GraphQL
         end
         private_class_method :directive_types
 
+        # `introspection(true)` is a flag anyone can set, and graphql-ruby serves such a type like any other: only its own
+        # types, and what an app builds from them through `Schema.introspection`, are exempt.
+        def self.introspection?(type)
+          return false unless type.introspection?
+
+          [GraphQL::Introspection::SchemaType, GraphQL::Introspection::TypeType, GraphQL::Introspection::FieldType,
+           GraphQL::Introspection::DirectiveType, GraphQL::Introspection::EnumValueType, GraphQL::Introspection::InputValueType,
+           GraphQL::Introspection::TypeKindEnum, GraphQL::Introspection::DirectiveLocationEnum].any? { |own| type <= own }
+        end
+
         def self.connection?(type)
           type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
         end

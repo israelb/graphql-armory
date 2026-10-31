@@ -8,7 +8,7 @@ module GraphQL
         module InputLoads
           def self.call(definitions, findings)
             definitions.each do |input|
-              next unless input.kind.input_object? && !input.introspection?
+              next unless input.kind.input_object? && !Definitions.introspection?(input)
               next if input.respond_to?(:armory_scoped_loads?)
 
               # A mutation's generated input (`from_resolver`) is loaded, scoped, by the mutation itself.
