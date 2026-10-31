@@ -19,7 +19,6 @@ class ArmoryClassStrictPolicy
 end
 
 class ArmoryClassNotePolicy < ArmoryClassStrictPolicy; end
-class OpenStructPolicy < ArmoryClassStrictPolicy; end
 
 class ArmoryClassLaxPolicy < ArmoryClassStrictPolicy
   class Scope
@@ -52,6 +51,14 @@ end
 class ArmoryClassRaisingKlassPolicy < ArmoryClassStrictPolicy; end
 
 RSpec.describe "a record's own answers do not pick its policy" do
+  # A global name Pundit would find for every spec in the process: it lives only during each example here.
+  around do |example|
+    Object.const_set(:OpenStructPolicy, Class.new(ArmoryClassStrictPolicy))
+    example.run
+  ensure
+    Object.send(:remove_const, :OpenStructPolicy)
+  end
+
   let(:armory) { GraphQL::Armory::Authorization }
   let(:adapter) { armory::Adapters::Pundit.new }
   let(:rule) { armory::Rule.new(:read) }

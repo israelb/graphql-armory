@@ -36,5 +36,5 @@ module SecurityHelpers
 end
 
 RSpec.configure do |config|
-  config.include SecurityHelpers, file_path: %r{spec/security/}
+  config.include SecurityHelpers, file_path: %r{spec/(security|regressions)/}
 end
