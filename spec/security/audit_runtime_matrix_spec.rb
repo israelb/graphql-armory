@@ -599,6 +599,59 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
         expect(kinds_at(schema, "HandConnection.nodes")).to eq([:unscoped_list])
       end
 
+      it "does not exempt one that names another method" do
+        item = doc
+        connection = hand_connection do
+          edge_type(item.edge_type, nodes_field: false)
+          field :nodes, [item, { null: true }], null: false, scope: false, resolver_method: :all_nodes
+          define_method(:all_nodes) { [] }
+        end
+        schema = holder_schema { field :docs, connection, null: true }
+
+        expect(kinds_at(schema, "HandConnection.nodes")).to eq([:unscoped_list])
+      end
+
+      it "does not exempt one with a resolver" do
+        item = doc
+        resolver = Class.new(GraphQL::Schema::Resolver) do
+          graphql_name "AllNodes"
+          type [item, { null: true }], null: false
+        end
+        connection = hand_connection do
+          edge_type(item.edge_type, nodes_field: false)
+          field :nodes, resolver: resolver, scope: false
+        end
+        schema = holder_schema { field :docs, connection, null: true }
+
+        expect(kinds_at(schema, "HandConnection.nodes")).to eq([:unscoped_list])
+      end
+
+      it "does not exempt one that reads a hash key" do
+        item = doc
+        connection = hand_connection do
+          edge_type(item.edge_type, nodes_field: false)
+          field :nodes, [item, { null: true }], null: false, scope: false, hash_key: :all_nodes
+        end
+        schema = holder_schema { field :docs, connection, null: true }
+
+        expect(kinds_at(schema, "HandConnection.nodes")).to eq([:unscoped_list])
+      end
+
+      it "does not raise on a shadowed one whose type cannot load" do
+        item = doc
+        parent = hand_connection do
+          edge_type(item.edge_type, nodes_field: false)
+          field :nodes, ["ArmoryMatrixMissing"], null: false, scope: false
+        end
+        child = Class.new(parent) do
+          graphql_name "ChildConnection"
+          edge_type(item.edge_type)
+        end
+        schema = holder_schema { field :docs, child, null: true }
+
+        expect { armory::Audit.(schema) }.not_to raise_error
+      end
+
       it "does not exempt one whose element is not the node" do
         item = doc
         other = Class.new(base_object) do

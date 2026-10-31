@@ -211,8 +211,11 @@ module GraphQL
 
             element = field.type.unwrap
             element = element.node_type if field.original_name == :edges && element.is_a?(Class) && element.include?(GraphQL::Types::Relay::EdgeBehaviors)
-            field.method_sym == field.original_name && element.equal?(owner.node_type) &&
+            field.resolver.nil? && field.resolver_method == field.original_name && field.method_sym == field.original_name &&
+              field.dig_keys.nil? && element.equal?(owner.node_type) &&
               type.instance_method(field.original_name).owner == GraphQL::Types::Relay::ConnectionBehaviors
+          rescue GraphQL::Error
+            false
           end
 
           def list_of_records?(field)
