@@ -97,7 +97,7 @@ RSpec.describe "recheck of the String model correction" do
     end
   end
 
-  # The argument lives on a field of a type served by a record, as in the blocker's report.
+  # The argument lives on a field of a type served by a record.
   def on_type(model:, type_rule: { model: VrNote }, **rule)
     type = Class.new(base_object) do
       graphql_name "Note"

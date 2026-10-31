@@ -2,7 +2,7 @@
 
 # Probes of the audit of reauthorize_scoped_objects and own scope_items.
 # Each `it` starts with [security] or [preservation]. PROBE lines record what really ran for a refused user.
-module ScopedProbe
+module ConnectionFollowProbe
   Thing = Struct.new(:id, :secret, keyword_init: true)
   Root = Struct.new(:things, :others, :conn, :docs, :tags, :ping, :thing, keyword_init: true)
   SECRET = "s3cret"
@@ -23,7 +23,7 @@ end
 
 RSpec.describe "audit of reauthorize_scoped_objects: probes" do
   let(:armory) { GraphQL::Armory::Authorization }
-  let(:flag_reason) { { ScopedProbe::FLAG => "the scope is as strict as the rule" } }
+  let(:flag_reason) { { ConnectionFollowProbe::FLAG => "the scope is as strict as the rule" } }
 
   def base_field
     @base_field ||= begin
@@ -47,7 +47,7 @@ RSpec.describe "audit of reauthorize_scoped_objects: probes" do
   def thing_type(parent = base_object, name = "Thing", &block)
     Class.new(parent) do
       graphql_name name
-      authorize :read, model: ScopedProbe::Thing
+      authorize :read, model: ConnectionFollowProbe::Thing
       field :secret, String, null: false
       class_eval(&block) if block
     end
@@ -103,7 +103,7 @@ RSpec.describe "audit of reauthorize_scoped_objects: probes" do
 
   def schema_for(query_class, own_checks: {}, orphans: [], resolved: nil, setup: nil)
     plugin = armory
-    adapter = ScopedProbe.refusing_adapter
+    adapter = ConnectionFollowProbe.refusing_adapter
     Class.new(base_schema) do
       use plugin, adapter: adapter, own_checks: own_checks
       query query_class
@@ -122,8 +122,8 @@ RSpec.describe "audit of reauthorize_scoped_objects: probes" do
   end
 
   def run_refused(schema, query, context: {})
-    result = execute_query(schema, query, root_value: ScopedProbe.root, context: context)
-    result.to_h.to_s.include?(ScopedProbe::SECRET) ? "LEAK" : "refused"
+    result = execute_query(schema, query, root_value: ConnectionFollowProbe.root, context: context)
+    result.to_h.to_s.include?(ConnectionFollowProbe::SECRET) ? "LEAK" : "refused"
   rescue StandardError, NotImplementedError => error
     "raised #{error.class}: #{error.message[0, 90]}"
   end
