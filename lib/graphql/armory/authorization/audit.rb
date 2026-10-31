@@ -27,6 +27,8 @@ module GraphQL
       class Audit
         RELAY_TYPES = [GraphQL::Types::Relay::BaseConnection, GraphQL::Types::Relay::BaseEdge,
                        GraphQL::Types::Relay::PageInfo].freeze
+        GENERATED_RELAY_FIELDS = { GraphQL::Types::Relay::BaseConnection => %i[edges nodes page_info],
+                                   GraphQL::Types::Relay::BaseEdge => %i[node cursor] }.freeze
 
         # A library's method is defined in its files and held by a class it names. Either alone misleads: anyone can name
         # a module under `GraphQL::`, and an alias keeps graphql-ruby's location on an app's class.
@@ -82,9 +84,17 @@ module GraphQL
             Definitions.fields_at_every_level(type).any? { |field| !field.owner.equal?(GraphQL::Types::Relay::PageInfo) }
         end
 
+        # A connection or an edge holds only what graphql-ruby generates, until a subclass, its parent or an interface adds a field.
+        def extended_relay?(type)
+          GENERATED_RELAY_FIELDS.any? do |relay, names|
+            type < relay && Definitions.fields_at_every_level(type).any? { |field| !names.include?(field.original_name) }
+          end
+        end
+
         def audited_types(definitions)
           definitions.select do |type|
-            type.kind.object? && !Definitions.introspection?(type) && (extended_page_info?(type) || RELAY_TYPES.none? { |relay| type <= relay })
+            type.kind.object? && !Definitions.introspection?(type) &&
+              (extended_page_info?(type) || extended_relay?(type) || RELAY_TYPES.none? { |relay| type <= relay })
           end
         end
 

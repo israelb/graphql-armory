@@ -25,10 +25,14 @@ RSpec.describe GraphQL::Armory::Authorization::Audit do
       )
     end
 
-    it "leaves out the Relay connection, edge and page info types" do
+    it "leaves out the Relay edge and page info types that add nothing" do
       paths = (report.problems.map(&:path) + report.bypasses.map(&:path)).join(" ")
 
-      expect(paths).not_to match(/Connection|Edge|PageInfo/)
+      expect(paths).not_to match(/Edge|PageInfo/)
+    end
+
+    it "lists the connection that adds a field" do
+      expect(report.bypasses.map(&:path)).to include("InvoiceConnection")
     end
   end
 

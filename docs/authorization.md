@@ -360,6 +360,8 @@ With Pundit, a record's policy comes from its class, never from the record: `sel
 
 A parent with `model: "Note"` and a child with `model: Note` keep the parent's spelling on the parent's field rules: a subclass with no policy of its own raises `Pundit::NotDefinedError` there, even for an allowed user. Name the model the same way on both.
 
+A direct subclass of `BaseConnection` or `BaseEdge` that adds a field, itself, from a parent or from an interface, is audited like any other type, so with no `Base` it is reported as `:unprotected`. A `total_count` is the usual case: include `Base` and declare `authorize :none, reason: "...", covers_fields: true` on the class. That reason covers every field the class has now or gets later, and the report names only the class. To check a field, add `policy:` to the same declaration and give the field `authorize:`: without `policy:` the rule is asked about graphql-ruby's pagination object, which has no policy, so it raises `Pundit::NotDefinedError` for every user, and the audit does not say so. A field redefined under a name graphql-ruby generates there (`edges`, `nodes`, `page_info`, `node`, `cursor`) is not seen by this check: do not put data in one. A generated field renamed through `field_options` is reported as an added field.
+
 A field added to or redefined on a custom `EntryPoints` or `DynamicFields` is reported as `:unprotected`, whatever it declares: no type's rule runs on it, so move it to a type with a rule.
 
 The audit exempts only types flagged `introspection` whose name starts with `__`, the prefix the GraphQL spec reserves. A subclass of a built-in such as `GraphQL::Introspection::TypeType` keeps that name, so a data field added to one, or to a `__Helper`, is not audited: do not put data there.

@@ -46,6 +46,9 @@ module IntegrationSchema
     invoice.field :account, account, null: false
 
     connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+      include armory::Base
+      authorize :none, reason: "counts the scoped list", covers_fields: true
+
       field :total_count, Integer, null: false, **(ArmoryEngine.supported? ? { resolve_legacy_instance_method: true } : {})
 
       def total_count
