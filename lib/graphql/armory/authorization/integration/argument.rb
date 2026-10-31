@@ -49,13 +49,19 @@ module GraphQL
 
             model = armory_model
             subject = object.is_a?(model) ? object : model
-            Integration.allowed?(subject, Rule.new(@armory_declared, attribute: keyword), context) && super
+            Integration.allowed?(subject, Rule.new(@armory_declared, policy: armory_policy, attribute: keyword), context) && super
           end
 
           def visible?(context)
             return super unless @armory_visible_when
 
-            super && Integration.visible?(armory_model, Rule.new(@armory_visible_when, attribute: keyword), context)
+            super && Integration.visible?(armory_model, Rule.new(@armory_visible_when, policy: armory_policy, attribute: keyword), context)
+          end
+
+          # The `policy:` of the type or resolver the argument belongs to.
+          def armory_policy
+            type = owner.respond_to?(:owner) ? owner.owner : owner
+            type.armory_rule&.policy if type.respond_to?(:armory_rule)
           end
 
           private

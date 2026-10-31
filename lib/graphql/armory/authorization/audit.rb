@@ -416,7 +416,7 @@ module GraphQL
         def audit_visibility(field, path, findings, model:, reported:)
           return unless model && field.armory_visible_when
 
-          check(path.split(".").first, model, Rule.new(field.armory_visible_when, attribute: field.original_name), findings, reported)
+          check(path.split(".").first, model, Rule.new(field.armory_visible_when, policy: field.armory_policy, attribute: field.original_name), findings, reported)
         end
 
         def audit_declaration(type, field, path, findings, model:, bypassed:, reported:)
@@ -431,7 +431,7 @@ module GraphQL
               findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, so it is denied")
             end
           else
-            check(path.split(".").first, model, Rule.new(declared), findings, reported) if model
+            check(path.split(".").first, model, Rule.new(declared, policy: field.armory_policy), findings, reported) if model
           end
         end
 
@@ -461,7 +461,7 @@ module GraphQL
         end
 
         def audit_argument_action(argument, path, action, findings, reported)
-          check(path.split(".").first, argument.armory_model, Rule.new(action, attribute: argument.keyword), findings, reported)
+          check(path.split(".").first, argument.armory_model, Rule.new(action, policy: argument.armory_policy, attribute: argument.keyword), findings, reported)
         rescue ConfigurationError => error
           findings.problem(:model, path, error.message)
         end
