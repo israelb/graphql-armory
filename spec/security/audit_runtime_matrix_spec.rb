@@ -453,6 +453,180 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     expect(armory::Audit.(schema).ok?).to be(true)
   end
 
+  it "does not say ok for a PageInfo subclass that adds a field" do
+    type = Class.new(GraphQL::Types::Relay::PageInfo) do
+      graphql_name "LeakyInfo"
+      field :notes, String, null: true
+    end
+
+    expect(armory::Audit.(schema_of(type)).ok?).to be(false)
+  end
+
+  [:EntryPoints, :DynamicFields].each do |holder|
+    it "does not say ok for a custom #{holder} field that leads to an unprotected type" do
+      leak = Class.new(GraphQL::Schema::Object) do
+        graphql_name "Leak"
+        field :notes, String, null: true
+      end
+      replacement = Module.new
+      replacement.const_set(holder, Class.new(GraphQL::Introspection.const_get(holder)) { field :__leak, leak, null: true, method: :__leak })
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ArmoryMatrixDoc
+        field :notes, String, null: true
+      end
+      schema = Class.new(schema_of(type)) do
+        use GraphQL::Schema::Visibility, dynamic: true
+        introspection replacement
+      end
+
+      expect(armory::Audit.(schema).problems.map(&:path)).to include("Leak")
+    end
+  end
+
+  it "does not say ok for a PageInfo child whose parent adds the field" do
+    parent = Class.new(GraphQL::Types::Relay::PageInfo) do
+      graphql_name "MiddleInfo"
+      field :notes, String, null: true
+    end
+    child = Class.new(parent) { graphql_name "ChildInfo" }
+
+    expect(armory::Audit.(schema_of(child)).problems.map(&:path)).to include("ChildInfo")
+  end
+
+  it "does not say ok for a PageInfo subclass that gets a field from an interface" do
+    interface = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Noted"
+      field :notes, String, null: true
+    end
+    type = Class.new(GraphQL::Types::Relay::PageInfo) do
+      graphql_name "NotedInfo"
+      implements interface
+    end
+
+    expect(armory::Audit.(schema_of(type)).ok?).to be(false)
+  end
+
+  it "leaves a PageInfo subclass that adds nothing alone" do
+    type = Class.new(GraphQL::Types::Relay::PageInfo) { graphql_name "PlainInfo" }
+
+    expect(armory::Audit.(schema_of(type)).problems.map(&:path)).not_to include("PlainInfo")
+  end
+
+  { EntryPoints: :__notes, DynamicFields: :__notes }.each do |holder, name|
+    context "with a custom #{holder}" do
+      def schema_with_introspection(holder, type_body = nil, &body)
+        replacement = Module.new
+        replacement.const_set(holder, Class.new(GraphQL::Introspection.const_get(holder), &body))
+        type = Class.new(base_object) do
+          graphql_name "Doc"
+          authorize :read, model: ArmoryMatrixDoc
+          field :notes, String, null: true
+        end
+        Class.new(schema_of(type)) do
+          use GraphQL::Schema::Visibility, dynamic: true
+          introspection replacement
+        end
+      end
+
+      it "does not say ok for a scalar field added to it" do
+        schema = schema_with_introspection(holder) { field name, String, null: true, method: name }
+
+        expect(armory::Audit.(schema).problems.map(&:path)).to include("#{holder}.#{name}")
+      end
+
+      it "leaves a subclass that adds nothing alone" do
+        expect(armory::Audit.(schema_with_introspection(holder) {}).ok?).to be(true)
+      end
+    end
+  end
+
+  it "does not say ok for a redefined built-in entry point" do
+    replacement = Module.new
+    replacement.const_set(:EntryPoints, Class.new(GraphQL::Introspection::EntryPoints) { field :__type, String, null: true, method: :__type })
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, model: ArmoryMatrixDoc
+      field :notes, String, null: true
+    end
+    schema = Class.new(schema_of(type)) { introspection replacement }
+
+    expect(armory::Audit.(schema).problems.map(&:path)).to include("EntryPoints.__type")
+  end
+
+  context "with a RelayClassicMutation's arguments" do
+    def schema_with_mutation_argument(**options)
+      plugin = armory
+      argument_base = base_argument
+      mutation = Class.new(GraphQL::Schema::RelayClassicMutation) do
+        include plugin::Base
+        argument_class argument_base
+        graphql_name "DoIt"
+        authorize :read, model: ArmoryMatrixDoc
+        field :ok, String, null: true
+        argument :raw, GraphQL::Types::Boolean, required: false, **options
+      end
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ArmoryMatrixDoc
+        field :via, mutation: mutation
+      end
+      schema_of(type)
+    end
+
+    it "reports a missing action" do
+      expect(armory::Audit.(schema_with_mutation_argument(authorize: :nope)).problems.map(&:kind)).to include(:adapter)
+    end
+
+    it "lists a declared bypass" do
+      report = armory::Audit.(schema_with_mutation_argument(authorize: :none, reason: "public flag"))
+
+      expect(report.bypasses.map(&:reason)).to include("public flag")
+    end
+
+    it "stays quiet for an action that exists" do
+      problems = armory::Audit.(schema_with_mutation_argument(authorize: :manage)).problems
+
+      expect(problems.map(&:path)).to eq(["DoItPayload"])
+    end
+  end
+
+  context "with a Base resolver's arguments" do
+    def schema_with_argument(**options)
+      plugin = armory
+      argument_base = base_argument
+      resolver = Class.new(GraphQL::Schema::Resolver) do
+        include plugin::Base
+        argument_class argument_base
+        graphql_name "Via"
+        type String, null: true
+        authorize :read, model: ArmoryMatrixDoc
+        argument :raw, GraphQL::Types::Boolean, required: false, **options
+      end
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ArmoryMatrixDoc
+        field :via, resolver: resolver
+      end
+      schema_of(type)
+    end
+
+    it "reports a missing action" do
+      expect(armory::Audit.(schema_with_argument(authorize: :nope)).problems.map(&:kind)).to include(:adapter)
+    end
+
+    it "lists a declared bypass" do
+      report = armory::Audit.(schema_with_argument(authorize: :none, reason: "public flag"))
+
+      expect(report.bypasses.map(&:reason)).to include("public flag")
+    end
+
+    it "stays quiet for an action that exists" do
+      expect(armory::Audit.(schema_with_argument(authorize: :manage)).ok?).to be(true)
+    end
+  end
+
   it "does not serve a record whose klass method names a laxer model" do
     type = Class.new(base_object) do
       graphql_name "Doc"

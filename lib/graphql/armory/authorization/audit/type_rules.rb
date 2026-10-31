@@ -96,7 +96,7 @@ module GraphQL
             audit_inherited_rule(type, field, path, model) if model
             audit_visibility(field, path, model: model, reported: reported)
             audit_loads(field, path)
-            audit_arguments(field, path, reported: reported)
+            audit_arguments(field.all_argument_definitions, path, reported: reported)
           end
 
           # A field runs under its owner: graphql-ruby never tells it the concrete type. A rule defined above that type asks
@@ -125,8 +125,11 @@ module GraphQL
           def audit_resolver(field, path)
             resolver = field.resolver
             rule = resolver.armory_rule
-            @foreign_policies.arguments(field.all_argument_definitions, path, rule.policy, Set.new) if rule&.policy
+            # A RelayClassicMutation's field holds only the generated `input`: its arguments are on the resolver.
+            arguments = (field.all_argument_definitions + resolver.all_argument_definitions).uniq
+            @foreign_policies.arguments(arguments, path, rule.policy, Set.new) if rule&.policy
             return @findings.problem(:no_rule, path, "its mutation or resolver declares no `authorize`, so it is denied") if rule.nil?
+            audit_arguments(arguments, path, reported: Set.new)
             return @findings.bypass(path, rule.reason) if rule.none?
 
             model = begin
@@ -172,8 +175,8 @@ module GraphQL
           end
 
           # An argument that declares a rule is listed (a bypass with its reason) or checked like a field's action.
-          def audit_arguments(field, path, reported:)
-            field.all_argument_definitions.each do |argument|
+          def audit_arguments(arguments, path, reported:)
+            arguments.each do |argument|
               next unless argument.respond_to?(:armory_declared)
 
               apath = "#{path}(#{argument.keyword})"

@@ -567,7 +567,7 @@ RSpec.describe "verification of the String subject and bad answer change" do
       expect { run(schema, "{ bare { upcase } }", :ok) }.to raise_error(Pundit::NotDefinedError)
     end
 
-    it "[preservation] 33 a missing action on a resolver's argument: audit silent, AdapterError for everyone" do
+    it "[preservation] 33 a missing action on a resolver's argument: reported, AdapterError for everyone" do
       plugin = armory
       arg = base_argument
       resolver = Class.new(GraphQL::Schema::Resolver) do
@@ -580,7 +580,7 @@ RSpec.describe "verification of the String subject and bad answer change" do
         def resolve(**) = "x"
       end
       schema = schema_of(query_with { field :r, resolver: resolver })
-      expect(armory::Audit.(schema).problems).to eq([])
+      expect(armory::Audit.(schema).problems.map(&:kind)).to eq([:adapter])
       expect { run(schema, '{ r(tag: "x") }', :ok) }.to raise_error(armory::AdapterError, /misspelled/)
       expect(run(schema, "{ r }", :ok).dig("data", "r")).to eq("x")
       STDERR.puts "VP33 user the resolver's rule refuses: #{run(schema, '{ r(tag: "x") }', :no).inspect}"

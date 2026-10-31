@@ -14,6 +14,7 @@ require "graphql/armory/authorization/audit/edge_rules"
 require "graphql/armory/authorization/audit/interface_rules"
 require "graphql/armory/authorization/audit/input_loads"
 require "graphql/armory/authorization/audit/visibility_models"
+require "graphql/armory/authorization/audit/introspection_fields"
 
 module GraphQL
   module Armory
@@ -68,15 +69,22 @@ module GraphQL
           InterfaceRules.(definitions, findings)
           InputLoads.(definitions, findings)
           VisibilityModels.(schema, definitions, findings)
+          IntrospectionFields.(schema, findings)
           findings.problem(:model, "Schema", listing_error.message) if listing_error && !findings.problem?(:model)
           findings.report
         end
 
         private
 
+        # PageInfo holds no data of the app, until a subclass, its parent or an interface adds a field.
+        def extended_page_info?(type)
+          type < GraphQL::Types::Relay::PageInfo &&
+            Definitions.fields_at_every_level(type).any? { |field| !field.owner.equal?(GraphQL::Types::Relay::PageInfo) }
+        end
+
         def audited_types(definitions)
           definitions.select do |type|
-            type.kind.object? && !Definitions.introspection?(type) && RELAY_TYPES.none? { |relay| type <= relay }
+            type.kind.object? && !Definitions.introspection?(type) && (extended_page_info?(type) || RELAY_TYPES.none? { |relay| type <= relay })
           end
         end
 

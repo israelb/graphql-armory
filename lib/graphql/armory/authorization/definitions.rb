@@ -11,7 +11,7 @@ module GraphQL
       module Definitions
         def self.call(schema, &on_listing_error)
           found = Set.new.compare_by_identity
-          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *directive_types(schema), *listed_types(schema, &on_listing_error)]
+          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *directive_types(schema), *introspection_field_types(schema), *listed_types(schema, &on_listing_error)]
           until pending.empty?
             type = pending.pop
             next if !type.respond_to?(:kind) || !found.add?(type)
@@ -48,6 +48,13 @@ module GraphQL
         def self.introspection?(type)
           type.introspection? && type.graphql_name.start_with?("__")
         end
+
+        # `Schema.introspection` can add entry points and dynamic fields, which no type holds and a client can reach.
+        def self.introspection_field_types(schema)
+          system = schema.introspection_system
+          (system.entry_points + system.dynamic_fields).flat_map { |field| references_of(field) }.flatten.compact
+        end
+        private_class_method :introspection_field_types
 
         def self.connection?(type)
           type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
