@@ -613,6 +613,8 @@ RSpec.describe "PROBE: a record's policy comes from its class" do
     end
 
     it "K52 preservation Data with a class member" do
+      skip "Data needs Ruby 3.2" unless defined?(::Data)
+
       data = Data.define(:class, :secret)
       Object.const_set(:PfcDataClass, data) unless defined?(PfcDataClass)
       Object.const_set(:PfcDataClassPolicy, Class.new(PfcStrictBase)) unless defined?(PfcDataClassPolicy)
