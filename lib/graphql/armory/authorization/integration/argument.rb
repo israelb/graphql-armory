@@ -51,7 +51,7 @@ module GraphQL
             return super if @armory_declared.nil? || @armory_declared == :none
 
             model = armory_model
-            subject = Module === model && model === object ? object : model
+            subject = Module === model && object.is_a?(model) ? object : model
             Integration.allowed?(subject, Rule.new(@armory_declared, policy: armory_policy, attribute: keyword, model: model), context) && super
           end
 

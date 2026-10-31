@@ -31,7 +31,7 @@ module GraphQL
           def scope(user, items, rule)
             return items.select { |item| true.equal?(authorized?(user, item, rule)) } if items.is_a?(Array)
 
-            policy = policy_class(rule, normalize(rule.model) || items)
+            policy = policy_class(rule, normalize(rule.model) || record_target(items))
             scope_class = scope_constant(policy)
             raise MissingScopeError, "#{policy} has no Scope class" if scope_class.nil?
 

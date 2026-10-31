@@ -113,10 +113,16 @@ module GraphQL
         def self.with_owner_model(rule, owner)
           return rule if rule.none? || rule.policy || rule.model || !owner.respond_to?(:armory_model)
 
-          rule.with_model(owner.armory_model)
+          rule.with_model(declared_model(owner) || owner.armory_model)
         rescue ConfigurationError, GraphQL::RequiredImplementationMissingError
           rule
         end
+
+        # A Symbol or a String stays as written: only that spelling can name a policy for a Symbol the type wraps.
+        def self.declared_model(owner)
+          owner.armory_rule&.model if owner.respond_to?(:armory_rule)
+        end
+        private_class_method :declared_model
 
         # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.
         def self.allowed?(subject, rule, context)
