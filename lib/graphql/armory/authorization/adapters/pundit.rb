@@ -29,7 +29,7 @@ module GraphQL
           def scope(user, items, rule)
             return items.select { |item| authorized?(user, item, rule) == true } if items.is_a?(Array)
 
-            policy = policy_class(rule, rule.model || items)
+            policy = policy_class(rule, normalize(rule.model) || items)
             scope_class = scope_constant(policy)
             raise MissingScopeError, "#{policy} has no Scope class" if scope_class.nil?
 
@@ -72,12 +72,13 @@ module GraphQL
           end
 
           def finder(subject)
-            ::Pundit::PolicyFinder.new(normalize(subject))
+            ::Pundit::PolicyFinder.new(subject)
           end
 
-          # Pundit reads a Symbol as a model name but a String as a plain object.
-          def normalize(subject)
-            subject.is_a?(String) ? subject.to_sym : subject
+          # Pundit reads a Symbol as a model name but a String as a plain object. Only for a model the schema author
+          # wrote: a String a type wraps is a record, maybe the client's text, and must not name its own policy.
+          def normalize(model)
+            model.is_a?(String) ? model.to_sym : model
           end
 
           # Looks the Scope up through the policy's ancestors but never in Object, so a
