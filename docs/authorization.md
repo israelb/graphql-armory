@@ -159,7 +159,56 @@ load "tasks/graphql_armory.rake"
 # bundle exec rake "graphql_armory:audit[AppSchema]"
 ```
 
-It reports types nobody protects (a base class that never included `Base`), types and fields with no rule, policies missing the method or `Scope`, `loads:` that skip the scope, your own denial hooks and checks on base classes, and lists every declared bypass with its reason.
+**When it runs.** Only when you call it, through one of the three forms above. It never runs when the schema loads or during a request, and it sends nothing to your API's users. Your rules are what protect each request, and they run with or without the audit. The audit is a static check for the team that owns the schema: it reads the classes and tells you where a rule will not run. Put the spec or the rake task in CI, so a change that opens a hole fails the build. Nothing enforces this for you: an app that never runs the audit gets no warning.
+
+**What a pass means.** `report.ok?` means it found none of the problems below, not that every rule is correct: it checks that a rule exists and runs, not that your policy decides well. It also has limits, listed in [What the audit does not see](#what-happens-on-denial).
+
+**What it reports.** Each problem has a `kind`, a `path` and a `message`. Every declared bypass is listed apart, with its reason.
+
+| Kind | What it means | What to do |
+|---|---|---|
+| `:plugin` | The schema never installed the plugin. | Add `use GraphQL::Armory::Authorization, adapter: ...`. |
+| `:unprotected` | A base class or field class does not include `Base`, so nothing checks it. | Include `Base`. |
+| `:no_rule` | A type, mutation or resolver has no rule, so it is denied to everyone. | Add `authorize` or `default_action`. |
+| `:field_without_rule` | A field of a bypassed type has no rule. The message says what really happens: denied, or served with no check (see [Rules](#rules)). | Give the field `authorize:`, or remove it. |
+| `:adapter` | A policy lacks the method or the `Scope` a rule needs. | Add it to the policy. |
+| `:model` | The model a rule needs cannot be worked out. | Pass `model:`. |
+| `:unscoped_load` | A `loads:` goes through `object_from_id` instead of the user's scope. | Let the load use the scope. |
+| `:hook` | The schema's own `unauthorized_field` or `unauthorized_object` wins over the plugin's. | Remove it, or declare it in `own_denial_hooks:`. |
+| `:own_check` | Your own method can skip the rule: `authorized?`, `wrap`, `visible?`, `reauthorize_scoped_objects` and others. | Remove it, or declare it in `own_checks:`. |
+| `:ignored_rule` | A rule that does not run, or a field or argument defined more than once. | See [Redefined fields and arguments](#redefined-fields-and-arguments) and [Lists, connections and lookups](#lists-connections-and-lookups). |
+
+A declaration (`own_checks:`, `own_denial_hooks:`, `override_reason:`, `authorize :none, reason:`) is your word: the audit stops reporting a problem and lists the reason, so a reviewer can read it. It does not read what your code does.
+
+Upgrading can make an audit that used to pass fail, because the audit reports more: read each new problem instead of declaring it to get the build green.
+
+### Redefined fields and arguments
+
+When a field is hidden from a user, by `visible?` or anything else, graphql-ruby does not answer "no such field": it looks for another definition of that name and serves it. So this rule does not run for a user the child's field is hidden from:
+
+```ruby
+class Types::Base < Types::BaseObject
+  field :notes, String
+end
+
+class Types::Doc < Types::Base
+  field :notes, String, authorize: :manage   # hidden: the parent's field answers instead
+end
+```
+
+A fallback also loses the field's arguments, return type and extensions. Arguments fall back the same way: one redefined on an input object's subclass, on a resolver's subclass, or twice on one owner.
+
+The audit reports every redefinition of a field or argument, over an ancestor, over an interface or on the same owner (`:ignored_rule`), even with the same rule, because only a request knows whether it gets hidden and what that loses. You have three ways out:
+
+- Remove one of the definitions.
+- Use `Schema::Visibility, dynamic: true`, with no `profiles:`. graphql-ruby skips the fallback to an ancestor only for a request that carries a visibility profile; a static profile runs with a plain Hash and still falls back, and the audit knows the difference. Two definitions on one owner fall back to each other under any profile, so they are always reported.
+- Declare it, with `override_reason:`. It is listed as a bypass, and one with nothing to declare is a problem. A declared override still falls back, so the definition it shadows is audited like any other.
+
+```ruby
+field :notes, String, authorize: :manage, override_reason: "the parent's field is as strict"
+argument :internal, Boolean, required: false, authorize: :manage, override_reason: "the parent's argument is as strict"
+global_id_field :id, override_reason: "Node's id answers the same"   # on a type that implements Node, once per type, on a field class that includes Base
+```
 
 ## CanCanCan
 
@@ -276,7 +325,7 @@ They are never authorized themselves: graphql-ruby only runs `authorized?` on th
 What an interface adds is its fields, declared once and resolved on many types:
 
 - A field with no rule is **covered** by the rule of the Base types that implement the interface (a plain implementer runs no check at all), unless one of them is a bypass (`authorize :none`). Then the field is **denied for every implementer**, because it cannot tell which type it runs on, and the audit reports it (`:field_without_rule`, for example `Document.number`). Declare it (`authorize: :none, reason:` or an action) to fix it.
-- `visible_when:` is not supported on an interface field; put it on the concrete types' fields, and use `Schema::Visibility`. Without it, a hidden field falls back to the interface's, so a user it hides this from gets that one and the concrete field's rule does not run. The same goes for a parent class's field, and for anything that hides the field: its resolver, its return type, the schema's `visible?`. A fallback also loses the field's arguments, return type and extensions. Arguments fall back the same way: one redefined on an input object's subclass, on a resolver's subclass, or twice on one owner. The audit reports every redefinition of a field or argument, over an ancestor, over an interface or on the same owner (`:ignored_rule`), even with the same rule, because only a request knows whether it gets hidden and what that loses. graphql-ruby skips the fallback to an ancestor only for a request that carries a visibility profile, so `Schema::Visibility` rules it out only with `dynamic: true` and no `profiles:`; a static profile runs with a plain Hash and still falls back, and the audit knows the difference. Two definitions on one owner fall back to each other under any profile, so they are always reported. A declared override still falls back, so the definition it shadows is audited like any other. Remove one, use `Schema::Visibility, dynamic: true`, or declare it: `field :notes, String, authorize: :manage, override_reason: "the parent's field is as strict"`. That includes `global_id_field :id` on a type that implements `Node`, once per type: `global_id_field :id, override_reason: "Node's id answers the same"`, on a field class that includes Base. An argument takes the same option: `argument :internal, Boolean, required: false, authorize: :manage, override_reason: "..."`. A declared override is listed as a bypass, and an `override_reason:` with nothing to declare is a problem.
+- `visible_when:` is not supported on an interface field; put it on the concrete types' fields, and use `Schema::Visibility`. Without it, a hidden field falls back to the interface's, so a user it hides this from gets that one and the concrete field's rule does not run. The same goes for a parent class's field, and for anything that hides the field: its resolver, its return type, the schema's `visible?`. See [Redefined fields and arguments](#redefined-fields-and-arguments).
 - `authorize: true` is not valid on an interface field: it is always denied, and the audit reports it. Use an action or `:none`.
 - An interface whose field class does not include `Base`, such as graphql-ruby's built-in Relay `Node`, runs no field check, so its `id` stays readable on a bypassed implementer. The audit reports it (`:unprotected`, `Node.id`); give your own `Node` interface a Base field class if that matters.
 - The audit reports an interface field once, on the interface that declares it, not again on each implementer.
