@@ -85,6 +85,12 @@ module GraphQL
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
           schema.types.each_value do |type|
+            next if type.introspection? || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
+
+            note_class_check(found, type, :scope_items)
+            note_reauthorization(found, type)
+          end
+          schema.types.each_value do |type|
             next unless type.kind.input_object? && !type.introspection?
 
             %i[authorized? unauthorized_object].each { |name| note_class_check(found, type, name) }
@@ -110,6 +116,38 @@ module GraphQL
             note_instance_check(found, argument.class, :authorized?)
             note_visibility_check(found, argument)
           end
+        end
+
+        # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
+        # The interpreter asks the field's return type, Execution::Next the resolved object, and each path differs, so it
+        # is reported wherever it is off, without judging whether it skips anything: declaring it takes one line.
+        def note_reauthorization(found, type, seen = [])
+          return if seen.include?(type)
+
+          seen << type
+          readers = type.is_a?(Class) ? [type] : type.ancestors.select { |ancestor| ancestor.respond_to?(:reauthorize_scoped_objects, true) }
+          readers.each { |reader| note_class_check(found, reader, :reauthorize_scoped_objects) }
+
+          setter = reauthorization_setter(type)
+          found[[setter, :reauthorize_scoped_objects]] = "#{setter.name || setter.inspect}.reauthorize_scoped_objects" if setter&.instance_variable_get(:@reauthorize_scoped_objects) == false
+          return unless relay_connection?(type) && setter.instance_variable_get(:@reauthorize_scoped_objects).nil?
+
+          # With no value of its own a connection answers its node's, and that node may not be in `schema.types`.
+          node = type.node_type
+          note_reauthorization(found, node, seen) if node
+        end
+
+        def relay_connection?(type)
+          type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
+        end
+
+        # The nearest that set the value, read from the classes so no method of the app runs: graphql-ruby's reader follows
+        # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's.
+        def reauthorization_setter(type)
+          return type if relay_connection?(type)
+
+          chain = type.is_a?(Class) ? type.ancestors.grep(Class) : type.ancestors
+          chain.find { |ancestor| !ancestor.instance_variable_get(:@reauthorize_scoped_objects).nil? }
         end
 
         # Apps define `visible?` for their own reasons: it only matters where a `visible_when:` depends on it.
@@ -159,6 +197,8 @@ module GraphQL
           when :unauthorized_object then "defined by the app: if it returns the object, the code runs on the refused record, and a message it raises reaches the client"
           when :authorizes? then "defined by the app: if it answers false, Execution::Next does not run authorized?, so the rule is skipped"
           when :authorized_new, :wrap then "defined by the app: it decides whether authorized? runs, so on the interpreter it can skip the rule"
+          when :scope_items then "defined by the app: it replaces the user's scope, so a list can hold records the policy's scope excludes, and connections count them"
+          when :reauthorize_scoped_objects then "set to false: records that come through the scope skip the rule, so a user the rule refuses gets them"
           when :visible? then "defined by the app: if it does not call super, visible_when: does not hide this from a user it should"
           else "defined by the app, it wins over the plugin's: if it does not call super it can skip the rule"
           end

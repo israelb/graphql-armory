@@ -8,7 +8,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
   let(:ran) { [] }
 
   # Named classes, because the report and `own_checks:` speak in classes.
-  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, plain_class: GraphQL::Schema::Mutation, relay_template: false, **options)
+  def build(on_field: nil, object: nil, invoice: nil, mutation: nil, approve: nil, on_argument: nil, input: nil, plain_mutation: nil, plain_class: GraphQL::Schema::Mutation, relay_template: false, on_query: nil, **options)
     plugin = armory
     calls = ran
     base_argument = Class.new(GraphQL::Schema::Argument) { include plugin::Base }
@@ -68,6 +68,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
       authorize :none, reason: "the root holds nothing"
       field :ping, String, null: true, authorize: :none, reason: "public"
       field :first_invoice, invoice_type, null: true, authorize: :none, reason: "the type's rule decides"
+      field :invoice_list, [invoice_type], null: true, authorize: :none, reason: "the type's rule and scope decide"
       field :invoices, invoice_type.connection_type, null: true, authorize: :none, reason: "scoped by the node type" if relay_template
       if input
         input_type = Class.new(GraphQL::Schema::InputObject) do
@@ -82,6 +83,7 @@ RSpec.describe "the audit and the app's own authorization checks" do
         end
       end
     end
+    on_query&.call(query_type, invoice_type)
     mutation_type = Class.new(base_object) do
       graphql_name "Mutation"
       authorize :none, reason: "the root holds nothing"
@@ -299,6 +301,532 @@ RSpec.describe "the audit and the app's own authorization checks" do
   def foreign_invoice(schema)
     execute_query(schema, "{ firstInvoice { id } }", context: { current_user: world.bob },
                                                      root_value: Struct.new(:first_invoice).new(world.a1)).to_h.dig("data", "firstInvoice")
+  end
+
+  describe "records that come through the scope" do
+    def numbers(schema)
+      world
+      execute_query(schema, "{ invoiceList { id } }", context: { current_user: world.alice },
+                                                      root_value: Struct.new(:invoice_list).new(::Invoice.all)).to_h.dig("data", "invoiceList")&.size
+    end
+
+    let(:skip_rule) do
+      proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(false)
+      end
+    end
+
+    it "reports reauthorize_scoped_objects(false), and pins that it serves what the rule refuses" do
+      schema = build(invoice: skip_rule)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(problems(schema).first.message).to match(/skip the rule/)
+      expect(numbers(build(invoice: proc { authorize :manage, model: ::Invoice }))).to be_nil
+      expect(numbers(schema)).to eq(2)
+    end
+
+    it "reports it once, on the base object that sets it" do
+      schema = build(object: proc { reauthorize_scoped_objects(false) })
+
+      expect(problems(schema).map(&:path).uniq.size).to eq(1)
+      expect(problems(schema).size).to eq(1)
+    end
+
+    it "lists it as a bypass when declared" do
+      plugin = armory
+      schema = build(invoice: skip_rule)
+      type = @classes[:invoice]
+      declared = Class.new(schema) do
+        use plugin, adapter: :pundit, own_checks: { type => { reauthorize_scoped_objects: "the scope is as strict as the rule" } }
+      end
+
+      expect(problems(declared)).to eq([])
+      expect(armory::Audit.(declared).bypasses.map(&:reason)).to include("the scope is as strict as the rule")
+    end
+
+    it "does not report reauthorize_scoped_objects(true)" do
+      expect(problems(build(invoice: proc { reauthorize_scoped_objects(true) }))).to eq([])
+    end
+
+    # No exemptions: telling where the flag skips nothing has been wrong on every path tried. Declaring it costs one line.
+    it "reports the flag on a type that bypasses the rule" do
+      schema = build(invoice: proc do
+        authorize :none, reason: "public", covers_fields: true
+        reauthorize_scoped_objects(false)
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "reports the flag with an own authorized? below the class that includes Base" do
+      plugin = armory
+      schema = build(on_query: lambda do |query, _invoice|
+        app = Class.new(GraphQL::Schema::Object) { def self.authorized?(object, context) = super }
+        base = Class.new(app) { include plugin::Base }
+        below = Class.new(base) do
+          graphql_name "Below"
+          authorize :none, reason: "x", covers_fields: true
+          reauthorize_scoped_objects(false)
+          field :number, String, null: true
+        end
+        query.field :belows, [below], null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to include(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "reports a bypassed node's flag under a connection with its own rule, and pins that it skips that rule" do
+      plugin = armory
+      schema = build(invoice: proc do
+        authorize :none, reason: "x", covers_fields: true
+        reauthorize_scoped_objects(false)
+      end, on_query: lambda do |query, invoice|
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          include plugin::Base
+          graphql_name "GuardedConnection"
+          authorize :manage, model: ::Invoice, policy: InvoicePolicy
+          edge_type(invoice.edge_type)
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      result = execute_query(schema, "{ things { nodes { id } } }", context: { current_user: world.alice },
+                                                                    root_value: Struct.new(:things).new(::Invoice.all)).to_h
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(result.dig("data", "things", "nodes")).not_to be_empty
+    end
+
+    it "reports an own reader whatever it answers, without running it" do
+      answers_true = build(invoice: proc { def self.reauthorize_scoped_objects(*) = true })
+      raises = build(invoice: proc { def self.reauthorize_scoped_objects(*) = raise("needs a request") })
+
+      expect(problems(answers_true).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(problems(raises).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "does not let a declared pass-through on a base clear a child's own flag" do
+      plugin = armory
+      schema = build(object: proc { def self.reauthorize_scoped_objects(new_value = nil) = super }, invoice: proc { reauthorize_scoped_objects(false) })
+      base = @classes[:base_object]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { base => { reauthorize_scoped_objects: "only passes through" } } }
+
+      expect(problems(schema).size).to eq(2)
+      expect(problems(declared).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "reports every level of a chain of own readers" do
+      schema = build(object: proc { def self.reauthorize_scoped_objects(*) = false }, invoice: proc { def self.reauthorize_scoped_objects(*) = super })
+
+      expect(problems(schema).size).to eq(2)
+    end
+
+    it "does not raise on a connection with no node, with an own reader or over another such connection" do
+      schema = build(on_query: lambda do |query, _invoice|
+        empty = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "EmptyConnection"
+          def self.reauthorize_scoped_objects(*) = super
+        end
+        over = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "OverEmptyConnection"
+          define_singleton_method(:node_type) { empty }
+        end
+        query.field :empties, empty, null: true, authorize: :none, reason: "x"
+        query.field :overs, over, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "reports the flag of a connection's node even when that node is absent from schema.types" do
+      schema = build(on_query: lambda do |query, invoice|
+        hidden = Class.new(GraphQL::Schema::Object) do
+          graphql_name "Hidden"
+          reauthorize_scoped_objects(false)
+          field :number, String, null: true
+        end
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "SwappedConnection"
+          edge_type(invoice.edge_type)
+          define_singleton_method(:node_type) { hidden }
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(schema.types.keys).not_to include("Hidden")
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "does not loop on a connection whose node is itself" do
+      schema = build(on_query: lambda do |query, invoice|
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "SelfConnection"
+          edge_type(invoice.edge_type)
+          define_singleton_method(:node_type) { self }
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema)).to eq([])
+    end
+
+    it "reports the flag on a subclass of a named connection, whose node_type is reset to nil" do
+      schema = build(on_query: lambda do |query, invoice|
+        named = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "NamedConnection"
+          edge_type(invoice.edge_type)
+        end
+        child = Class.new(named) do
+          graphql_name "ChildConnection"
+          reauthorize_scoped_objects(false)
+        end
+        query.field :things, child, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    # Verifier probes: what runs is the method, and on the interpreter it is asked of the field's return type.
+    let(:manage) { proc { authorize :manage, model: ::Invoice } }
+
+    it "reports the flag set as a method on a type, and lets it be declared" do
+      plugin = armory
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        def self.reauthorize_scoped_objects(*) = false
+      end)
+      type = @classes[:invoice]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { type => { reauthorize_scoped_objects: "as strict" } } }
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(numbers(schema)).to eq(2)
+      expect(problems(declared)).to eq([])
+    end
+
+    it "reports the flag set as a method on a base object through a module" do
+      own = Module.new { def reauthorize_scoped_objects(*) = false }
+
+      expect(problems(build(object: proc { extend own }, invoice: manage)).map(&:path).grep(/reauthorize/).size).to eq(1)
+    end
+
+    it "reports the flag on a generated connection, and pins that on the interpreter it serves what the node's rule refuses" do
+      schema = build(invoice: manage, on_query: lambda do |query, invoice|
+        connection = invoice.connection_type
+        connection.reauthorize_scoped_objects(false)
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      result = execute_query(schema, "{ things { nodes { id } } }", context: { current_user: world.alice },
+                                                                    root_value: Struct.new(:things).new(::Invoice.all)).to_h
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(result.dig("data", "things", "nodes").size).to eq(2) unless ArmoryEngine.next?
+    end
+
+    it "reports the flag and scope_items on a named connection that does not include Base" do
+      schema = build(on_query: lambda do |query, invoice|
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "NamedInvoiceConnection"
+          edge_type(invoice.edge_type)
+          reauthorize_scoped_objects(false)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "reports the flag and scope_items on a union" do
+      schema = build(on_query: lambda do |query, invoice|
+        union = Class.new(GraphQL::Schema::Union) do
+          graphql_name "Thing"
+          possible_types invoice
+          reauthorize_scoped_objects(false)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, [union], null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "reports the flag and scope_items an interface defines" do
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Thing"
+        field :id, String, null: false
+        definition_methods do
+          def reauthorize_scoped_objects(*) = false
+          def scope_items(items, _context) = items.where("1=1")
+        end
+      end
+      schema = build(invoice: proc { implements interface }, on_query: lambda do |query, _invoice|
+        query.field :things, [interface], null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to include(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "reports a method that answers nil, because graphql-ruby only tests for falsiness" do
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        def self.reauthorize_scoped_objects(*) = nil
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(numbers(schema)).to eq(2)
+    end
+
+    it "reports a flagged interface under a connection with its own scope, even with that scope declared, and pins what the interpreter serves" do
+      plugin = armory
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Thing"
+        field :id, String, null: false
+        reauthorize_scoped_objects(false)
+        definition_methods { def resolve_type(_object, _context) = Dummy::World }
+      end
+      connection = nil
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        implements interface
+      end, on_query: lambda do |query, invoice|
+        interface.define_singleton_method(:resolve_type) { |_object, _context| invoice }
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "ThingConnection"
+          edge_type(interface.edge_type)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { connection => { scope_items: "narrows" } } }
+      result = execute_query(schema, "{ things { nodes { id } } }", context: { current_user: world.alice },
+                                                                    root_value: Struct.new(:things).new(::Invoice.all)).to_h
+
+      expect(problems(declared).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(result.dig("data", "things", "nodes").size).to eq(::Invoice.count) unless ArmoryEngine.next?
+    end
+
+    it "reports a flag whose reader answers false with no class holding it: a method on a parent interface" do
+      plugin = armory
+      parent = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Parent"
+        def self.reauthorize_scoped_objects(*) = false
+      end
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        include parent
+        graphql_name "Thing"
+        field :id, String, null: false
+      end
+      connection = nil
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        implements interface
+      end, on_query: lambda do |query, invoice|
+        interface.define_singleton_method(:resolve_type) { |_object, _context| invoice }
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "ThingConnection"
+          edge_type(interface.edge_type)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { connection => { scope_items: "narrows" } } }
+      result = execute_query(schema, "{ things { nodes { id } } }", context: { current_user: world.alice },
+                                                                    root_value: Struct.new(:things).new(::Invoice.all)).to_h
+
+      expect(problems(declared).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(result.dig("data", "things", "nodes").size).to eq(::Invoice.count) unless ArmoryEngine.next?
+    end
+
+    # Verifier probes: the exemptions and the holder lookup.
+    it "reports the flag on a direct edge with its own rule, which Execution::Next then skips" do
+      plugin = armory
+      schema = build(on_query: lambda do |query, invoice|
+        edge = Class.new(GraphQL::Types::Relay::BaseEdge) do
+          include plugin::Base
+          graphql_name "GuardedEdge"
+          authorize :manage, policy: InvoicePolicy
+          node_type(invoice)
+          reauthorize_scoped_objects(false)
+        end
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "GuardedConnection"
+          has_nodes_field(false)
+          edge_type(edge)
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "reports the flag on a bypassed type with its own check, which Execution::Next then skips" do
+      plugin = armory
+      schema = build(invoice: proc do
+        authorize :none, reason: "own check", covers_fields: true
+        reauthorize_scoped_objects(false)
+        def self.authorized?(_object, _context) = false
+      end)
+      type = @classes[:invoice]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { type => { authorized?: "checks admin itself" } } }
+
+      expect(problems(declared).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(numbers(declared)).to eq(::Invoice.count) if ArmoryEngine.next?
+    end
+
+    it "tells connections and edges by what they include, not by the methods they answer" do
+      named = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(false)
+        def self.node_type = :leaf
+      end)
+      edge_class = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(false)
+        def self.edge_class = nil
+      end)
+
+      expect(problems(named).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(problems(edge_class).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "names the superclass that sets the flag, not an interface the type implements" do
+      plugin = armory
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Thing"
+        field :id, String, null: false
+        reauthorize_scoped_objects(true)
+      end
+      schema = build(object: proc { reauthorize_scoped_objects(false) }, invoice: proc do
+        authorize :manage, model: ::Invoice
+        implements interface
+      end)
+      base = @classes[:base_object]
+      right = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { base => { reauthorize_scoped_objects: "as strict" } } }
+      wrong = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { interface => { reauthorize_scoped_objects: "as strict" } } }
+
+      expect(problems(right)).to eq([])
+      expect(armory::Audit.(wrong).ok?).to be(false)
+    end
+
+    it "does not blame a parent connection set to true for its node's flag" do
+      plugin = armory
+      schema = build(invoice: skip_rule, on_query: lambda do |query, invoice|
+        parent = Class.new(GraphQL::Types::Relay::BaseConnection) { reauthorize_scoped_objects(true) }
+        connection = Class.new(parent) do
+          graphql_name "ThingConnection"
+          edge_type(invoice.edge_type)
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+      type = @classes[:invoice]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { type => { reauthorize_scoped_objects: "as strict" } } }
+
+      expect(problems(declared)).to eq([])
+    end
+
+    it "does not report scope_items on an enum, which is never scoped" do
+      schema = build(on_query: lambda do |query, _invoice|
+        enum = Class.new(GraphQL::Schema::Enum) do
+          graphql_name "Kind"
+          value "A"
+          def self.scope_items(items, _context) = items
+        end
+        query.field :kind, enum, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema)).to eq([])
+    end
+
+    it "reports a flagged union under a connection with its own scope" do
+      schema = build(on_query: lambda do |query, invoice|
+        union = Class.new(GraphQL::Schema::Union) do
+          graphql_name "Thing"
+          possible_types invoice
+          reauthorize_scoped_objects(false)
+        end
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "ThingConnection"
+          edge_type(union.edge_type)
+          def self.scope_items(items, _context) = items.where("1=1")
+        end
+        query.field :things, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"), end_with(".scope_items"))
+    end
+
+    it "reports once, on the base, a flag that template classes inherit, and one declaration clears it" do
+      plugin = armory
+      schema = build(relay_template: true, object: proc { reauthorize_scoped_objects(false) }, invoice: proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(true)
+      end)
+      base = @classes[:base_object]
+      declared = Class.new(schema) { use plugin, adapter: :pundit, own_checks: { base => { reauthorize_scoped_objects: "each type with a rule turns it back on" } } }
+
+      expect(problems(schema).size).to eq(1)
+      expect(problems(declared)).to eq([])
+    end
+
+    it "does not report twice a flagged type under a generated connection" do
+      schema = build(relay_template: true, invoice: skip_rule)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+    end
+
+    it "does not raise on a connection with no edge type" do
+      schema = build(on_query: lambda do |query, _invoice|
+        connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+          graphql_name "EmptyConnection"
+          field :total, Integer, null: true
+        end
+        query.field :empty, connection, null: true, authorize: :none, reason: "x"
+      end)
+
+      expect { armory::Audit.(schema) }.not_to raise_error
+    end
+
+    it "does not blame a type that turns the flag back on, whose rule does run" do
+      on_type = build(object: proc { reauthorize_scoped_objects(false) }, invoice: proc do
+        authorize :manage, model: ::Invoice
+        reauthorize_scoped_objects(true)
+      end)
+
+      expect(problems(on_type).map(&:path)).not_to include(a_string_including("Invoice"))
+      expect(numbers(on_type)).to be_nil
+    end
+
+    it "reports a flag on an interface with no scope of its own, and the rule still runs" do
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Thing"
+        field :id, String, null: false
+        reauthorize_scoped_objects(false)
+      end
+      schema = build(invoice: proc do
+        authorize :manage, model: ::Invoice
+        implements interface
+      end)
+
+      expect(problems(schema).map(&:path)).to contain_exactly(end_with(".reauthorize_scoped_objects"))
+      expect(numbers(schema)).to be_nil
+    end
+
+    it "reports an own scope_items, and pins that with reauthorization off it serves another account's records" do
+      schema = build(invoice: proc do
+        reauthorize_scoped_objects(false)
+        def self.scope_items(items, _context) = items.where("1=1")
+      end)
+
+      expect(problems(schema).map(&:path)).to include(end_with(".scope_items"))
+      expect(numbers(schema)).to eq(::Invoice.count)
+      expect(numbers(build)).to eq(2)
+    end
   end
 
   it "reports self.wrap on a type, and pins that on the interpreter it skips the rule" do
