@@ -58,7 +58,12 @@ module GraphQL
           private
 
           def policy_class(rule, subject)
-            rule.policy || finder(subject).policy!
+            rule.policy || finder(subject).policy || raise(::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}")
+          end
+
+          # Never `inspect`: Pundit's own message quotes the record, and on a relation it runs the query.
+          def subject_name(subject)
+            subject.is_a?(Module) || subject.is_a?(Symbol) ? subject : subject.class
           end
 
           def query_for(rule)

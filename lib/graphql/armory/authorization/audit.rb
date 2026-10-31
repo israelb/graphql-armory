@@ -48,6 +48,7 @@ module GraphQL
           end
 
           audited_types(schema).each { |type| audit_type(type, findings) }
+          @definitions.each { |type| audit_relay_policy(type, findings) if type.kind.object? && RELAY_TYPES.any? { |relay| type <= relay } }
           @definitions.each { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
           @definitions.each { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
           @definitions.each { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
@@ -437,6 +438,12 @@ module GraphQL
           else
             check(path.split(".").first, model, Rule.new(declared, policy: field.armory_policy), findings, reported) if model
           end
+        end
+
+        # A connection or edge is not audited as a type, but a field rule on it runs under the same terms.
+        def audit_relay_policy(type, findings)
+          policy = type.armory_rule&.policy if type.respond_to?(:armory_rule)
+          audit_foreign_policies(type, policy, findings) if policy
         end
 
         # A rule asks the policy of the class that defines it, and a field never sees its resolved type: a rule on an

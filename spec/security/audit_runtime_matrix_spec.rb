@@ -191,6 +191,22 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
       resolver = spec.base_resolver
       spec.strict_type(spec.parent_type { field :notes, resolver: resolver, authorize: :manage })
     }],
+    "a field rule on a parent connection, the policy on the subclass" => [bare, :reported, lambda { |spec|
+      node = spec.strict_type
+      field_klass = spec.base_field
+      plugin = spec.armory
+      parent = Class.new(GraphQL::Types::Relay::BaseConnection) do
+        include plugin::Base
+        field_class field_klass
+        graphql_name "BaseDocs"
+        edge_type(node.edge_type)
+        field :notes, String, null: true, authorize: :manage
+      end
+      Class.new(parent) do
+        graphql_name "Docs"
+        authorize :read, policy: ArmoryMatrixStrictPolicy, model: ArmoryMatrixDoc
+      end
+    }],
     "a field rule on a parent, the policy on a bypassed child" => [bare, :reported, lambda { |spec|
       Class.new(spec.parent_type(&field_rule)) do
         graphql_name "Doc"
