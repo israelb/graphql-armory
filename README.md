@@ -15,7 +15,7 @@ gem "graphql-armory", "~> 0.1.0.pre7"  # a prerelease: `gem install graphql-armo
 gem "pundit"      # or "cancancan", for the authorization module
 ```
 
-Requires Ruby >= 3.1 and graphql >= 2.4.
+Requires Ruby >= 3.1 and graphql >= 2.4. Tested on CRuby only: JRuby and TruffleRuby are not covered.
 
 ## Modules
 

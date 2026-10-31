@@ -12,7 +12,7 @@ module GraphQL
             new(definitions, findings).(schema)
           end
 
-          def initialize(definitions, findings)
+          def initialize(definitions = [], findings = Findings.new)
             @definitions = definitions
             @findings = findings
             @override_paths = {}.compare_by_identity

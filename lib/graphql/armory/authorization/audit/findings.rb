@@ -15,6 +15,10 @@ module GraphQL
             @problems << Report::Problem.new(kind, path, message)
           end
 
+          def problem?(kind, path = nil)
+            @problems.any? { |problem| problem.kind == kind && (path.nil? || problem.path == path) }
+          end
+
           def bypass(path, reason)
             @bypasses << Report::Bypass.new(path, reason)
           end

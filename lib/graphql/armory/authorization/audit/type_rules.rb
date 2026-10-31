@@ -6,7 +6,7 @@ module GraphQL
       class Audit
         # An object type's rule, and what its fields, resolvers and arguments declare under it.
         class TypeRules
-          def initialize(adapter, findings, foreign_policies)
+          def initialize(adapter = Adapters::Null.new, findings = Findings.new, foreign_policies = ForeignPolicies.new(adapter, findings))
             @adapter = adapter
             @findings = findings
             @foreign_policies = foreign_policies
