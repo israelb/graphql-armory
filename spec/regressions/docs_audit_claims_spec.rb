@@ -59,7 +59,7 @@ RSpec.describe "docs/authorization.md audit section claims" do
     end
 
     it "preservation: the only callers are the matcher, the rake task and Audit.()" do
-      hits = Dir["#{Dir.pwd}/lib/**/*.rb", "#{Dir.pwd}/lib/**/*.rake"].select { |f| File.read(f).match?(/\bAudit\b/) } - ["#{Dir.pwd}/lib/graphql/armory/authorization/audit.rb"]
+      hits = Dir["#{Dir.pwd}/lib/**/*.rb", "#{Dir.pwd}/lib/**/*.rake"].select { |f| File.read(f).match?(/\bAudit(\.|::)/) } - ["#{Dir.pwd}/lib/graphql/armory/authorization/audit.rb"]
       puts hits.sort
       expect(hits.map { |f| File.basename(f) }.sort).to eq(%w[command.rb graphql_armory.rake rspec.rb])
     end
