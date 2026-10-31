@@ -72,7 +72,7 @@ module GraphQL
           end
 
           def in_memory(ability, items, rule)
-            items.select { |item| authorized?(ability, item, rule) == true }
+            items.select { |item| true.equal?(authorized?(ability, item, rule)) }
           end
 
           def ability_for(context)

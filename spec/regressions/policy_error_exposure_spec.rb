@@ -193,9 +193,9 @@ RSpec.describe "fix/audit-backlog-exposure probes" do
     end
   end
 
-  it "[preservation] 1j nil message says NilClass, a Symbol names itself, a Class names itself" do
+  it "[preservation] 1j nil message says NilClass, a Symbol does not quote its text, a Class names itself" do
     expect(caught { adapter.authorized?(:u, nil, rule) }.message).to match(/nil/i)
-    expect(caught { adapter.authorized?(:u, :vfy_absent, rule) }.message).to match(/vfy_absent|VfyAbsent/i)
+    expect(caught { adapter.authorized?(:u, :vfy_absent, rule) }.message).to eq("no policy found for Symbol")
     expect(caught { adapter.authorized?(:u, VfyNoPolicyRecord, rule) }.message).to include("VfyNoPolicyRecord")
   end
 

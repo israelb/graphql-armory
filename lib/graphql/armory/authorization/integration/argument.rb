@@ -51,14 +51,14 @@ module GraphQL
             return super if @armory_declared.nil? || @armory_declared == :none
 
             model = armory_model
-            subject = object.is_a?(model) ? object : model
+            subject = Module === model && model === object ? object : model
             Integration.allowed?(subject, Rule.new(@armory_declared, policy: armory_policy, attribute: keyword, model: model), context) && super
           end
 
           def visible?(context)
             return super unless @armory_visible_when
 
-            super && Integration.visible?(armory_model, Rule.new(@armory_visible_when, policy: armory_policy, attribute: keyword), context)
+            super && Integration.visible?(armory_model, Rule.new(@armory_visible_when, policy: armory_policy, attribute: keyword, model: armory_model), context)
           end
 
           # The `policy:` of the type or resolver the argument belongs to.
