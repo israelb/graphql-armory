@@ -62,8 +62,9 @@ module GraphQL
           end
 
           # Never `inspect`: Pundit's own message quotes the record, and on a relation it runs the query.
+          # Nor the record's own `class` or `is_a?`: on a Struct or OpenStruct, `class` can be a data member.
           def subject_name(subject)
-            subject.is_a?(Module) || subject.is_a?(Symbol) ? subject : subject.class
+            Module === subject || Symbol === subject ? subject : ::Kernel.instance_method(:class).bind_call(subject)
           end
 
           def query_for(rule)
