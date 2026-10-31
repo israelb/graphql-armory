@@ -126,26 +126,26 @@ module GraphQL
         def audit_overrides(schema, findings)
           @override_paths = {}.compare_by_identity
           @falling_back = {}.compare_by_identity
+          @duplicates = Set.new.compare_by_identity
           @definitions.each do |type|
             next if type.introspection?
 
             note_redefinitions(type.graphql_name, type.ancestors, :own_fields, :original_name)
             note_redefinitions(type.graphql_name, type.ancestors, :own_arguments, :graphql_name) if type.kind.input_object?
-            next unless type.respond_to?(:all_field_definitions)
-
-            type.all_field_definitions.each do |field|
+            Definitions.fields_at_every_level(type).each do |field|
               levels = [field] + (field.resolver ? field.resolver.ancestors : [])
               note_redefinitions("#{type.graphql_name}.#{field.original_name}", levels, :own_arguments, :graphql_name)
             end
           end
           no_fallback = visibility_without_fallback?(schema)
           @override_paths.each do |member, path|
-            falls_back = !no_fallback && @falling_back.key?(member)
+            falls_back = @falling_back.key?(member) && (!no_fallback || @duplicates.include?(member))
             note_override(findings, falls_back ? @falling_back[member] : path, member, falls_back)
           end
         end
 
-        # Nearest level first; only a lone definition on the farthest level has nothing to fall back to.
+        # Nearest level first; only a lone definition on the farthest level has nothing to fall back to. Duplicates on
+        # one level are noted apart: a visibility profile skips the levels below, but still picks one of those.
         def note_redefinitions(prefix, ancestors, reader, name_reader)
           levels = ancestors.select { |ancestor| ancestor.respond_to?(reader) }
           levels.flat_map { |level| level.public_send(reader).keys }.uniq.each do |name|
@@ -153,11 +153,12 @@ module GraphQL
             definitions.flatten.each { |member| @override_paths[member] ||= "#{prefix}.#{member.public_send(name_reader)}" }
             falling = definitions.last.size == 1 ? definitions.flatten[0...-1] : definitions.flatten
             falling.each { |member| @falling_back[member] ||= "#{prefix}.#{member.public_send(name_reader)}" }
+            definitions.select { |level| level.size > 1 }.flatten.each { |member| @duplicates << member }
           end
         end
 
-        # graphql-ruby skips the fallback only when the request carries a visibility profile. A static profile runs with a
-        # plain Hash, so only `Schema::Visibility` with no profiles, and not turned off below, rules the fallback out.
+        # graphql-ruby skips the fallback to a lower level only when the request carries a visibility profile. A static
+        # profile runs with a plain Hash, so only `Schema::Visibility` with no profiles, not turned off below, rules it out.
         def visibility_without_fallback?(schema)
           visibility = schema.visibility
           return false unless visibility
@@ -172,7 +173,7 @@ module GraphQL
             findings.bypass(path, reason)
           elsif falls_back
             findings.problem(:ignored_rule, path, "is defined more than once: hidden from a user, it falls back to the other definition, and its own rule, arguments, type and extensions do not apply. " \
-                                                  "Remove one, use Schema::Visibility with dynamic: true and no profiles, or declare override_reason:")
+                                                  "Remove one or declare override_reason:; for a definition on an ancestor, Schema::Visibility with dynamic: true and no profiles also stops the fallback")
           elsif reason
             findings.problem(:ignored_rule, path, "declares override_reason: but nothing falls back from it: remove it")
           end
@@ -372,20 +373,34 @@ module GraphQL
           end
         end
 
+        # Every definition, the shadowed ones included: a hidden override falls back to them, so they serve requests too.
         def audit_fields(type, findings, model:, bypassed:, reported:)
-          type.all_field_definitions.each do |field|
+          Definitions.fields_at_every_level(type).each do |field|
             path = "#{type.graphql_name}.#{field.original_name}"
-            # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
-            inherited = bypassed && interface_field?(field)
-            next findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !inherited && !field.respond_to?(:armory_declared)
-            next unless field.respond_to?(:armory_declared)
-            next audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)
+            next audit_shadowed_field(type, field, path, findings, model: model, bypassed: bypassed, reported: reported) if Definitions.shadowed?(type, field)
 
-            audit_declaration(field, path, findings, model: model, bypassed: bypassed && !inherited, reported: reported)
-            audit_visibility(field, path, findings, model: model, reported: reported)
-            audit_loads(field, path, findings)
-            audit_arguments(field, path, findings, reported: reported)
+            audit_field(field, path, findings, model: model, bypassed: bypassed, reported: reported)
           end
+        end
+
+        # A shadowed field whose type cannot load serves nothing, so it is skipped rather than failing the audit.
+        def audit_shadowed_field(type, field, path, findings, model:, bypassed:, reported:)
+          audit_field(field, path, findings, model: model, bypassed: bypassed, reported: reported)
+        rescue GraphQL::Error
+          raise unless Definitions.shadowed?(type, field)
+        end
+
+        def audit_field(field, path, findings, model:, bypassed:, reported:)
+          # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
+          inherited = bypassed && interface_field?(field)
+          return findings.problem(:field_without_rule, path, "its field class does not include Base, so it is denied") if bypassed && !inherited && !field.respond_to?(:armory_declared)
+          return unless field.respond_to?(:armory_declared)
+          return audit_resolver(field, path, findings) if field.resolver.respond_to?(:armory_rule)
+
+          audit_declaration(field, path, findings, model: model, bypassed: bypassed && !inherited, reported: reported)
+          audit_visibility(field, path, findings, model: model, reported: reported)
+          audit_loads(field, path, findings)
+          audit_arguments(field, path, findings, reported: reported)
         end
 
         # A resolver or mutation carries its own rule: no rule is denied, `:none` is listed, an action is checked.

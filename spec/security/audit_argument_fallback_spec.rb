@@ -5,13 +5,17 @@
 RSpec.describe "audit of redefined arguments and static profiles" do
   let(:armory) { GraphQL::Armory::Authorization }
   let(:adapter) { armory::Adapters::Substitute.new(allow: false) }
-  let(:base_field) do
-    plugin = armory
-    Class.new(GraphQL::Schema::Field) { include plugin::Base }
-  end
   let(:base_argument) do
     plugin = armory
     Class.new(GraphQL::Schema::Argument) { include plugin::Base }
+  end
+  let(:base_field) do
+    plugin = armory
+    argument = base_argument
+    Class.new(GraphQL::Schema::Field) do
+      include plugin::Base
+      argument_class argument
+    end
   end
   let(:base_object) do
     plugin = armory
@@ -90,6 +94,83 @@ RSpec.describe "audit of redefined arguments and static profiles" do
 
       expect(redefinitions(parent)).to eq([])
       expect(redefinitions(child)).to include("Doc.notes")
+    end
+  end
+
+  describe "what Schema::Visibility does not stop" do
+    # `Visibility::Profile` skips the ancestor fallback, but among duplicates on one owner it still picks the visible one.
+    it "reports duplicates on one owner under dynamic: true" do
+      twice_field = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true, authorize: :manage
+        field :notes, String, null: true
+      end
+      twice_argument = Class.new(base_input) do
+        graphql_name "Filter"
+        argument :internal, GraphQL::Types::Boolean, required: false, authorize: :manage
+        argument :internal, GraphQL::Types::Boolean, required: false
+      end
+      query = query_type do
+        field :doc, twice_field, null: true, authorize: :none, reason: "x"
+        field :notes, String, null: true, authorize: :none, reason: "x" do
+          argument :filter, twice_argument, required: false
+        end
+      end
+      schema = schema_for(query, setup: proc { use GraphQL::Schema::Visibility, dynamic: true })
+
+      expect(redefinitions(schema)).to include("Doc.notes", "Filter.internal")
+    end
+
+    # `schema.types` is what loads `field do ... end` blocks; a profile-only schema refuses that call.
+    it "reads field blocks when static profiles come before the roots" do
+      plugin = armory
+      armory_adapter = adapter
+      query = query_type do
+        field :notes, String, null: true, authorize: :none, reason: "x" do
+          argument :internal, GraphQL::Types::Boolean, required: false, authorize: :manage
+          argument :internal, GraphQL::Types::Boolean, required: false
+        end
+      end
+      schema = Class.new(base_schema) do
+        use GraphQL::Schema::Visibility, profiles: { public: {} }
+        use plugin, adapter: armory_adapter
+        query query
+      end
+
+      expect(redefinitions(schema)).to include("Query.notes.internal")
+    end
+  end
+
+  describe "a shadowed definition" do
+    # A declared override still falls back: whatever it falls back to is audited like any field.
+    it "audits the parent's field a declared override shadows" do
+      plugin = armory
+      argument_klass = base_argument
+      parent_resolver = Class.new(GraphQL::Schema::Resolver) do
+        include plugin::Base
+        graphql_name "Notes"
+        argument_class argument_klass
+        type String, null: true
+        authorize :none, reason: "x"
+        argument :internal, GraphQL::Types::Boolean, required: false
+      end
+      child_resolver = Class.new(parent_resolver) do
+        graphql_name "Notes"
+        argument :internal, GraphQL::Types::Boolean, required: false, authorize: :manage
+      end
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field :notes, resolver: child_resolver
+      end
+      child = Class.new(parent) do
+        graphql_name "Doc"
+        field :notes, String, null: true, override_reason: "the parent's field is as strict"
+      end
+
+      expect(redefinitions(schema_for(query_of(child)))).to include("Doc.notes.internal")
     end
   end
 

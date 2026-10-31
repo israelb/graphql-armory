@@ -25,6 +25,8 @@ module GraphQL
         def self.listed_types(schema)
           schema.types.values
         rescue ArgumentError
+          raise unless schema.visibility
+
           []
         end
         private_class_method :listed_types
@@ -45,16 +47,28 @@ module GraphQL
         end
         private_class_method :referenced_types
 
-        # A hidden override falls back to the ancestor's field, and `all_field_definitions` merges them by name. An
-        # overridden field whose type cannot load serves nothing, and must not break what runs today.
-        def self.fields_of(type)
+        # Every definition of every field, nearest first: a hidden one falls back to the next of its name, and
+        # `all_field_definitions` merges them by name. `field ... do ... end` blocks are loaded here, because only
+        # `schema.types` or a request loads them, and the audit reads arguments from them.
+        def self.fields_at_every_level(type)
           return [] unless type.respond_to?(:all_field_definitions)
 
-          current = type.all_field_definitions
-          overridden = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }.flat_map { |ancestor| ancestor.own_fields.values.flatten } - current
-          current.map { |field| references_of(field) } + overridden.map do |field|
+          fields = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }.flat_map { |ancestor| ancestor.own_fields.values.flatten }
+          fields.each { |field| field.ensure_loaded if field.respond_to?(:ensure_loaded) }
+          fields.uniq
+        end
+
+        # A shadowed definition is only served by a fallback, so one whose type cannot load fails nothing that runs today.
+        def self.shadowed?(type, field)
+          !type.all_field_definitions.include?(field)
+        end
+
+        def self.fields_of(type)
+          fields_at_every_level(type).map do |field|
             references_of(field)
           rescue GraphQL::Error
+            raise unless shadowed?(type, field)
+
             nil
           end
         end
