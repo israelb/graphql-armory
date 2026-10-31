@@ -55,7 +55,8 @@ The actor is `context[:current_user]`. A complete, tested version lives in [`exa
 | `default_action :read` | Default rule for every type below this base class. |
 | `authorize :manage` | This type is checked with `manage?` instead. |
 | `authorize :read, model: Invoice` | The model when it is not named like the type. |
-| `field ..., authorize: :manage` | The field asks another question of the same policy. |
+| `authorize :read, policy: InvoicePolicy` | Names the policy, instead of finding it from the record. |
+| `field ..., authorize: :manage` | The field asks another question of the same policy: the one the class that defines the field names, or else the one found from the record. |
 | `authorize :none, reason: "..."` | Explicit bypass. A reason is required and appears in the audit. |
 
 A bypass does not propagate: a field of a bypassed type still needs its own rule, or it is denied. One exception, which the audit names: a field runs under the rule of the class that defines it, so a field a bypassed subclass inherits from a parent with a rule, or from a parent that does not include `Base`, is **served with no check**, because the parent's type check never ran on that record. Give the parent's field its own `authorize:`, or remove it. Redeclaring it on the subclass with `authorize:` protects that field too, but the audit still reports the parent's definition, because a hidden child falls back to it. The same goes for a field whose field class does not include `Base`: graphql-ruby's own `authorized?` answers true, so on a bypassed type it is served.
@@ -177,6 +178,7 @@ load "tasks/graphql_armory.rake"
 | `:hook` | The schema's own `unauthorized_field` or `unauthorized_object` wins over the plugin's. | Remove it, or declare it in `own_denial_hooks:`. |
 | `:own_check` | Your own method can skip the rule: `authorized?`, `wrap`, `visible?` and others, or `reauthorize_scoped_objects` turned off. | Remove it, or declare it in `own_checks:`. |
 | `:ignored_rule` | A rule that does not run, or a field or argument defined more than once. | See [Redefined fields and arguments](#redefined-fields-and-arguments) and [Lists, connections and lookups](#lists-connections-and-lookups). |
+| `:foreign_policy` | A type names a `policy:`, but a rule it uses is defined on an interface, a parent, an input object or a plain resolver, so that rule asks another policy. A user this type's policy refuses can get the data. A field never sees its resolved type, so this cannot be fixed at runtime. | Put the rule on the class that names the policy, or the `policy:` on the class that defines the rule. There is no declaration for it. |
 
 A declaration (`own_checks:`, `own_denial_hooks:`, `override_reason:`, `authorize :none, reason:`) is your word: the audit stops reporting that problem and lists the reason, so a reviewer can read it. It does not read what your code does. A declaration that names nothing in use is itself a problem.
 
