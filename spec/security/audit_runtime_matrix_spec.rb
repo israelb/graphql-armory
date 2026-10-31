@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "json"
+require "ostruct"
+
 # The invariant the audit exists for: if a user the type's policy refuses gets the data, the audit must not say ok.
 # Each shape is one place a rule can live relative to the `policy:` that should answer it. A new way to break the
 # invariant belongs here as a shape, not only as a spec of its own.
@@ -27,6 +30,9 @@ class ArmoryMatrixSame
 end
 
 class ArmoryMatrixSamePolicy < ArmoryMatrixStrictPolicy; end
+
+class ArmoryMatrixClientRecord < OpenStruct; end
+class ArmoryMatrixClientRecordPolicy < ArmoryMatrixStrictPolicy; end
 
 RSpec.describe "audit against runtime, for a user the type's policy refuses" do
   let(:armory) { GraphQL::Armory::Authorization }
@@ -273,6 +279,18 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     paths = armory::Audit.(schema_of(strict_type { field :notes, resolver: resolver })).problems.select { |problem| problem.kind == :foreign_policy }.map(&:path)
 
     expect(paths).to eq(paths.uniq)
+  end
+
+  it "does not serve a record whose own keys name a laxer policy" do
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :manage, model: ArmoryMatrixSame
+      field :notes, String, null: true
+    end
+    record = ArmoryMatrixClientRecord.new(JSON.parse('{"policy_class":"ArmoryMatrixDocPolicy","notes":"SECRET"}'))
+    response = execute_query(schema_of(type), "{ doc { notes } }", root_value: Struct.new(:doc).new(record), context: { current_user: :someone }).to_h
+
+    expect(response.dig("data", "doc")).to be_nil
   end
 
   it "says nothing when the type names no policy" do
