@@ -45,9 +45,9 @@ module GraphQL
           end
 
           audited_types(schema).each { |type| audit_type(type, findings) }
-          schema.types.each_value { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
-          schema.types.each_value { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
-          schema.types.each_value { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
+          definitions(schema).each { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
+          definitions(schema).each { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
+          definitions(schema).each { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
           findings.report
         end
 
@@ -77,20 +77,20 @@ module GraphQL
         # defined, until it is declared. Methods that come from graphql-ruby or from this gem are not the app's.
         def audit_own_checks(schema, findings)
           found = {}
-          schema.types.each_value do |type|
+          definitions(schema).each do |type|
             next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
 
             %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
             note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
-          schema.types.each_value do |type|
+          definitions(schema).each do |type|
             next if type.introspection? || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
 
             note_class_check(found, type, :scope_items)
             note_reauthorization(found, type)
           end
-          schema.types.each_value do |type|
+          definitions(schema).each do |type|
             next unless type.kind.input_object? && !type.introspection?
 
             %i[authorized? unauthorized_object].each { |name| note_class_check(found, type, name) }
@@ -121,20 +121,12 @@ module GraphQL
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
         # The interpreter asks the field's return type, Execution::Next the resolved object, and each path differs, so it
         # is reported wherever it is off, without judging whether it skips anything: declaring it takes one line.
-        def note_reauthorization(found, type, seen = [])
-          return if seen.include?(type)
-
-          seen << type
+        def note_reauthorization(found, type)
           readers = type.is_a?(Class) ? [type] : type.ancestors.select { |ancestor| ancestor.respond_to?(:reauthorize_scoped_objects, true) }
           readers.each { |reader| note_class_check(found, reader, :reauthorize_scoped_objects) }
 
           setter = reauthorization_setter(type)
           found[[setter, :reauthorize_scoped_objects]] = "#{setter.name || setter.inspect}.reauthorize_scoped_objects" if setter&.instance_variable_get(:@reauthorize_scoped_objects) == false
-          return unless relay_connection?(type) && setter.instance_variable_get(:@reauthorize_scoped_objects).nil?
-
-          # With no value of its own a connection answers its node's, and that node may not be in `schema.types`.
-          node = type.node_type
-          note_reauthorization(found, node, seen) if node
         end
 
         def relay_connection?(type)
@@ -142,7 +134,8 @@ module GraphQL
         end
 
         # The nearest that set the value, read from the classes so no method of the app runs: graphql-ruby's reader follows
-        # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's.
+        # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's, which
+        # `definitions` reaches and audits as a type of its own.
         def reauthorization_setter(type)
           return type if relay_connection?(type)
 
@@ -204,9 +197,38 @@ module GraphQL
           end
         end
 
-        # Walks `schema.types`, which a schema that hides types with `visible?` would filter.
+        # `schema.types` is read with no request, so it leaves out what is hidden there and a request can still reach:
+        # a type or field hidden by `visible?`, or one of several definitions of a name. This follows the definitions
+        # themselves, running no `visible?`.
+        def definitions(schema)
+          found = Set.new.compare_by_identity
+          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *schema.types.values]
+          until pending.empty?
+            type = pending.pop
+            next if !type.respond_to?(:kind) || !found.add?(type)
+
+            pending.concat(referenced_types(type))
+          end
+          found.to_a
+        end
+
+        def referenced_types(type)
+          references = []
+          type.all_field_definitions.each { |field| references << field.type.unwrap << arguments_of(field) } if type.respond_to?(:all_field_definitions)
+          references << arguments_of(type) if type.kind.input_object?
+          references.concat(type.interface_type_memberships.map(&:abstract_type)) if type.respond_to?(:interface_type_memberships)
+          references.concat(type.orphan_types) if type.kind.interface?
+          references.concat(type.type_memberships.map(&:object_type)) if type.kind.union?
+          references << type.node_type if relay_connection?(type)
+          references.flatten.compact
+        end
+
+        def arguments_of(member)
+          member.all_argument_definitions.flat_map { |argument| [argument.type.unwrap, argument.loads] }
+        end
+
         def audited_types(schema)
-          schema.types.values.select do |type|
+          definitions(schema).select do |type|
             type.kind.object? && !type.introspection? && RELAY_TYPES.none? { |relay| type <= relay }
           end
         end
@@ -271,7 +293,7 @@ module GraphQL
         end
 
         def nodes_field_beside?(edge, schema)
-          schema.types.each_value.any? do |type|
+          definitions(schema).any? do |type|
             next false unless type.kind.object? && !type.introspection?
 
             fields = type.all_field_definitions
