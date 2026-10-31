@@ -23,7 +23,10 @@ module GraphQL
               note_type(type)
               note_arguments(type.graphql_name, type.all_argument_definitions) if type.kind.input_object?
               Definitions.fields_at_every_level(type).each do |field|
-                path = "#{type.graphql_name}.#{field.original_name}"
+                # With Schema::Visibility a request never falls back to a shadowed definition, so it never asks it.
+                next if schema.visibility && Definitions.shadowed?(type, field)
+
+                path = "#{path_owner(type, field)}.#{field.original_name}"
                 note_field(field, path)
                 note_arguments(path, field.all_argument_definitions)
               end
@@ -36,8 +39,7 @@ module GraphQL
           def note_type(type)
             return unless type.respond_to?(:armory_rule) && type.armory_rule&.visible_when && @seen.add?(type)
 
-            problem = model_problem { type.armory_model }
-            @findings.problem(:model, type.graphql_name, problem) if problem && !@findings.problem?(:model, type.graphql_name)
+            report(type.graphql_name, model_problem { type.armory_model })
           end
 
           def note_field(field, path)
@@ -48,16 +50,24 @@ module GraphQL
                       else
                         "uses visible_when:, but what defines it cannot name a model, so a request that reads it raises: put it on an object type that includes Base"
                       end
-            @findings.problem(:model, path, problem) if problem
+            report(path, problem)
           end
 
           def note_arguments(path, arguments)
             arguments.each do |argument|
               next unless argument.respond_to?(:armory_visible_when) && argument.armory_visible_when && @seen.add?(argument)
 
-              problem = model_problem { argument.armory_model }
-              @findings.problem(:model, "#{path}(#{argument.keyword})", problem) if problem
+              report("#{path}(#{argument.keyword})", model_problem { argument.armory_model })
             end
+          end
+
+          # An interface's field is reported on the interface, whichever implementer the walk reaches first.
+          def path_owner(type, field)
+            field.owner.respond_to?(:kind) && field.owner.kind.interface? ? field.owner.graphql_name : type.graphql_name
+          end
+
+          def report(path, problem)
+            @findings.problem(:model, path, problem) if problem && !@findings.problem?(:model, path)
           end
 
           def model_problem

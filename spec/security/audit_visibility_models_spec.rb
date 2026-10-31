@@ -96,6 +96,62 @@ RSpec.describe "a visible_when: that cannot name its model" do
     expect(armory::Audit.(schema_of(type, visibility: false)).problems.map(&:kind)).to include(:model)
   end
 
+  it "stays quiet for a definition a child shadows, which Visibility never asks" do
+    parent = Class.new(base_object) do
+      graphql_name "ArmoryNamelessParent"
+      field :y, String, null: true, visible_when: :export
+    end
+    type = Class.new(parent) do
+      graphql_name "ArmoryNamedChild"
+      authorize :read, model: String
+      field :y, String, null: true, authorize: :read
+    end
+
+    expect(armory::Audit.(schema_of(type)).problems.map(&:kind)).not_to include(:model)
+  end
+
+  it "is reported for a parent's definition a child inherits" do
+    parent = Class.new(base_object) do
+      graphql_name "ArmoryNamelessParent"
+      field :y, String, null: true, visible_when: :export
+    end
+    type = Class.new(parent) do
+      graphql_name "ArmoryNamedChild"
+      authorize :read, model: String
+    end
+
+    expect_reported_every_run(schema_of(type))
+  end
+
+  it "names an interface's field on the interface, once" do
+    field_base = base_field
+    shared = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "ArmoryNamelessShared"
+      field_class field_base
+      field :x, String, null: true, visible_when: :export
+    end
+    type = Class.new(base_object) do
+      graphql_name "ArmoryNamedImplementer"
+      authorize :read, model: String
+      implements shared
+    end
+    paths = armory::Audit.(schema_of(type)).problems.select { |problem| problem.kind == :model }.map(&:path)
+
+    expect(paths).to eq(["ArmoryNamelessShared.x"])
+  end
+
+  it "reports an argument once, however many checks reach it" do
+    type = Class.new(base_object) do
+      graphql_name "ArmoryNamelessStats"
+      authorize :read
+      field(:y, String, null: true) { argument :tag, String, required: false, visible_when: :export }
+    end
+    paths = armory::Audit.(schema_of(type)).problems.select { |problem| problem.kind == :model }.map(&:path)
+
+    expect(paths).to eq(paths.uniq)
+  end
+
   it "stays quiet when the model can be named" do
     type = Class.new(base_object) do
       graphql_name "ArmoryNamelessStats"
