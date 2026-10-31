@@ -83,12 +83,14 @@ module GraphQL
           end
 
           def audit_field(type, field, path, model:, bypassed:, reported:)
+            audit_scope(type, field, path)
             # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
             inherited = bypassed && interface_field?(field)
             if bypassed && !inherited && !field.respond_to?(:armory_declared)
               return @findings.problem(:field_without_rule, path, "its field class does not include Base, so no rule runs on it: its type is bypassed and graphql-ruby's own " \
                                                                   "authorized? answers true, so the field is served with no check. Use a field class that includes Base")
             end
+            return audit_loads(field, path) if !field.respond_to?(:armory_declared) && !field.resolver.respond_to?(:armory_rule)
             return unless field.respond_to?(:armory_declared)
             return audit_resolver(field, path) if field.resolver.respond_to?(:armory_rule)
 
@@ -194,8 +196,32 @@ module GraphQL
             @findings.problem(:model, path, error.message)
           end
 
+          # `scope: false` hands over every record: a rule on each one hides its fields, not how many there are.
+          def audit_scope(type, field, path)
+            return if field.scoped? || generated_list?(type, field) || !list_of_records?(field)
+
+            @findings.problem(:unscoped_list, path, "declares scope: false, so the list skips the user's scope and a refused user sees how many records it holds: remove it")
+          end
+
+          # A connection applies the scope on the field that returns it; graphql-ruby generates these two with scope: false.
+          def generated_list?(type, field)
+            Definitions.connection?(type) && %i[edges nodes].include?(field.original_name)
+          end
+
+          def list_of_records?(field)
+            type = field.type
+            return false unless field.connection? || (type.respond_to?(:list?) && type.list?)
+
+            # A late-bound element has no kind yet: it may be a record.
+            element = type.unwrap
+            !(element.respond_to?(:kind) && element.kind.leaf?)
+          rescue GraphQL::Error
+            false
+          end
+
+          # A field class with no Base never loads through the scope, and has no option to say so.
           def audit_loads(field, path)
-            return if field.armory_load_through_scope?
+            return if field.respond_to?(:armory_load_through_scope?) && field.armory_load_through_scope?
 
             opted_out_loads(field.all_argument_definitions, Set.new).each do |name|
               @findings.problem(:unscoped_load, "#{path}(#{name})", "loads through the app's object_from_id, not through the user's scope")
