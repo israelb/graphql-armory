@@ -115,7 +115,7 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 **What the audit does not see.**
 
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
-- A type no definition leads to. The audit follows the schema's roots, `orphan_types` and what each definition references (fields, arguments, interfaces, union members, a connection's node), ignoring `visible?`, so types hidden with no request and every definition of a duplicated name are audited. A type that only your own `resolve_type` returns, listed nowhere, is not seen. Also not seen: the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly.
+- A type no definition leads to. The audit follows the schema's roots, `orphan_types` and what each definition references (fields, arguments, interfaces, union members, a connection's node), not filtering by `visible?`, so types hidden with no request and every definition of a duplicated name are audited. A type that only your own `resolve_type` returns, listed nowhere, is not seen. Also not seen: the fields of a type that subclasses `Relay::BaseConnection` or `Relay::BaseEdge` directly.
 - Code written to get past it. The audit reads the classes, it does not run your methods: a declared alias of a library method, a class of yours named under `GraphQL::`, or a forged `__FILE__` are not caught. The audit protects against mistakes, not against the app's own code.
 - `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
 
@@ -276,7 +276,7 @@ They are never authorized themselves: graphql-ruby only runs `authorized?` on th
 What an interface adds is its fields, declared once and resolved on many types:
 
 - A field with no rule is **covered** by the rule of the Base types that implement the interface (a plain implementer runs no check at all), unless one of them is a bypass (`authorize :none`). Then the field is **denied for every implementer**, because it cannot tell which type it runs on, and the audit reports it (`:field_without_rule`, for example `Document.number`). Declare it (`authorize: :none, reason:` or an action) to fix it.
-- `visible_when:` is not supported on an interface field; put it on the concrete types' fields.
+- `visible_when:` is not supported on an interface field; put it on the concrete types' fields, and use `Schema::Visibility`. Without it, a hidden field falls back to the interface's, so a user it hides this from gets that one and the concrete field's rule does not run. The same goes for a parent class's field. The audit reports it (`:ignored_rule`).
 - `authorize: true` is not valid on an interface field: it is always denied, and the audit reports it. Use an action or `:none`.
 - An interface whose field class does not include `Base`, such as graphql-ruby's built-in Relay `Node`, runs no field check, so its `id` stays readable on a bypassed implementer. The audit reports it (`:unprotected`, `Node.id`); give your own `Node` interface a Base field class if that matters.
 - The audit reports an interface field once, on the interface that declares it, not again on each implementer.

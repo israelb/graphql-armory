@@ -83,7 +83,7 @@ module GraphQL
             case @armory_declared
             when nil
               return :covered if armory_resolver?
-              return Integration.bypassed_implementer?(type, context.schema) ? nil : :covered if type.respond_to?(:kind) && type.kind.interface?
+              return Integration.bypassed_implementer?(type, context.schema.armory_definitions) ? nil : :covered if type.respond_to?(:kind) && type.kind.interface?
               return :covered unless type.respond_to?(:armory_rule)
 
               type_rule && (!type_rule.none? || type_rule.covers_fields?) ? :covered : nil

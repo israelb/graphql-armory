@@ -16,6 +16,11 @@ module GraphQL
               (superclass.armory_configuration if superclass.respond_to?(:armory_configuration))
           end
 
+          # Read when a query first needs it, after the schema is defined; each schema holds its own.
+          def armory_definitions
+            @armory_definitions ||= Definitions.(self)
+          end
+
           # `loads:` asks the schema which type an object is. For an object type the answer is known:
           # the lookup went through that type's model. Abstract types and foreign objects are the app's call.
           def resolve_type(type, object, context)

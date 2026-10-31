@@ -96,8 +96,10 @@ module GraphQL
 
         # An interface field with no rule of its own cannot name the type it is resolved on, so it is only
         # covered when no implementer is a bypass: a field on a bypassed type is denied, and so is this one.
-        def self.bypassed_implementer?(interface, schema)
-          schema.possible_types(interface).any? do |type|
+        def self.bypassed_implementer?(interface, definitions)
+          definitions.any? do |type|
+            next false unless type.kind.object? && type <= interface
+
             rule = type.armory_rule if type.respond_to?(:armory_rule)
             rule && rule.none? && !rule.covers_fields?
           end

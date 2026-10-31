@@ -42,7 +42,7 @@ RSpec.describe "audit of types absent from schema.types" do
   def schema_for(query_class, setup: nil)
     plugin = armory
     armory_adapter = adapter
-    Class.new(GraphQL::Schema) do
+    Class.new(base_schema) do
       use plugin, adapter: armory_adapter
       query query_class
       class_eval(&setup) if setup
@@ -159,6 +159,113 @@ RSpec.describe "audit of types absent from schema.types" do
 
     expect(flagged(schema).size).to eq(3)
     expect(problems(schema).map(&:path)).to include(a_string_including(".authorized?"))
+  end
+
+  describe "an override hidden by visible_when:, which falls back to the ancestor's definition" do
+    let(:interface) do
+      field_klass = base_field
+      Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "HasNotes"
+        field_class field_klass
+        field :notes, String, null: true
+      end
+    end
+
+    def query_of(type)
+      query_type { field :doc, type, null: true, authorize: :none, reason: "x" }
+    end
+
+    def doc(parent = base_object, implementing: nil)
+      Class.new(parent) do
+        graphql_name "Doc"
+        authorize :read, model: ::Invoice
+        implements implementing if implementing
+        field :notes, String, null: true, authorize: :manage, visible_when: :manage
+      end
+    end
+
+    it "reports it over an interface field and over a parent's field" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        field :notes, String, null: true
+      end
+
+      expect(problems(schema_for(query_of(doc(implementing: interface)))).map(&:path)).to include("Doc.notes")
+      expect(problems(schema_for(query_of(doc(parent)))).map(&:path)).to include("Doc.notes")
+    end
+
+    it "does not report it with Schema::Visibility, where no fallback happens" do
+      expect(problems(schema_for(query_of(doc(implementing: interface)), setup: dynamic)).map(&:path)).not_to include("Doc.notes")
+    end
+
+    it "does not report a field with nothing to fall back to, or a parent hiding it the same way" do
+      field_klass = base_field
+      parent = Class.new(base_object) do
+        field_class field_klass
+        field :notes, String, null: true, visible_when: :manage
+      end
+
+      expect(problems(schema_for(query_of(doc))).map(&:path)).not_to include("Doc.notes")
+      expect(problems(schema_for(query_of(doc(parent)))).map(&:path)).not_to include("Doc.notes")
+    end
+  end
+
+  describe "an implementer hidden with no request" do
+    let(:interface) do
+      field_klass = base_field
+      Module.new do
+        include GraphQL::Schema::Interface
+        graphql_name "Iface"
+        field_class field_klass
+        field :secret, String, null: true
+      end
+    end
+    let(:bypassed) do
+      implemented = interface
+      Class.new(base_object) do
+        graphql_name "Bypassed"
+        authorize :none, reason: "x"
+        implements implemented
+        def self.visible?(context) = super && context[:beta] == true
+      end
+    end
+
+    def schema_with_bypassed
+      implemented = interface
+      implementer = bypassed
+      query = query_type { field :thing, implemented, null: true, authorize: :none, reason: "x" }
+      schema_for(query, setup: proc do
+        use GraphQL::Schema::Visibility, dynamic: true
+        orphan_types implementer
+        define_singleton_method(:resolve_type) { |_abstract, _object, _context| implementer }
+      end)
+    end
+
+    it "counts it as a bypass in the audit and when the field runs" do
+      schema = schema_with_bypassed
+      root = Struct.new(:thing).new(Struct.new(:secret).new("SECRET"))
+      result = execute_query(schema, "{ thing { secret } }", root_value: root, context: { current_user: :someone, beta: true }).to_h
+
+      expect(problems(schema).map(&:path)).to include("Iface.secret")
+      expect(result.dig("data", "thing", "secret")).to be_nil
+    end
+  end
+
+  it "does not raise on an interface with a duplicated field" do
+    field_klass = base_field
+    interface = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Twice"
+      field_class field_klass
+      field :secret, String, null: true, authorize: :none, reason: "x"
+      field :secret, String, null: true, authorize: :none, reason: "x"
+    end
+    implementer = thing { implements interface }
+    query = query_type { field :thing, implementer, null: true, authorize: :none, reason: "x" }
+
+    expect { problems(schema_for(query)) }.not_to raise_error
   end
 
   it "does not raise when every definition of a name is hidden with no request" do

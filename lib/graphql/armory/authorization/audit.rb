@@ -37,17 +37,19 @@ module GraphQL
 
         def call(schema)
           findings = Findings.new
+          @definitions = Definitions.(schema)
           if schema.respond_to?(:armory_configuration) && schema.armory_configuration
             audit_denial_hooks(schema, findings)
             audit_own_checks(schema, findings)
+            audit_hidden_overrides(schema, findings)
           else
             findings.problem(:plugin, "Schema", "never installed the plugin: add `use GraphQL::Armory::Authorization, adapter: ...`")
           end
 
           audited_types(schema).each { |type| audit_type(type, findings) }
-          definitions(schema).each { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
-          definitions(schema).each { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
-          definitions(schema).each { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
+          @definitions.each { |type| audit_edge_rule(type, schema, findings) if type.kind.object? && type <= GraphQL::Types::Relay::BaseEdge }
+          @definitions.each { |type| audit_interface(type, schema, findings) if type.kind.interface? && !type.introspection? }
+          @definitions.each { |type| audit_input_loads(type, findings) if type.kind.input_object? && !type.introspection? }
           findings.report
         end
 
@@ -77,20 +79,20 @@ module GraphQL
         # defined, until it is declared. Methods that come from graphql-ruby or from this gem are not the app's.
         def audit_own_checks(schema, findings)
           found = {}
-          definitions(schema).each do |type|
+          @definitions.each do |type|
             next unless type.kind.object? && !type.introspection? && type.respond_to?(:armory_rule)
 
             %i[authorized? authorizes? authorized_new wrap].each { |name| note_class_check(found, type, name) }
             note_class_check(found, type, :visible?) if type.armory_rule&.visible_when
             type.all_field_definitions.each { |field| note_field_checks(found, field) }
           end
-          definitions(schema).each do |type|
+          @definitions.each do |type|
             next if type.introspection? || !type.respond_to?(:scope_items) || !(type.kind.object? || type.kind.interface? || type.kind.union?)
 
             note_class_check(found, type, :scope_items)
             note_reauthorization(found, type)
           end
-          definitions(schema).each do |type|
+          @definitions.each do |type|
             next unless type.kind.input_object? && !type.introspection?
 
             %i[authorized? unauthorized_object].each { |name| note_class_check(found, type, name) }
@@ -118,6 +120,40 @@ module GraphQL
           end
         end
 
+        # With no Schema::Visibility, a field hidden from a user falls back to the same field on an ancestor, whose rule
+        # is not this one: the override's `authorize:` never runs and the ancestor's definition answers.
+        def audit_hidden_overrides(schema, findings)
+          return if schema.visibility
+
+          reported = Set.new.compare_by_identity
+          @definitions.each do |type|
+            levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
+            levels.each_with_index do |level, index|
+              level.own_fields.each do |name, definition|
+                [definition].flatten.each do |field|
+                  next if !hiding(field) || reported.include?(field)
+
+                  answers = levels.drop(index + 1).flat_map { |ancestor| [ancestor.own_fields[name]].flatten.compact }
+                  next if answers.all? { |ancestor_field| hiding(ancestor_field) == hiding(field) }
+
+                  reported << field
+                  findings.problem(:ignored_rule, "#{type.graphql_name}.#{field.original_name}",
+                                   "hidden from a user, it falls back to the same field on an ancestor, so a user it hides this from gets that one, with no rule of this field running: " \
+                                   "hide the ancestor's field the same way, remove it, or use Schema::Visibility")
+                end
+              end
+            end
+          end
+        end
+
+        # What hides a field: its `visible_when:`, or the app's own `visible?`.
+        def hiding(field)
+          return field.armory_visible_when if field.respond_to?(:armory_visible_when) && field.armory_visible_when
+
+          method = field.method(:visible?)
+          method.owner unless library_method?(method, method.owner, GRAPHQL_RUBY_PATH, ARMORY_PATH)
+        end
+
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
         # The interpreter asks the field's return type, Execution::Next the resolved object, and each path differs, so it
         # is reported wherever it is off, without judging whether it skips anything: declaring it takes one line.
@@ -130,12 +166,12 @@ module GraphQL
         end
 
         def relay_connection?(type)
-          type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
+          Definitions.connection?(type)
         end
 
         # The nearest that set the value, read from the classes so no method of the app runs: graphql-ruby's reader follows
         # superclasses, not the interfaces a class implements. A connection reads only its own, then its node's, which
-        # `definitions` reaches and audits as a type of its own.
+        # `Definitions` reaches and the audit reads as a type of its own.
         def reauthorization_setter(type)
           return type if relay_connection?(type)
 
@@ -197,38 +233,8 @@ module GraphQL
           end
         end
 
-        # `schema.types` is read with no request, so it leaves out what is hidden there and a request can still reach:
-        # a type or field hidden by `visible?`, or one of several definitions of a name. This follows the definitions
-        # themselves, running no `visible?`.
-        def definitions(schema)
-          found = Set.new.compare_by_identity
-          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *schema.types.values]
-          until pending.empty?
-            type = pending.pop
-            next if !type.respond_to?(:kind) || !found.add?(type)
-
-            pending.concat(referenced_types(type))
-          end
-          found.to_a
-        end
-
-        def referenced_types(type)
-          references = []
-          type.all_field_definitions.each { |field| references << field.type.unwrap << arguments_of(field) } if type.respond_to?(:all_field_definitions)
-          references << arguments_of(type) if type.kind.input_object?
-          references.concat(type.interface_type_memberships.map(&:abstract_type)) if type.respond_to?(:interface_type_memberships)
-          references.concat(type.orphan_types) if type.kind.interface?
-          references.concat(type.type_memberships.map(&:object_type)) if type.kind.union?
-          references << type.node_type if relay_connection?(type)
-          references.flatten.compact
-        end
-
-        def arguments_of(member)
-          member.all_argument_definitions.flat_map { |argument| [argument.type.unwrap, argument.loads] }
-        end
-
         def audited_types(schema)
-          definitions(schema).select do |type|
+          @definitions.select do |type|
             type.kind.object? && !type.introspection? && RELAY_TYPES.none? { |relay| type <= relay }
           end
         end
@@ -293,7 +299,7 @@ module GraphQL
         end
 
         def nodes_field_beside?(edge, schema)
-          definitions(schema).any? do |type|
+          @definitions.any? do |type|
             next false unless type.kind.object? && !type.introspection?
 
             fields = type.all_field_definitions
@@ -306,8 +312,8 @@ module GraphQL
         # Undeclared ones are denied when an implementer is a bypass; ones whose field class lacks Base are
         # never checked, so on a bypassed implementer they are open; `authorize: true` names no action.
         def audit_interface(interface, schema, findings)
-          bypassed = Integration.bypassed_implementer?(interface, schema)
-          interface.own_fields.each_value do |field|
+          bypassed = Integration.bypassed_implementer?(interface, @definitions)
+          interface.own_fields.values.flatten.each do |field|
             path = "#{interface.graphql_name}.#{field.original_name}"
             unless field.respond_to?(:armory_declared)
               findings.problem(:unprotected, path, "its field class does not include Base, so it is not checked on a bypassed implementer") if bypassed
