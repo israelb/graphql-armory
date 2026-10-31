@@ -153,21 +153,25 @@ use GraphQL::Armory::PersistedQueries, store: PERSISTED, sinks: [GraphQL::Armory
 
 While you are in `strict: false`, `:raw_query_run` is the traffic still to migrate: turn on `strict: true` when it reaches zero. After a deploy, `:operation_refused` with `:unknown_operation` is a client build whose operations are not in the manifest. Signals never hold the operation id or the query. See [Telemetry](telemetry.md).
 
+### Telling a refusal apart
+
+Every refusal carries a stable code in `extensions.code`: `RAW_QUERY_REFUSED`, `UNKNOWN_OPERATION` or `OPERATION_MISMATCH`. Match on it instead of on the message.
+
 ### Counting probes in strict mode
 
 In strict mode a raw query is refused before it is validated, so it never produces a validation error. If your abuse detection counts validation errors (`undefinedField`, `argumentNotAccepted`) to spot someone probing your schema, it sees nothing from a strict endpoint. Count the refusal instead: a legitimate client sends operation ids and never a raw query, so `:operation_refused` with `reason: :raw_query` is a clean strike.
 
 ```ruby
-count_probes = lambda do |signal, data|
+count_probes = lambda do |signal, data, context|
   next unless signal == :operation_refused && data[:reason] == :raw_query
 
-  AbuseDetection.strike(Current.client_key) # your detector, with the client from your own request context
+  AbuseDetection.strike(context[:client_key]) # your detector, with a client key your controller put in the context
 end
 
 use GraphQL::Armory::PersistedQueries, store: PERSISTED, strict: true, sinks: [count_probes]
 ```
 
-A signal holds only the reason, so the sink reads who sent the request from your own request context, as in [Telemetry](telemetry.md). Do not strike on `:unknown_operation`: after a deploy it is a legitimate client build whose operations are not in the manifest yet. The example has not been run against a live detector.
+A signal holds only the reason. To know who sent the request, a sink that takes three arguments receives the query's context, as in [Telemetry](telemetry.md#who-asked). Do not strike on `:unknown_operation`: after a deploy it is a legitimate client build whose operations are not in the manifest yet. The example has not been run against a live detector.
 
 ### Testing with persisted queries
 
@@ -182,11 +186,12 @@ A signal holds only the reason, so the sink reads who sent the request from your
 - `fetch(id)` answers the operation (`id`, `name`, `body`, `document`, all frozen) or nil. `size` counts them.
 - Raises `PersistedQueries::ConfigurationError` at boot for: invalid JSON, an unreadable file, an unknown format or version, an id that is not the digest of its query, a query that does not parse, a duplicate id, an entry that is not an object, or an empty manifest. Messages never quote the file's queries.
 
-`use GraphQL::Armory::PersistedQueries, store:, strict: false, sinks: []`
+`use GraphQL::Armory::PersistedQueries, store:, strict: false, sinks: [], on_sink_error: nil`
 
 - `store:` answers `fetch(id)` with an object that has `body` and `document`, or nil. A Manifest, or your own store.
 - `strict:` is `true` or `false`.
-- `sinks:` an Array of callables taking `(signal, data)`; see [Watching the rollout](#watching-the-rollout).
+- `sinks:` an Array of callables taking `(signal, data)` or `(signal, data, context)`; see [Watching the rollout](#watching-the-rollout).
+- `on_sink_error:` a callable `(error, signal)` called when a sink raises; see [Telemetry](telemetry.md#guarantees-and-limits).
 - Works with your own `query_class`, whether it is set before `use`, after it, or in a child schema: the plugin subclasses it.
 - `use` it once per schema hierarchy. A second `use`, on the same schema or a child, raises instead of replacing the first one's settings.
 - A store whose `fetch` raises or answers something without `document` makes the request raise: it fails closed, as an exception.

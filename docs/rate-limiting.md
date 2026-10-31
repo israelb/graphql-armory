@@ -229,7 +229,7 @@ To test it, inject a clock: `Time` takes `clock:` (a callable answering seconds)
 2. Send what it recorded to your metrics: `result.context[:rate_limit_points]` is `{ key:, cost:, limit:, remaining:, window:, soft:, limited: }`, and `limited: true` marks the queries that would have been refused.
 3. When the limits fit your traffic, set `soft: false`.
 
-Rate limiting reports through the query context rather than through `sinks:`, because the context is also where the budget for the response comes from. To see its decisions next to the other modules' signals, send those records to the same place: [Telemetry](telemetry.md#rate-limiting).
+Rate limiting reports its charges through the query context rather than through `sinks:`, because the context is also where the budget for the response comes from. To see its decisions next to the other modules' signals, send those records to the same place: [Telemetry](telemetry.md#rate-limiting).
 
 ### Sharing limits between processes
 
@@ -248,7 +248,7 @@ end
 - **Atomic.** Each charge, slot taken and slot released is one Lua script, so two requests of the same client never both spend the last points.
 - **One clock.** The time comes from Redis (`TIME`), not from each server, so servers whose clocks drift still agree on when a bucket refills.
 - **Small.** A client costs two keys, `graphql-armory:rate-limits:points:<key>` and `...:slots:<key>`; both expire once they no longer matter (a window, or `stale_after`, after the last use). Pass `prefix:` to share one Redis with other apps.
-- **Fails open.** When Redis is down or slow, the client raises, the query runs, and `on_store_error` is called: make that hook alert. Set the client's timeouts (for example `Redis.new(url: ..., timeout: 0.2)`) so a slow Redis cannot slow every request.
+- **Fails open.** When Redis is down or slow, the client raises, the query runs, and `on_store_error` is called: make that hook alert. With `sinks:`, the failure is also recorded as `:rate_limit_store_failed`. Set the client's timeouts (for example `Redis.new(url: ..., timeout: 0.2)`) so a slow Redis cannot slow every request.
 
 The gem does not depend on the redis gem: add it to your Gemfile. A single `Redis` client is safe to share between threads.
 
@@ -270,7 +270,7 @@ store.calls                                         # [[:take, "user:1", { cost:
 
 ## Reference
 
-`use GraphQL::Armory::RateLimits::Points, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false`
+`use GraphQL::Armory::RateLimits::Points, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false`
 
 - `store:` answers `take(key, cost:, limit:, window:, force:)` with `[taken, remaining]`. `MemoryStore.new(clock: ...)` keeps buckets in the process; `RedisStore` shares them (below).
 - `limit:` a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
@@ -278,23 +278,24 @@ store.calls                                         # [[:take, "user:1", { cost:
 - `soft:` `true` (default) charges and records without refusing; `false` refuses.
 - `key:` a callable `(query)` answering the client key; by default `context[:rate_limit_key]`. It must be a non-empty String.
 - `on_store_error:` a callable `(error, query)` called when the store raises; the query then runs (fails open). By default it warns.
+- `sinks:` callables that hear `:rate_limit_store_failed` when the store raises; see [Telemetry](telemetry.md#rate-limiting).
 - `extensions:` `true` adds `"rateLimit" => { cost, limit, remaining, resetIn }` to every response of a limited client; `false` (default) leaves responses unchanged.
 - `Points.headers(result)` answers the `RateLimit-*` headers for a result, or `{}`.
 - Instrumentation: `context[:rate_limit_points]`.
 
-`use GraphQL::Armory::RateLimits::Concurrency, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil`
+`use GraphQL::Armory::RateLimits::Concurrency, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil, sinks: []`
 
 - `store:` answers `acquire(key, token:, limit:, ttl:, force:)` with `[acquired, active]` and `release(key, token:)`. `MemoryStore` does both.
 - `limit:` operations at once per client: a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
 - `stale_after:` positive seconds after which a slot that was never released expires.
-- `soft:`, `key:` and `on_store_error:` as for `Points`. When the store raises on release, `on_store_error` is called and the slot expires after `stale_after`.
+- `soft:`, `key:`, `on_store_error:` and `sinks:` as for `Points`. When the store raises on release, `on_store_error` is called and the slot expires after `stale_after`.
 - Instrumentation: `context[:rate_limit_concurrency]`.
 
-`use GraphQL::Armory::RateLimits::Time, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false`
+`use GraphQL::Armory::RateLimits::Time, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], clock: Clock.monotonic, extensions: false`
 
 - `store:` as for `Points`: it is asked for the balance with `take(key, cost: 0, ...)` and charged with `take(key, cost: milliseconds, ..., force: true)`. No store changes are needed.
 - `limit:` milliseconds per `window` per client: a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
-- `window:`, `soft:`, `key:` and `on_store_error:` as for `Points`.
+- `window:`, `soft:`, `key:`, `on_store_error:` and `sinks:` as for `Points`.
 - `clock:` a callable answering seconds, read when a multiplex starts and when it ends. By default a monotonic clock.
 - `extensions:` `true` adds `"rateLimitTime" => { limit, remaining, elapsed, resetIn }` to the response of a limited client.
 - `Time.headers(result)` answers the `RateLimit-Time-*` headers for a result, or `{}`.

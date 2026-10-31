@@ -16,8 +16,8 @@ module GraphQL
     module IDs
       SEPARATOR = "/"
 
-      def self.use(schema, encoder: nil, find: nil, sinks: [])
-        lookup = Lookup.build(encoder: encoder, find: find, sinks: sinks)
+      def self.use(schema, encoder: nil, find: nil, sinks: [], on_sink_error: nil)
+        lookup = Lookup.build(encoder: encoder, find: find, sinks: sinks, on_sink_error: on_sink_error)
         schema.define_singleton_method(:id_from_object) { |object, type, _context| lookup.id_for(object, type) }
         schema.define_singleton_method(:object_from_id) { |id, context| lookup.object_for(id, context) }
       end
@@ -27,8 +27,8 @@ module GraphQL
         attr_reader :encoder, :find, :telemetry
 
         # Wires the default encoder unless one is given; `use` goes through here.
-        def self.build(encoder: nil, find: nil, sinks: [])
-          new(encoder: encoder || Encoder.default, find: find, telemetry: Telemetry.build(sinks: sinks))
+        def self.build(encoder: nil, find: nil, sinks: [], on_sink_error: nil)
+          new(encoder: encoder || Encoder.default, find: find, telemetry: Telemetry.build(sinks: sinks, on_sink_error: on_sink_error))
         end
 
         # `new` is inert: with no encoder wired it hands out no ID and honours none. It checks what it is given.
@@ -52,25 +52,25 @@ module GraphQL
 
         def object_for(id, context)
           type_name, key = encoder.decode(id).split(SEPARATOR, 2)
-          return refuse(:malformed) if key.nil? || key.empty?
+          return refuse(:malformed, context) if key.nil? || key.empty?
 
           type = visible_type(type_name, context)
-          return refuse(:unknown_type) unless node_type?(type)
+          return refuse(:unknown_type, context) unless node_type?(type)
 
           object = load(type, key, context)
-          return refuse(:not_found, type: type.graphql_name) if object.nil?
+          return refuse(:not_found, context, type: type.graphql_name) if object.nil?
 
-          telemetry.record(:id_resolved, type: type.graphql_name)
+          telemetry.record(:id_resolved, context: context, type: type.graphql_name)
           object
         rescue Encoder::InvalidError
-          refuse(:invalid)
+          refuse(:invalid, context)
         end
 
         private
 
         # Every refusal answers nil, like a missing record; the signal says why, never which ID.
-        def refuse(reason, **data)
-          telemetry.record(:id_refused, reason: reason, **data)
+        def refuse(reason, context, **data)
+          telemetry.record(:id_refused, context: context, reason: reason, **data)
           nil
         end
 

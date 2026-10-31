@@ -14,24 +14,24 @@ module GraphQL
           @telemetry = telemetry
         end
 
-        def self.build(context, adapter:, sinks: [])
-          new(adapter: adapter, memo: Memo.build(context), telemetry: Telemetry.build(sinks: sinks))
+        def self.build(context, adapter:, sinks: [], on_sink_error: nil)
+          new(adapter: adapter, memo: Memo.build(context), telemetry: Telemetry.build(sinks: sinks, on_sink_error: on_sink_error))
         end
 
-        def self.call(subject, rule, context, adapter:, sinks: [])
-          build(context, adapter: adapter, sinks: sinks).(subject, rule, context)
+        def self.call(subject, rule, context, adapter:, sinks: [], on_sink_error: nil)
+          build(context, adapter: adapter, sinks: sinks, on_sink_error: on_sink_error).(subject, rule, context)
         end
 
         def call(subject, rule, context)
-          return bypass(subject, rule) if rule.none?
+          return bypass(subject, rule, context) if rule.none?
 
           memo.fetch(subject, rule) { decide(subject, rule, context) }
         end
 
         private
 
-        def bypass(subject, rule)
-          telemetry.record(:bypassed, type: class_name(subject), reason: rule.reason)
+        def bypass(subject, rule, context)
+          telemetry.record(:bypassed, context: context, type: class_name(subject), reason: rule.reason)
           true
         end
 
@@ -46,7 +46,7 @@ module GraphQL
           case answer
           when true, false, nil
             allowed = answer == true
-            telemetry.record(allowed ? :allowed : :denied, type: class_name(subject), action: rule.action)
+            telemetry.record(allowed ? :allowed : :denied, context: context, type: class_name(subject), action: rule.action)
             allowed
           else
             # The class alone: the answer may be the record, and on a relation `inspect` runs the query.

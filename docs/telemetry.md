@@ -100,6 +100,20 @@ end
 
 The gem does not depend on Datadog or on any other backend. The same shape works for StatsD, Prometheus, OpenTelemetry or whatever your team uses: write the callable that turns `(signal, data)` into one call of that client. The example above follows Datadog's documented `increment(name, tags:)`; it has not been run against a live agent.
 
+### Who asked
+
+A sink that requires three arguments also receives the query's context, so it can read who was refused:
+
+```ruby
+count_probes = lambda do |signal, data, context|
+  next unless signal == :operation_refused && data[:reason] == :raw_query
+
+  Strikes.add(context[:client_ip])
+end
+```
+
+The sink reads the context through a view that answers `[]`, `fetch`, `dig` and `key?`, and cannot write to it, so a sink cannot change who the query runs as. An object held in the context is your own, and a sink can still change that. The view is empty when the query has none. A sink that takes two arguments, `*arguments` or a defaulted third never receives it, so a sink that logs what it gets does not start logging tokens. What you read from the context is yours to keep out of logs.
+
 ### What to watch for
 
 | You see | It usually means | What to do |
@@ -153,15 +167,21 @@ The reasons of `:id_refused`:
 
 ### Rate limiting
 
-Rate limiting has no sinks. It records on every query, in the query's context, what it charged and what remains: `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]`, which carry `limited: true` for the queries it refused or, in soft mode, would have refused. See [Rolling it out](rate-limiting.md#rolling-it-out) and [Showing clients their budget](rate-limiting.md#showing-clients-their-budget). Send those to the same place as the signals above.
+Rate limiting takes `sinks:` for one signal, when its store fails:
+
+| Signal | When | Data |
+|---|---|---|
+| `:rate_limit_store_failed` | The store raised, so the query ran without a limit | `limiter`: `:points`, `:concurrency` or `:time`; `error`: the error's class name |
+
+Everything else it records on every query, in the query's context. It records on every query, in the query's context, what it charged and what remains: `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]`, which carry `limited: true` for the queries it refused or, in soft mode, would have refused. See [Rolling it out](rate-limiting.md#rolling-it-out) and [Showing clients their budget](rate-limiting.md#showing-clients-their-budget). Send those to the same place as the signals above.
 
 ## What telemetry does not cover
 
 Signals are counters of the gem's decisions. They are not a replacement for these:
 
 - **Traces.** A signal is a point event, not a span. In Datadog APM (or any tracer) a refused ID does not appear as a span of its own; it shows in the trace of the request that carried it, as the normal "not found" answer. If you want it on the trace, have your sink add a tag to the active span with your tracer's API.
-- **Who asked.** A signal says `id_refused`, not which user or IP. Correlate with your request logs through the request id, or add the user in your own sink from your request context: that is yours to hold, and stays out of the gem.
-- **Rate limiting.** It has no sinks: it records in the query's context. Send `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]` from your controller, to the same client. They hold the rate limit `key:` (a user id or an IP): send them somewhere that may hold personal data, or leave the key out.
+- **Who asked, in the signal.** A signal says `id_refused`, not which user or IP. A sink that takes three arguments receives the query's context and can read them from it: see [Who asked](#who-asked).
+- **Rate limiting's decisions.** Its sinks hear only about a failing store: what it charged is in the query's context. Send `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]` from your controller, to the same client. They hold the rate limit `key:` (a user id or an IP): send them somewhere that may hold personal data, or leave the key out.
 - **Slow or failing requests.** The gem records its decisions. Latency, errors and throughput of your GraphQL endpoint come from your APM or from graphql-ruby's own tracing.
 - **Anything that did not reach the gem.** A request rejected before GraphQL runs (a web application firewall, a body size limit, a parse error) never produces a signal.
 - **A guarantee of delivery.** Sinks run in the request and report nothing if the process dies first. Counters sent to StatsD are best effort by design.
@@ -203,22 +223,24 @@ use GraphQL::Armory::PersistedQueries, store: store, sinks: [->(signal, data) { 
 
 ## Reference
 
-- `sinks:` is an option of `use GraphQL::Armory::Authorization`, `use GraphQL::Armory::IDs` and `use GraphQL::Armory::PersistedQueries`. An Array of callables taking `(signal, data)`, called in order; default `[]`.
-- `Telemetry.new(sinks: [])`, `Telemetry.build(sinks: [])`, `telemetry.record(signal, **data)` (answers nil; `data` reaches the sinks frozen).
+- `sinks:` is an option of `use GraphQL::Armory::Authorization`, `use GraphQL::Armory::IDs`, `use GraphQL::Armory::PersistedQueries` and the rate limiters. An Array of callables taking `(signal, data)` or `(signal, data, context)`, called in order; default `[]`.
+- `on_sink_error:` is an option of the same modules except the rate limiters. A callable `(error, signal)` called when a sink raises; by default it warns with the signal and the error's class. Raise from it to fail the request closed.
+- A sink that could never be called (`->(a) {}`, four required arguments, a required keyword) raises `Telemetry::ConfigurationError` at boot.
+- `Telemetry.new(sinks: [], on_sink_error: nil)`, `Telemetry.build(sinks: [], on_sink_error: nil)`, `telemetry.record(signal, context: nil, **data)` (answers nil; `data` reaches the sinks frozen).
 - `Telemetry::Notifications`: a sink that calls `ActiveSupport::Notifications.instrument("<signal>.graphql_armory", data)`. `Notifications.available?` tells whether ActiveSupport::Notifications is loaded.
-- `Telemetry::Substitute`: `record`, `recorded` (an Array of `[signal, data]`), `recorded?(signal)`, and `fail_with(error)` / `recover` to make `record` raise, as a broken sink would.
+- `Telemetry::Substitute`: `record`, `recorded` (an Array of `[signal, data]`), `contexts`, `recorded?(signal)`, and `fail_with(error)` / `recover` to make `record` raise, for code that calls `record` directly: a real `record` does not raise when a sink does.
 - `Telemetry::ConfigurationError`, raised at boot when `sinks:` is not an Array of callables, or a sink reports `available?` as false. Its message names the class of the offending value and never prints the value: a metrics client holds its API key.
 - `Authorization::Telemetry` is the same class as `Telemetry`.
 
 ## Guarantees and limits
 
 - **Sinks run inline**, in the request's thread, in the order given. A slow sink slows every request: increment a counter or enqueue, do not call a remote service.
-- **A sink that raises fails the request closed.** The error normally reaches the request, and nothing is let through because of it. One exception: the gem reads an `Encoder::InvalidError` raised while it looks an ID up (and, for an ID given to a `loads:` argument, also an `ArgumentError` or an `ActiveRecord::RecordNotFound`) as an invalid ID and answers `nil`, so a sink raising one of those does not surface (it is still closed: the record is not loaded). If you would rather a broken metrics client never fail a request, rescue inside your sink.
+- **A sink that raises does not touch the request.** The gem's decision stands, the next sink runs, and `on_sink_error:` is called. By default that prints the signal and the error's class, never its message, which may hold a credential, once per failure: one request can print many. If the record must exist before the data is served (an audit log), raise from `on_sink_error:` to fail the request closed. A `rescue_from` for that error still runs, and the object is denied whatever it answers. In encrypted IDs, an `Encoder::InvalidError` or `ArgumentError` raised from `on_sink_error:` reads as an invalid ID: the client gets `nil`, closed, and an extra `:id_refused` signal is recorded. On a rate limiter a sink always only warns: use `on_store_error:` to act on a failing store.
 - **Every sink gets the same frozen data.** The Hash and its String values are frozen, so a sink cannot change what the next one sees: trying raises `FrozenError`. The signals carry only Symbols and Strings today. `Notifications` makes one unfrozen copy per signal, which ActiveSupport passes to every subscriber: a subscriber that changes its payload changes it for the next subscriber.
 - **One request can record many signals**, one per decision (a list of invoices is several), and each query of a batch records its own.
 - **Signals are not a security log by themselves.** They tell you what the gem decided; who asked comes from your request context.
 - Names and reasons are part of the public API, but the gem is in prerelease: they may change before 1.0, and the CHANGELOG says so when they do.
-- Rate limiting reports through the query context, not through sinks.
+- Rate limiting reports its charges through the query context; its sinks hear only about a failing store.
 
 ## References
 

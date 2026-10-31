@@ -41,7 +41,7 @@ module GraphQL
           return Adapters::Null.new.scope(nil, items, rule) if rule.nil?
 
           configuration = configuration(context)
-          Scope.(items, rule, context, adapter: configuration.adapter, sinks: configuration.sinks)
+          Scope.(items, rule, context, adapter: configuration.adapter, sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
         end
 
         # Looks an object up inside the user's scope, by primary key unless a key is given.
@@ -129,7 +129,7 @@ module GraphQL
           store = context.namespace(:armory)
           authorize = store[:authorize] ||= begin
             configuration = configuration(context)
-            Authorize.build(context, adapter: configuration.adapter, sinks: configuration.sinks)
+            Authorize.build(context, adapter: configuration.adapter, sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
           end
 
           authorize.(subject, rule, context)

@@ -44,7 +44,9 @@ RSpec.describe GraphQL::Armory::Telemetry do
     mutator = ->(_signal, data) { data[:reason] = :tampered }
     reader = ->(_signal, data) { seen << data }
 
-    expect { armory::Telemetry.new(sinks: [mutator]).record(:id_refused, reason: :invalid) }.to raise_error(FrozenError)
+    raised = []
+    armory::Telemetry.new(sinks: [mutator], on_sink_error: ->(error, _signal) { raised << error.class }).record(:id_refused, reason: :invalid)
+    expect(raised).to eq([FrozenError])
     armory::Telemetry.new(sinks: [reader]).record(:id_refused, reason: :invalid, type: type)
     type << "!"
 

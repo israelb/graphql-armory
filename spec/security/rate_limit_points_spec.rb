@@ -192,7 +192,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
     end
 
     it "warns by default" do
-      expect { run(schema_for, cheap) }.to output(/connection refused/).to_stderr
+      expect { run(schema_for, cheap) }.to output(/query let through/).to_stderr
     end
   end
 

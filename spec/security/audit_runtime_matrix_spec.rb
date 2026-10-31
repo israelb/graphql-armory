@@ -311,6 +311,19 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     end
   end
 
+  it "does not serve a record when its policy raises and a rescue_from answers true, with the audit ok" do
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :raising, model: ArmoryMatrixSame
+      field :notes, String, null: true
+    end
+    schema = schema_of(type)
+    schema.rescue_from(NoMethodError, ArgumentError, GraphQL::Armory::Authorization::AdapterError) { |*| true }
+    response = execute_query(schema, "{ doc { notes } }", root_value: Struct.new(:doc).new(ArmoryMatrixSame.new), context: { current_user: :someone }).to_h
+
+    expect(response.dig("data", "doc")).to be_nil
+  end
+
   it "does not say ok when a parent's field rule serves a laxer subclass the type's model would refuse" do
     parent = Class.new(base_object) do
       graphql_name "AbstractDoc"
