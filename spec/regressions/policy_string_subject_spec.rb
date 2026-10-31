@@ -490,7 +490,7 @@ RSpec.describe "verification of the String subject and bad answer change" do
         field :total, Integer, null: true, authorize: :misspelled, **options
         define_method(:total) { 1 }
       end
-      expect { run(conn_schema(connection), "{ conn { total } }", :ok) }.to raise_error(GraphQL::Armory::Authorization::AdapterError, /misspelled/)
+      expect { run(conn_schema(connection), "{ conn { total } }", :ok) }.to raise_error(Pundit::NotDefinedError)
     end
 
     it "[preservation] 29c direct BaseConnection: authorize: :none is not listed among the bypasses" do

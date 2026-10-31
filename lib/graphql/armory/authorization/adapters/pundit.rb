@@ -23,7 +23,7 @@ module GraphQL
               raise AdapterError, "#{policy.class} does not define #{query}" unless policy.respond_to?(query)
 
               answer = policy.public_send(query)
-              return answer unless answer.equal?(true)
+              return answer unless true.equal?(answer)
             end
             true
           end
@@ -65,11 +65,21 @@ module GraphQL
           def policies_for(rule, subject)
             return [rule.policy] if rule.policy
 
-            declared = finder(normalize(rule.model)).policy if rule.model
-            found = [declared, finder(policy_subject(subject)).policy].compact.uniq
-            return found unless found.empty?
+            model = normalize(rule.model) if rule.model
+            declared = finder(model).policy if model
+            own = finder(policy_subject(subject)).policy
+            return [declared, own].compact.uniq if own
+            return [declared] if declared && kind_of_model?(subject, model)
 
             raise ::Pundit::NotDefinedError, "no policy found for #{subject_name(subject)}"
+          end
+
+          # Only a record of the model inherits its policy: anything else with no policy of its own raises, as it always did.
+          def kind_of_model?(subject, model)
+            return false unless model.is_a?(Module)
+
+            target = policy_subject(subject)
+            target.is_a?(Module) ? target <= model : model === target
           end
 
           def policy_class(rule, subject)

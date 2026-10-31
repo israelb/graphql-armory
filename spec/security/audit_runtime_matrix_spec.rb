@@ -311,6 +311,24 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     end
   end
 
+  it "does not say ok when a parent's field rule serves a laxer subclass the type's model would refuse" do
+    parent = Class.new(base_object) do
+      graphql_name "AbstractDoc"
+      field :notes, String, null: true, authorize: :read
+    end
+    type = Class.new(parent) do
+      graphql_name "Doc"
+      authorize :none, reason: "x", covers_fields: true
+    end
+    named = Class.new(parent) do
+      graphql_name "Doc"
+      authorize :manage, model: ArmoryMatrixSame
+    end
+
+    expect(armory::Audit.(schema_of(named)).problems.map(&:kind)).to include(:foreign_model)
+    expect(armory::Audit.(schema_of(type)).problems.map(&:kind)).not_to include(:foreign_model)
+  end
+
   it "does not serve a record whose klass method names a laxer model" do
     type = Class.new(base_object) do
       graphql_name "Doc"

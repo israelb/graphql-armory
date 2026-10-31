@@ -114,7 +114,7 @@ module GraphQL
           return rule if rule.none? || rule.policy || rule.model || !owner.respond_to?(:armory_model)
 
           rule.with_model(owner.armory_model)
-        rescue ConfigurationError
+        rescue ConfigurationError, GraphQL::RequiredImplementationMissingError
           rule
         end
 

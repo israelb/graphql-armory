@@ -316,8 +316,8 @@ RSpec.describe "recheck of the String model correction" do
         end
       end
 
-      it "[security] 4b #{label}: the declared model answers, never the named policy" do
-        expect(outcome { run_q(text_schema(model: VrNote), %({ said(v: "#{text}") { upcase } }), :someone) }).to include(%("upcase"=>"#{text.upcase}"))
+      it "[security] 4b #{label}: no StringPolicy raises, never the named policy" do
+        expect(outcome { run_q(text_schema(model: VrNote), %({ said(v: "#{text}") { upcase } }), :someone) }).to match(/RAISED Pundit::NotDefinedError: .*no policy found for String\z/)
       end
 
       it "[security] 4c #{label}: the adapter directly, read asks StringPolicy" do
