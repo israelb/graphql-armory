@@ -120,45 +120,43 @@ module GraphQL
           end
         end
 
-        # With no Schema::Visibility, a field hidden from a user falls back to the same field on an ancestor, whose rule
-        # is not this one. Many things can hide it (the field, its resolver, its return type, the schema) and only a
-        # request knows, so every override with another rule is reported until it declares `override_reason:`.
+        # With no Schema::Visibility, a field hidden from a user falls back to another definition of its name, losing its
+        # rule, arguments, return type and extensions. Many things can hide it (the field, its resolver, its return type,
+        # the schema) and only a request knows, so every redefinition is reported until it declares `override_reason:`.
         def audit_overrides(schema, findings)
-          reported = Set.new.compare_by_identity
+          paths = {}.compare_by_identity
+          falling_back = {}.compare_by_identity
           @definitions.each do |type|
-            levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
-            levels.each_with_index do |level, index|
-              level.own_fields.each do |name, definition|
-                answers = levels.drop(index + 1).flat_map { |ancestor| [ancestor.own_fields[name]].flatten.compact }
-                [definition].flatten.each do |field|
-                  next unless reported.add?(field)
+            next if type.introspection?
 
-                  differs = !schema.visibility && answers.any? { |answer| rule_signature(answer) != rule_signature(field) }
-                  note_override(findings, "#{type.graphql_name}.#{field.original_name}", field, differs)
-                end
-              end
+            levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
+            levels.flat_map { |level| level.own_fields.keys }.uniq.each do |name|
+              definitions = levels.filter_map { |level| [level.own_fields[name]].flatten if level.own_fields.key?(name) }
+              definitions.flatten.each { |field| paths[field] ||= "#{type.graphql_name}.#{field.original_name}" }
+              fall_back_from(definitions).each { |field| falling_back[field] ||= "#{type.graphql_name}.#{field.original_name}" }
             end
+          end
+          paths.each do |field, path|
+            falls_back = !schema.visibility && falling_back.key?(field)
+            note_override(findings, falls_back ? falling_back[field] : path, field, falls_back)
           end
         end
 
-        def note_override(findings, path, field, differs)
+        # Nearest level first. Only a lone definition on the farthest level has nothing to fall back to.
+        def fall_back_from(definitions)
+          definitions.last.size == 1 ? definitions.flatten[0...-1] : definitions.flatten
+        end
+
+        def note_override(findings, path, field, falls_back)
           reason = field.armory_override_reason if field.respond_to?(:armory_override_reason)
-          if differs && reason
+          if falls_back && reason
             findings.bypass(path, reason)
-          elsif differs
-            findings.problem(:ignored_rule, path, "has another rule than the same field on an ancestor: hidden from a user, it falls back to that one and its own rule does not run. " \
-                                                  "Give both the same rule, remove the ancestor's, use Schema::Visibility, or declare override_reason:")
+          elsif falls_back
+            findings.problem(:ignored_rule, path, "redefines a field: hidden from a user, it falls back to the other definition, and its own rule, arguments, return type and extensions do not apply. " \
+                                                  "Remove one, use Schema::Visibility, or declare override_reason:")
           elsif reason
             findings.problem(:ignored_rule, path, "declares override_reason: but nothing falls back from it: remove it")
           end
-        end
-
-        def rule_signature(field)
-          return [nil, nil, nil, field.resolver] unless field.respond_to?(:armory_declared)
-
-          visible_when = field.armory_visible_when
-          model = field.owner.armory_model if visible_when && field.owner.respond_to?(:armory_model)
-          [field.armory_declared, visible_when, model, field.resolver]
         end
 
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.

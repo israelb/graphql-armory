@@ -259,11 +259,100 @@ RSpec.describe "audit of types absent from schema.types" do
       expect(problems(schema_for(query_of(other_model))).map(&:path)).to include("Doc.notes")
     end
 
-    it "does not report a field with nothing to fall back to, or an override with the same rule" do
-      same = child_of(parent_with(authorize: :manage, visible_when: :manage), authorize: :manage, visible_when: :manage)
-
+    it "does not report a field with nothing to fall back to" do
       expect(problems(schema_for(query_of(doc))).map(&:path)).not_to include("Doc.notes")
-      expect(problems(schema_for(query_of(same))).map(&:path)).not_to include("Doc.notes")
+    end
+
+    # No comparison: a fallback loses arguments, the return type and extensions too, and each comparison tried missed one.
+    it "reports an override with the same rule, a stricter argument or return type, or an extension" do
+      same = child_of(parent_with(authorize: :manage), authorize: :manage)
+      strict_argument = Class.new(parent_with) do
+        graphql_name "Doc"
+        field :notes, String, null: true do
+          argument :internal, GraphQL::Types::Boolean, required: false
+        end
+      end
+      stricter_type = Class.new(parent_with) do
+        graphql_name "Doc"
+        field :notes, GraphQL::Types::ID, null: true
+      end
+
+      [same, strict_argument, stricter_type].each do |type|
+        expect(problems(schema_for(query_of(type))).map(&:path)).to include("Doc.notes")
+      end
+    end
+
+    it "reports the nearer of two interfaces with the same field, though each is walked alone first" do
+      field_klass = base_field
+      interface_named = lambda do |name, **options|
+        Module.new do
+          include GraphQL::Schema::Interface
+          graphql_name name
+          field_class field_klass
+          field :notes, String, null: true, **options
+        end
+      end
+      open_notes = interface_named.("OpenNotes", authorize: :none, reason: "x")
+      strict_notes = interface_named.("StrictNotes", authorize: :manage)
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ::Invoice
+        implements open_notes
+        implements strict_notes
+      end
+
+      expect(problems(schema_for(query_of(type))).map(&:path)).to include("Doc.notes")
+    end
+
+    it "reports both definitions of a name on one class, since either falls back to the other" do
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true, authorize: :manage
+        field :notes, String, null: true
+      end
+
+      expect(problems(schema_for(query_of(type))).map(&:path).count("Doc.notes")).to eq(2)
+    end
+
+    it "does not raise on an overridden ancestor's field whose type cannot load, or on visible_when: with no model" do
+      unloadable = child_of(parent_with.tap { |parent| parent.field(:other, "AbsentModule::Nope", null: true) })
+      unloadable.field :other, String, null: true, override_reason: "x"
+      field_klass = base_field
+      modelless = Class.new(base_object) do
+        field_class field_klass
+        field :notes, String, null: true, visible_when: :manage
+      end
+      no_model = Class.new(modelless) do
+        graphql_name "Doc"
+        field :notes, String, null: true, visible_when: :manage
+      end
+
+      expect { problems(schema_for(query_of(unloadable))) }.not_to raise_error
+      expect(problems(schema_for(query_of(no_model))).map(&:path)).to include("Doc.notes")
+    end
+
+    it "reports global_id_field over Node's id, and takes its declaration" do
+      node_type = lambda do |**options|
+        Class.new(base_object) do
+          graphql_name "Book"
+          authorize :none, reason: "x", covers_fields: true
+          implements GraphQL::Types::Relay::Node
+          global_id_field :id, **options
+        end
+      end
+      plain = node_type.()
+      declared = node_type.(override_reason: "Node's id answers the same")
+
+      expect(problems(schema_for(query_of(plain))).map(&:path)).to include("Book.id")
+      expect(problems(schema_for(query_of(declared))).map(&:path)).not_to include("Book.id")
+    end
+
+    it "leaves generated Relay types alone" do
+      node = thing("Book") { authorize :none, reason: "x", covers_fields: true }
+      query = query_type { field :books, node.connection_type, null: true, authorize: :none, reason: "x" }
+
+      expect(problems(schema_for(query)).map(&:kind)).not_to include(:ignored_rule)
     end
 
     it "lists an override declared with override_reason: as a bypass" do
@@ -275,7 +364,11 @@ RSpec.describe "audit of types absent from schema.types" do
     end
 
     it "reports an override_reason: with nothing to declare, instead of ignoring it" do
-      nothing = child_of(parent_with(authorize: :manage), authorize: :manage, override_reason: "stale")
+      nothing = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true, override_reason: "stale"
+      end
       with_visibility = child_of(parent_with, authorize: :manage, override_reason: "not needed")
 
       expect(problems(schema_for(query_of(nothing))).map(&:path)).to include("Doc.notes")

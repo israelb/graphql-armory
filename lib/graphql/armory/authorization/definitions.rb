@@ -27,7 +27,7 @@ module GraphQL
 
         def self.referenced_types(type)
           references = []
-          fields_at_every_level(type).each { |field| references << field.type.unwrap << arguments_of(field) }
+          references << fields_of(type)
           references << arguments_of(type) if type.kind.input_object?
           references.concat(type.interface_type_memberships.map(&:abstract_type)) if type.respond_to?(:interface_type_memberships)
           references.concat(type.orphan_types) if type.kind.interface?
@@ -37,11 +37,25 @@ module GraphQL
         end
         private_class_method :referenced_types
 
-        # A hidden override falls back to the ancestor's field, and `all_field_definitions` merges them by name.
-        def self.fields_at_every_level(type)
-          type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }.flat_map { |ancestor| ancestor.own_fields.values.flatten }
+        # A hidden override falls back to the ancestor's field, and `all_field_definitions` merges them by name. An
+        # overridden field whose type cannot load serves nothing, and must not break what runs today.
+        def self.fields_of(type)
+          return [] unless type.respond_to?(:all_field_definitions)
+
+          current = type.all_field_definitions
+          overridden = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }.flat_map { |ancestor| ancestor.own_fields.values.flatten } - current
+          current.map { |field| references_of(field) } + overridden.map do |field|
+            references_of(field)
+          rescue GraphQL::Error
+            nil
+          end
         end
-        private_class_method :fields_at_every_level
+        private_class_method :fields_of
+
+        def self.references_of(field)
+          [field.type.unwrap, arguments_of(field)]
+        end
+        private_class_method :references_of
 
         def self.arguments_of(member)
           member.all_argument_definitions.flat_map { |argument| [argument.type.unwrap, argument.loads] }
