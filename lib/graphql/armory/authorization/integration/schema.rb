@@ -17,8 +17,10 @@ module GraphQL
           end
 
           # Read when a query first needs it, after the schema is defined; each schema holds its own.
-          def armory_definitions
+          def armory_implementers(interface)
             @armory_definitions ||= Definitions.(self)
+            @armory_implementers ||= {}.compare_by_identity
+            @armory_implementers[interface] ||= @armory_definitions.select { |type| type.kind.object? && type <= interface }
           end
 
           # `loads:` asks the schema which type an object is. For an object type the answer is known:

@@ -27,7 +27,7 @@ module GraphQL
 
         def self.referenced_types(type)
           references = []
-          type.all_field_definitions.each { |field| references << field.type.unwrap << arguments_of(field) } if type.respond_to?(:all_field_definitions)
+          fields_at_every_level(type).each { |field| references << field.type.unwrap << arguments_of(field) }
           references << arguments_of(type) if type.kind.input_object?
           references.concat(type.interface_type_memberships.map(&:abstract_type)) if type.respond_to?(:interface_type_memberships)
           references.concat(type.orphan_types) if type.kind.interface?
@@ -36,6 +36,12 @@ module GraphQL
           references.flatten.compact
         end
         private_class_method :referenced_types
+
+        # A hidden override falls back to the ancestor's field, and `all_field_definitions` merges them by name.
+        def self.fields_at_every_level(type)
+          type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }.flat_map { |ancestor| ancestor.own_fields.values.flatten }
+        end
+        private_class_method :fields_at_every_level
 
         def self.arguments_of(member)
           member.all_argument_definitions.flat_map { |argument| [argument.type.unwrap, argument.loads] }

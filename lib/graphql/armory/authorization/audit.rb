@@ -41,7 +41,7 @@ module GraphQL
           if schema.respond_to?(:armory_configuration) && schema.armory_configuration
             audit_denial_hooks(schema, findings)
             audit_own_checks(schema, findings)
-            audit_hidden_overrides(schema, findings)
+            audit_overrides(schema, findings)
           else
             findings.problem(:plugin, "Schema", "never installed the plugin: add `use GraphQL::Armory::Authorization, adapter: ...`")
           end
@@ -121,37 +121,44 @@ module GraphQL
         end
 
         # With no Schema::Visibility, a field hidden from a user falls back to the same field on an ancestor, whose rule
-        # is not this one: the override's `authorize:` never runs and the ancestor's definition answers.
-        def audit_hidden_overrides(schema, findings)
-          return if schema.visibility
-
+        # is not this one. Many things can hide it (the field, its resolver, its return type, the schema) and only a
+        # request knows, so every override with another rule is reported until it declares `override_reason:`.
+        def audit_overrides(schema, findings)
           reported = Set.new.compare_by_identity
           @definitions.each do |type|
             levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
             levels.each_with_index do |level, index|
               level.own_fields.each do |name, definition|
+                answers = levels.drop(index + 1).flat_map { |ancestor| [ancestor.own_fields[name]].flatten.compact }
                 [definition].flatten.each do |field|
-                  next if !hiding(field) || reported.include?(field)
+                  next unless reported.add?(field)
 
-                  answers = levels.drop(index + 1).flat_map { |ancestor| [ancestor.own_fields[name]].flatten.compact }
-                  next if answers.all? { |ancestor_field| hiding(ancestor_field) == hiding(field) }
-
-                  reported << field
-                  findings.problem(:ignored_rule, "#{type.graphql_name}.#{field.original_name}",
-                                   "hidden from a user, it falls back to the same field on an ancestor, so a user it hides this from gets that one, with no rule of this field running: " \
-                                   "hide the ancestor's field the same way, remove it, or use Schema::Visibility")
+                  differs = !schema.visibility && answers.any? { |answer| rule_signature(answer) != rule_signature(field) }
+                  note_override(findings, "#{type.graphql_name}.#{field.original_name}", field, differs)
                 end
               end
             end
           end
         end
 
-        # What hides a field: its `visible_when:`, or the app's own `visible?`.
-        def hiding(field)
-          return field.armory_visible_when if field.respond_to?(:armory_visible_when) && field.armory_visible_when
+        def note_override(findings, path, field, differs)
+          reason = field.armory_override_reason if field.respond_to?(:armory_override_reason)
+          if differs && reason
+            findings.bypass(path, reason)
+          elsif differs
+            findings.problem(:ignored_rule, path, "has another rule than the same field on an ancestor: hidden from a user, it falls back to that one and its own rule does not run. " \
+                                                  "Give both the same rule, remove the ancestor's, use Schema::Visibility, or declare override_reason:")
+          elsif reason
+            findings.problem(:ignored_rule, path, "declares override_reason: but nothing falls back from it: remove it")
+          end
+        end
 
-          method = field.method(:visible?)
-          method.owner unless library_method?(method, method.owner, GRAPHQL_RUBY_PATH, ARMORY_PATH)
+        def rule_signature(field)
+          return [nil, nil, nil, field.resolver] unless field.respond_to?(:armory_declared)
+
+          visible_when = field.armory_visible_when
+          model = field.owner.armory_model if visible_when && field.owner.respond_to?(:armory_model)
+          [field.armory_declared, visible_when, model, field.resolver]
         end
 
         # Off, records that came through the scope skip `authorized?`: harmless only if the scope is as strict as the rule.
@@ -312,7 +319,7 @@ module GraphQL
         # Undeclared ones are denied when an implementer is a bypass; ones whose field class lacks Base are
         # never checked, so on a bypassed implementer they are open; `authorize: true` names no action.
         def audit_interface(interface, schema, findings)
-          bypassed = Integration.bypassed_implementer?(interface, @definitions)
+          bypassed = Integration.any_bypass?(@definitions.select { |type| type.kind.object? && type <= interface })
           interface.own_fields.values.flatten.each do |field|
             path = "#{interface.graphql_name}.#{field.original_name}"
             unless field.respond_to?(:armory_declared)

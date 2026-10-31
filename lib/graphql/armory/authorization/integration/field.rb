@@ -19,7 +19,10 @@ module GraphQL
         module Field
           # `find_by: :id` looks the object up inside the user's scope instead of calling the resolver.
           # `loads:` arguments also load through the scope unless `load_through_scope: false`.
-          def initialize(*args, authorize: nil, reason: nil, find_by: nil, load_through_scope: true, visible_when: nil, **kwargs, &block)
+          def initialize(*args, authorize: nil, reason: nil, find_by: nil, load_through_scope: true, visible_when: nil, override_reason: nil, **kwargs, &block)
+            raise ConfigurationError, "override_reason: must say why the override is safe" if !override_reason.nil? && override_reason.to_s.strip.empty?
+
+            @armory_override_reason = override_reason
             @armory_declared = authorize
             @armory_reason = reason
             @armory_visible_when = visible_when&.to_sym
@@ -29,7 +32,7 @@ module GraphQL
             extension(Integration::FindBy, key: find_by) if find_by
           end
 
-          attr_reader :armory_declared, :armory_reason, :armory_visible_when
+          attr_reader :armory_declared, :armory_reason, :armory_visible_when, :armory_override_reason
 
           def armory_load_through_scope?
             @armory_load_through_scope
@@ -83,7 +86,7 @@ module GraphQL
             case @armory_declared
             when nil
               return :covered if armory_resolver?
-              return Integration.bypassed_implementer?(type, context.schema.armory_definitions) ? nil : :covered if type.respond_to?(:kind) && type.kind.interface?
+              return Integration.bypassed_implementer?(type, context.schema) ? nil : :covered if type.respond_to?(:kind) && type.kind.interface?
               return :covered unless type.respond_to?(:armory_rule)
 
               type_rule && (!type_rule.none? || type_rule.covers_fields?) ? :covered : nil

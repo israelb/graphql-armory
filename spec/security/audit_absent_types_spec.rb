@@ -200,15 +200,100 @@ RSpec.describe "audit of types absent from schema.types" do
       expect(problems(schema_for(query_of(doc(implementing: interface)), setup: dynamic)).map(&:path)).not_to include("Doc.notes")
     end
 
-    it "does not report a field with nothing to fall back to, or a parent hiding it the same way" do
+    def parent_with(**options)
+      field_klass = base_field
+      Class.new(base_object) do
+        field_class field_klass
+        authorize :read, model: ::Invoice
+        field :notes, String, null: true, **options
+      end
+    end
+
+    def child_of(parent, **options)
+      Class.new(parent) do
+        graphql_name "Doc"
+        field :notes, String, null: true, **options
+      end
+    end
+
+    it "reports an override with another rule, whatever could hide it" do
+      plain = child_of(parent_with, authorize: :manage)
+      hidden_return = Class.new(base_object) do
+        graphql_name "Secret"
+        authorize :none, reason: "x", covers_fields: true
+        def self.visible?(context) = super && context[:beta] == true
+      end
+      field_klass = base_field
+      with_type = Class.new(parent_with) do
+        graphql_name "Doc"
+        field_class field_klass
+        field :notes, hidden_return, null: true, authorize: :manage
+      end
+
+      expect(problems(schema_for(query_of(plain))).map(&:path)).to include("Doc.notes")
+      expect(problems(schema_for(query_of(with_type))).map(&:path)).to include("Doc.notes")
+    end
+
+    it "reports an override through a resolver, and the same visible_when: asked of another model" do
+      plugin = armory
+      resolver = Class.new(GraphQL::Schema::Resolver) do
+        include plugin::Base
+        type String, null: true
+        graphql_name "Notes"
+        authorize :manage, model: ::Invoice
+      end
+      through_resolver = child_of(parent_with, resolver: resolver)
       field_klass = base_field
       parent = Class.new(base_object) do
         field_class field_klass
+        authorize :read, model: ::Struct
+        field :notes, String, null: true, visible_when: :manage
+      end
+      other_model = Class.new(parent) do
+        graphql_name "Doc"
+        authorize :read, model: ::Invoice
         field :notes, String, null: true, visible_when: :manage
       end
 
+      expect(problems(schema_for(query_of(through_resolver))).map(&:path)).to include("Doc.notes")
+      expect(problems(schema_for(query_of(other_model))).map(&:path)).to include("Doc.notes")
+    end
+
+    it "does not report a field with nothing to fall back to, or an override with the same rule" do
+      same = child_of(parent_with(authorize: :manage, visible_when: :manage), authorize: :manage, visible_when: :manage)
+
       expect(problems(schema_for(query_of(doc))).map(&:path)).not_to include("Doc.notes")
-      expect(problems(schema_for(query_of(doc(parent)))).map(&:path)).not_to include("Doc.notes")
+      expect(problems(schema_for(query_of(same))).map(&:path)).not_to include("Doc.notes")
+    end
+
+    it "lists an override declared with override_reason: as a bypass" do
+      declared = child_of(parent_with, authorize: :manage, override_reason: "the parent's field is as strict")
+      report = armory::Audit.(schema_for(query_of(declared)))
+
+      expect(report.problems.map(&:path)).not_to include("Doc.notes")
+      expect(report.bypasses.map(&:reason)).to include("the parent's field is as strict")
+    end
+
+    it "reports an override_reason: with nothing to declare, instead of ignoring it" do
+      nothing = child_of(parent_with(authorize: :manage), authorize: :manage, override_reason: "stale")
+      with_visibility = child_of(parent_with, authorize: :manage, override_reason: "not needed")
+
+      expect(problems(schema_for(query_of(nothing))).map(&:path)).to include("Doc.notes")
+      expect(problems(schema_for(query_of(with_visibility), setup: dynamic)).map(&:path)).to include("Doc.notes")
+    end
+
+    it "refuses a blank override_reason:" do
+      expect { child_of(parent_with, authorize: :manage, override_reason: " ") }.to raise_error(armory::ConfigurationError)
+    end
+
+    it "walks a type reached only through the ancestor's field" do
+      only_there = thing("OnlyThere") { reauthorize_scoped_objects(false) }
+      parent = parent_with
+      parent.field :detail, only_there, null: true, authorize: :none, reason: "x"
+      child = child_of(parent, authorize: :none, reason: "x", override_reason: "x")
+      child.field :detail, String, null: true, authorize: :none, reason: "x"
+
+      expect(flagged(schema_for(query_of(child))).size).to eq(1)
     end
   end
 
@@ -241,6 +326,28 @@ RSpec.describe "audit of types absent from schema.types" do
         orphan_types implementer
         define_singleton_method(:resolve_type) { |_abstract, _object, _context| implementer }
       end)
+    end
+
+    it "sees an implementer added after the first query" do
+      implemented = interface
+      field_klass = base_field
+      late = Class.new(base_object) do
+        graphql_name "Late"
+        authorize :none, reason: "x"
+        field_class field_klass
+        implements implemented
+      end
+      query = query_type { field :thing, implemented, null: true, authorize: :none, reason: "x" }
+      schema = schema_for(query, setup: proc { define_singleton_method(:resolve_type) { |_abstract, _object, _context| late } })
+      root = Struct.new(:thing, :ping).new(Struct.new(:secret).new("SECRET"), "pong")
+      execute_query(schema, "{ ping }", root_value: root, context: { current_user: :someone })
+      schema.orphan_types(late)
+
+      expect(execute_query(schema, "{ thing { secret } }", root_value: root, context: { current_user: :someone }).to_h.dig("data", "thing", "secret")).to be_nil
+    end
+
+    it "does not ask a schema without the plugin for its definitions" do
+      expect(armory::Integration.bypassed_implementer?(interface, Class.new(GraphQL::Schema))).to be(false)
     end
 
     it "counts it as a bypass in the audit and when the field runs" do
