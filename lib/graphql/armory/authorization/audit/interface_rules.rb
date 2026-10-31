@@ -23,10 +23,6 @@ module GraphQL
                 next
               end
 
-              if field.armory_visible_when && !interface.respond_to?(:armory_model)
-                findings.problem(:model, path, "uses visible_when:, but an interface cannot name a model, so every request that reads it raises: put it on the object type")
-              end
-
               case field.armory_declared
               when true
                 findings.problem(:field_without_rule, path, "uses authorize: true, but an interface has no action of its own, so it is always denied")

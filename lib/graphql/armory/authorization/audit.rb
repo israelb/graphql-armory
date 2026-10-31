@@ -13,6 +13,7 @@ require "graphql/armory/authorization/audit/type_rules"
 require "graphql/armory/authorization/audit/edge_rules"
 require "graphql/armory/authorization/audit/interface_rules"
 require "graphql/armory/authorization/audit/input_loads"
+require "graphql/armory/authorization/audit/visibility_models"
 
 module GraphQL
   module Armory
@@ -49,7 +50,8 @@ module GraphQL
 
         def call(schema)
           findings = Findings.new
-          definitions = Definitions.(schema)
+          listing_error = nil
+          definitions = Definitions.(schema) { |error| listing_error = error }
           if schema.respond_to?(:armory_configuration) && schema.armory_configuration
             DenialHooks.(schema, findings)
             OwnChecks.(schema, definitions, findings)
@@ -65,6 +67,8 @@ module GraphQL
           EdgeRules.(definitions, findings)
           InterfaceRules.(definitions, findings)
           InputLoads.(definitions, findings)
+          VisibilityModels.(schema, definitions, findings)
+          findings.problem(:model, "Schema", listing_error.message) if listing_error && !findings.problem?(:model)
           findings.report
         end
 

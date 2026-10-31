@@ -9,9 +9,9 @@ module GraphQL
       # hidden there and a request can still reach: a type or field hidden by `visible?`, or one of several definitions of
       # a name. This follows the definitions themselves from the roots and `orphan_types`.
       module Definitions
-        def self.call(schema)
+        def self.call(schema, &on_listing_error)
           found = Set.new.compare_by_identity
-          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *listed_types(schema)]
+          pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *directive_types(schema), *listed_types(schema, &on_listing_error)]
           until pending.empty?
             type = pending.pop
             next if !type.respond_to?(:kind) || !found.add?(type)
@@ -22,10 +22,12 @@ module GraphQL
         end
 
         # With only static profiles, graphql-ruby refuses to list types without naming one: the roots still lead everywhere.
-        # A `visible_when:` that cannot name its model raises only here, on the first listing: the audit reports it from the roots.
+        # A `visible_when:` that cannot name its model raises here, on the first listing only. The roots still lead to the
+        # rest, and the audit passes a block because it must not say ok after that.
         def self.listed_types(schema)
           schema.types.values
-        rescue ConfigurationError
+        rescue ConfigurationError => error
+          yield error if block_given?
           []
         rescue ArgumentError
           raise unless schema.visibility
@@ -33,6 +35,12 @@ module GraphQL
           []
         end
         private_class_method :listed_types
+
+        # A directive argument is client input like any other, and only `schema.types` used to reach its input objects.
+        def self.directive_types(schema)
+          schema.directives.values.flat_map { |directive| arguments_of(directive) }.compact
+        end
+        private_class_method :directive_types
 
         def self.connection?(type)
           type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
