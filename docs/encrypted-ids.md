@@ -137,7 +137,7 @@ The signal never holds the ID, the key or the record. A rising `:invalid` is som
 | `decode(id)` / `decode(cursor, nonce: true)` | The text, or raises `GraphQL::Armory::Encoder::InvalidError` (a `GraphQL::ExecutionError`, so clients see `Invalid ID or cursor`). |
 | `Encoder.versioned(newest, ..., oldest)` | A chain with the same `encode` and `decode`; encodes with `newest`. |
 | `chain.decode_versioned(text, nonce: false)` | `[data, encoder]`, or `[nil, nil]` when no encoder accepts it. |
-| `use GraphQL::Armory::IDs, encoder: nil, find: nil, sinks: []` | Defines `id_from_object` and `object_from_id`; `encoder` defaults to `Encoder.default`; `find:` loads types without `Base`; `sinks:` hears `:id_resolved` and `:id_refused` ([Telemetry](telemetry.md)). |
+| `use GraphQL::Armory::IDs, encoder: nil, find: nil, sinks: [], on_sink_error: nil` | Defines `id_from_object` and `object_from_id`; `encoder` defaults to `Encoder.default`; `find:` loads types without `Base`; `sinks:` hears `:id_resolved` and `:id_refused` ([Telemetry](telemetry.md)). |
 | `Encoder.default` | An encoder keyed by `GRAPHQL_ARMORY_KEY`, else by a key derived with HKDF from Rails' `secret_key_base`; raises `ConfigurationError` without either. |
 
 A subclass inherits `key`, `tag` and `codec`, and can override any of them. Passing `nil` to any of them raises `ConfigurationError`, so an unset environment variable fails at boot instead of being ignored.

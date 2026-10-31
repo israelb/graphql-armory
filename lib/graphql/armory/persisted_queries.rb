@@ -25,6 +25,16 @@ module GraphQL
       # What a refused request holds: nothing to run.
       EMPTY_DOCUMENT = GraphQL::Language::Nodes::Document.new(definitions: [])
 
+      # What a client reads in `extensions.code`, so an app can tell a refusal from a query that failed for another reason.
+      REFUSAL_CODES = { UNKNOWN_OPERATION => "UNKNOWN_OPERATION", MISMATCH => "OPERATION_MISMATCH", RAW_QUERY_REFUSED => "RAW_QUERY_REFUSED" }.freeze
+
+      # A validation error with its code.
+      class RefusalError < GraphQL::StaticValidation::Error
+        def to_h
+          super.merge("extensions" => { "code" => REFUSAL_CODES.fetch(message) })
+        end
+      end
+
       # Validates nothing and answers the refusal, through the query's public `static_validator:` option.
       class Refusal < GraphQL::StaticValidation::Validator
         def initialize(schema, message)
@@ -33,14 +43,14 @@ module GraphQL
         end
 
         def validate(_query, **)
-          { errors: [GraphQL::StaticValidation::Error.new(@message)], remaining_timeout: nil }
+          { errors: [RefusalError.new(@message)], remaining_timeout: nil }
         end
       end
 
       # `store:` answers `fetch(id)` with an operation (`body` and `document`) or nil: a Manifest, or your own.
       # `strict: true` refuses raw queries unless the context holds `armory_allow_raw_query: true`.
-      def self.use(schema, store:, strict: false, sinks: [])
-        gate = Gate.build(store: store, strict: strict, sinks: sinks)
+      def self.use(schema, store:, strict: false, sinks: [], on_sink_error: nil)
+        gate = Gate.build(store: store, strict: strict, sinks: sinks, on_sink_error: on_sink_error)
 
         if schema.singleton_class.include?(Guard)
           raise ConfigurationError, "#{schema} already uses PersistedQueries (here or in a parent schema): use it once"
@@ -56,8 +66,8 @@ module GraphQL
       # as it came.
       class Gate
         # Wires the app's store with `use`'s defaults; `use` goes through here.
-        def self.build(store:, strict: false, sinks: [])
-          new(store: store, strict: strict, telemetry: Telemetry.build(sinks: sinks))
+        def self.build(store:, strict: false, sinks: [], on_sink_error: nil)
+          new(store: store, strict: strict, telemetry: Telemetry.build(sinks: sinks, on_sink_error: on_sink_error))
         end
 
         # `new` is inert: with no store wired it refuses every request. It checks what it is given, so it never
@@ -76,21 +86,22 @@ module GraphQL
 
         def call(context, text, document)
           operation_id = context[:operation_id] if context.respond_to?(:[])
+          sink_context = context.respond_to?(:[]) ? context : {}
 
           if !operation_id.nil?
             operation = operation_id.is_a?(String) ? @store.fetch(operation_id) : nil
             if operation.nil?
-              refuse(UNKNOWN_OPERATION, :unknown_operation)
+              refuse(UNKNOWN_OPERATION, :unknown_operation, sink_context)
             elsif document || (text && !same_query?(text, operation))
-              refuse(MISMATCH, :mismatch)
+              refuse(MISMATCH, :mismatch, sink_context)
             else
-              @telemetry.record(:operation_persisted)
+              @telemetry.record(:operation_persisted, context: sink_context)
               [nil, operation.document]
             end
           elsif @strict && !(context.respond_to?(:[]) && context[:armory_allow_raw_query] == true)
-            refuse(RAW_QUERY_REFUSED, :raw_query)
+            refuse(RAW_QUERY_REFUSED, :raw_query, sink_context)
           else
-            @telemetry.record(@strict ? :raw_query_allowed : :raw_query_run) if text || document
+            @telemetry.record(@strict ? :raw_query_allowed : :raw_query_run, context: sink_context) if text || document
             [nil, nil]
           end
         end
@@ -98,8 +109,8 @@ module GraphQL
         private
 
         # The signal says why, never which operation id or query: a client chooses those.
-        def refuse(message, reason)
-          @telemetry.record(:operation_refused, reason: reason)
+        def refuse(message, reason, context)
+          @telemetry.record(:operation_refused, context: context, reason: reason)
           [message, nil]
         end
 

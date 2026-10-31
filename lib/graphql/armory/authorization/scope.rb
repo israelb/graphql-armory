@@ -13,22 +13,22 @@ module GraphQL
           @telemetry = telemetry
         end
 
-        def self.build(adapter:, sinks: [])
-          new(adapter: adapter, telemetry: Telemetry.build(sinks: sinks))
+        def self.build(adapter:, sinks: [], on_sink_error: nil)
+          new(adapter: adapter, telemetry: Telemetry.build(sinks: sinks, on_sink_error: on_sink_error))
         end
 
-        def self.call(items, rule, context, adapter:, sinks: [])
-          build(adapter: adapter, sinks: sinks).(items, rule, context)
+        def self.call(items, rule, context, adapter:, sinks: [], on_sink_error: nil)
+          build(adapter: adapter, sinks: sinks, on_sink_error: on_sink_error).(items, rule, context)
         end
 
         def call(items, rule, context)
           if rule.none?
-            telemetry.record(:bypassed, reason: rule.reason)
+            telemetry.record(:bypassed, context: context, reason: rule.reason)
             return items
           end
 
           scoped = adapter.scope(adapter.actor(context), items, rule)
-          telemetry.record(:scoped, action: rule.action)
+          telemetry.record(:scoped, context: context, action: rule.action)
           scoped
         end
       end

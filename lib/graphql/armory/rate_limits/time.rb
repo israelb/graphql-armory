@@ -18,8 +18,8 @@ module GraphQL
         CONTEXT_KEY = :rate_limit_time
         NAMESPACE = :graphql_armory
 
-        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false)
-          build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, clock: clock, extensions: extensions).install(schema)
+        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], clock: Clock.monotonic, extensions: false)
+          build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, clock: clock, extensions: extensions).install(schema)
         end
 
         # HTTP headers for the budget a result recorded: `RateLimit-Time-Limit` and `RateLimit-Time-Remaining` in
@@ -37,13 +37,13 @@ module GraphQL
         end
 
         # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
-        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false)
-          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, clock: clock, extensions: extensions)
+        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], clock: Clock.monotonic, extensions: false)
+          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, clock: clock, extensions: extensions)
         end
 
         # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
         # configuration lets a query through either.
-        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, clock: Clock.monotonic, extensions: false)
+        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, sinks: [], clock: Clock.monotonic, extensions: false)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
@@ -53,7 +53,7 @@ module GraphQL
           @window = Settings.seconds(:window, window)
           @soft = Settings.wired_soft(soft, store)
           @key = Settings.key_reader(key)
-          @on_store_error = Settings.store_error_handler(on_store_error)
+          @on_store_error = Settings.store_error_handler(on_store_error, limiter: :time, sinks: sinks)
           @clock = Settings.clock(clock)
           now # a clock that answers anything but a finite number fails here, not by charging nothing
           @extensions = Settings.extensions(extensions)

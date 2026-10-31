@@ -16,8 +16,8 @@ module GraphQL
         CONTEXT_KEY = :rate_limit_points
         NAMESPACE = :graphql_armory
 
-        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
-          points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
+        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false)
+          points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions)
           schema.query_analyzer(Class.new(Analyzer) { define_method(:points) { points } })
         end
 
@@ -35,13 +35,13 @@ module GraphQL
         end
 
         # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
-        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, extensions: false)
-          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, extensions: extensions)
+        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false)
+          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions)
         end
 
         # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
         # configuration lets a query through either.
-        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, extensions: false)
+        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, sinks: [], extensions: false)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
@@ -52,7 +52,7 @@ module GraphQL
           @window = Settings.seconds(:window, window)
           @soft = Settings.wired_soft(soft, store)
           @key = Settings.key_reader(key)
-          @on_store_error = Settings.store_error_handler(on_store_error)
+          @on_store_error = Settings.store_error_handler(on_store_error, limiter: :points, sinks: sinks)
           @extensions = extensions
         end
 

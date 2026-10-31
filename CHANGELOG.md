@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking.** A sink that raises no longer takes the request down: the gem's decision stands, the next sink runs, and the new `on_sink_error:` is called, which by default warns with the signal and the error's class. A monitoring failure used to become an API failure. If a record must exist before data is served, raise from `on_sink_error:` to fail closed as before. A sink's `Encoder::InvalidError` is no longer read as a forged ID.
+- A sink that requires three arguments now receives the query's context: `->(signal, data, context) { ... }`. It tells who was refused without a request-global. Sinks of two arguments, or of `*arguments`, are unchanged and never receive it.
+- A persisted queries refusal now carries `extensions.code`: `RAW_QUERY_REFUSED`, `UNKNOWN_OPERATION` or `OPERATION_MISMATCH`, so an app can match on it instead of on the message.
+- Rate limiters take `sinks:` and record `:rate_limit_store_failed`, with the limiter and the error's class, when the store fails. A failing store used to reach only `on_store_error:`, or stderr. The query still runs.
+
 ## 0.1.0.pre8 (2026-10-31)
 
 This release is about [authorization](docs/authorization.md): the audit now follows every definition of the types it reaches from the schema's roots, `orphan_types` and what they reference, whether or not `visible?` hides them (the limits are in the module page), and Pundit judges a record by both the declared model's policy and its own class's. Read it if you run the audit in CI or rely on Pundit reading `policy_class` from an instance: rules that were silently skipped now show up, so an audit that passed can fail after upgrading, and each new problem names what to do.

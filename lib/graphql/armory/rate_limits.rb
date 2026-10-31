@@ -110,11 +110,15 @@ module GraphQL
           value
         end
 
-        def store_error_handler(handler)
-          return ->(error, _query) { warn("graphql-armory rate limit store failed, query let through: #{error.class}: #{error.message}") } if handler.nil?
-          raise ConfigurationError, "on_store_error: must be a callable that takes the error and the query" unless handler.respond_to?(:call)
+        def store_error_handler(handler, limiter: nil, sinks: [])
+          raise ConfigurationError, "on_store_error: must be a callable that takes the error and the query" unless handler.nil? || handler.respond_to?(:call)
 
-          handler
+          telemetry = Telemetry.build(sinks: sinks)
+          handler ||= ->(error, _query) { warn("graphql-armory rate limit store failed, query let through: #{error.class}: #{error.message}") }
+          lambda do |error, query|
+            telemetry.record(:rate_limit_store_failed, context: query.context, limiter: limiter, error: error.class.name)
+            handler.call(error, query)
+          end
         end
       end
     end

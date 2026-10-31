@@ -11,9 +11,9 @@ module GraphQL
 
         OWN_CHECKS = %i[authorized? authorizes? authorized_new wrap unauthorized_object visible? scope_items reauthorize_scoped_objects].freeze
 
-        attr_reader :adapter, :on_unauthorized, :sinks, :own_denial_hooks, :own_checks
+        attr_reader :adapter, :on_unauthorized, :sinks, :on_sink_error, :own_denial_hooks, :own_checks
 
-        def initialize(adapter:, on_unauthorized: :null, sinks: [], own_denial_hooks: {}, own_checks: {})
+        def initialize(adapter:, on_unauthorized: :null, sinks: [], on_sink_error: nil, own_denial_hooks: {}, own_checks: {})
           unless MODES.include?(on_unauthorized)
             raise ArgumentError, "on_unauthorized must be one of #{MODES.inspect}, got #{on_unauthorized.inspect}"
           end
@@ -24,8 +24,9 @@ module GraphQL
           @adapter = resolve(adapter)
           @on_unauthorized = on_unauthorized
           @own_denial_hooks = own_denial_hooks.to_h { |hook, reason| [hook, reason.dup.freeze] }.freeze
-          Telemetry.build(sinks: sinks) # raises at boot when the sinks are not callables
+          Telemetry.build(sinks: sinks, on_sink_error: on_sink_error) # raises at boot when the sinks are not callables
           @sinks = sinks
+          @on_sink_error = on_sink_error
         end
 
         private
