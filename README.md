@@ -6,12 +6,12 @@
 
 Open-source extensions for [graphql-ruby](https://github.com/rmosolgo/graphql-ruby), built on its public extension points: no fork, no monkey patching. One gem, one module at a time; each module has its own page in [`docs/`](docs) with the problem it solves, how to use it, and its limits.
 
-> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre7`). The API may change before 1.0.
+> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre8`). The API may change before 1.0.
 
 ## Install
 
 ```ruby
-gem "graphql-armory", "~> 0.1.0.pre7"  # a prerelease: `gem install graphql-armory --pre`
+gem "graphql-armory", "~> 0.1.0.pre8"  # a prerelease: `gem install graphql-armory --pre`
 gem "pundit"      # or "cancancan", for the authorization module
 ```
 
@@ -55,7 +55,8 @@ GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test         # another graphq
 Releases are published from GitHub Actions with RubyGems Trusted Publishing (`.github/workflows/release.yml`): no API key is stored and no OTP is asked. Bump `GraphQL::Armory::VERSION` and the CHANGELOG on `main`, then push the matching tag:
 
 ```
-git tag v0.1.0.pre7 && git push origin v0.1.0.pre7
+git tag -a v0.1.0.pre8 -F <message file> main
+git push origin v0.1.0.pre8
 ```
 
 The workflow checks that the tag matches the version, runs the specs and pushes the gem. It only publishes a tag on a commit of `main`. The `release` environment can require a maintainer's approval first (on a public repository, or a private one on a paid GitHub plan).
