@@ -145,6 +145,6 @@ RSpec.describe "a record's own answers do not pick its policy" do
 
   it "still takes a class or a model name as it is" do
     expect(adapter.authorized?(:someone, ArmoryClassDeclared, rule)).to be(true)
-    expect(adapter.authorized?(:someone, :armory_class_note, rule)).to be(false)
+    expect(adapter.authorized?(:someone, :armory_class_note, armory::Rule.new(:read, model: :armory_class_note))).to be(false)
   end
 end

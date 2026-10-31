@@ -26,6 +26,8 @@ module GraphQL
 
           def authorized?(ability, subject, rule)
             options!(rule)
+            return false if client_symbol?(subject, rule)
+
             return ability.can?(rule.action, subject, rule.attribute) if rule.attribute
 
             ability.can?(rule.action, subject)
@@ -34,6 +36,13 @@ module GraphQL
           # A relation is narrowed in SQL with `accessible_by`, so it stays paginable. A rule defined only
           # with a block cannot be turned into SQL: it fails, unless the type declared `scope: :in_memory`,
           # which filters with `can?` and gives up efficient pagination.
+          # A Symbol names a rule (`can :read, :dashboard`) only as the `model:` the schema author wrote: any other is a
+          # record, maybe the client's text.
+          def client_symbol?(subject, rule)
+            Symbol === subject && subject.to_s != rule.model.to_s
+          end
+          private :client_symbol?
+
           def scope(ability, items, rule)
             options!(rule)
             return in_memory(ability, items, rule) if items.is_a?(Array) || rule.scope == :in_memory
@@ -72,7 +81,7 @@ module GraphQL
           end
 
           def in_memory(ability, items, rule)
-            items.select { |item| authorized?(ability, item, rule) == true }
+            items.select { |item| true.equal?(authorized?(ability, item, rule)) }
           end
 
           def ability_for(context)
