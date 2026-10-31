@@ -341,10 +341,10 @@ RSpec.describe "verification of the String subject and bad answer change" do
       expect { adapter.scope(:no, "VpLax", read) }.to raise_error(Pundit::NotDefinedError, "no policy found for String")
     end
 
-    it "[report] 15 a Symbol the app derives from client text names the policy" do
+    it "[report] 15 a Symbol the app derives from client text no longer serves past the declared model" do
       plugin_type = type("Sym", model: VpNote) { field :length, Integer }
       schema = schema_of(query_with { field(:sym, plugin_type, authorize: :none, reason: "root") { argument :v, String } })
-      expect(run(schema, '{ sym(v: "vp_lax") { length } }', :no).dig("data", "sym", "length")).to eq(6)
+      expect(run(schema, '{ sym(v: "vp_lax") { length } }', :no).dig("data", "sym", "length")).to be_nil
     end
 
 
