@@ -293,6 +293,19 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     expect(response.dig("data", "doc")).to be_nil
   end
 
+  it "does not serve a record whose klass method names a laxer model" do
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :manage, model: ArmoryMatrixSame
+      field :notes, String, null: true
+    end
+    record = ArmoryMatrixSame.new
+    def record.klass = ArmoryMatrixDoc
+    response = execute_query(schema_of(type), "{ doc { notes } }", root_value: Struct.new(:doc).new(record), context: { current_user: :someone }).to_h
+
+    expect(response.dig("data", "doc")).to be_nil
+  end
+
   it "says nothing when the type names no policy" do
     type = Class.new(parent_type(&field_rule)) do
       graphql_name "Doc"

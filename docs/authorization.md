@@ -351,7 +351,7 @@ Signals are `:allowed`, `:denied`, `:bypassed` (an `authorize :none` rule ran) a
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).
 
-With Pundit, a record's policy comes from its class, never from the record: `self.policy_class` and `self.model_name` work, the same methods on an instance are not asked, and an object built from client input cannot name a policy. A decorator asks the decorator's class, so give it its own policy or name one with `policy:`. A relation asks the class in its `klass`.
+With Pundit, a record's policy comes from its class, never from the record: `self.policy_class` and `self.model_name` work, the same methods on an instance are not asked, and an object built from client input cannot name a policy. A decorator asks the decorator's class, so give it its own policy or name one with `policy:`. An ActiveRecord relation asks its model; any other list asks its own class, so give it `model:` on the rule.
 
 Policies must return `true`/`false`/`nil`; anything else raises `AdapterError`. Do not use `dataloader.request` inside policies; use `dataloader.with(...).load`.
 

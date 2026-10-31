@@ -62,13 +62,13 @@ module GraphQL
           end
 
           # Pundit asks the object for `policy_class` and `model_name`, and reads an Array as a namespace. A record's
-          # answers can be the client's data (an OpenStruct from JSON), so only its class is asked. A relation holds
-          # its model in `klass`, and JSON cannot produce a Module.
+          # answers can be the client's data (an OpenStruct from JSON), so only its class is asked. A relation's class
+          # names no model, so its `klass` is read, but only on a real relation: `klass` on anything else is an answer too.
           def policy_subject(subject)
             return subject if Module === subject || Symbol === subject
+            return subject.klass if defined?(::ActiveRecord::Relation) && ::ActiveRecord::Relation === subject
 
-            model = subject.klass if subject.respond_to?(:klass)
-            Module === model ? model : ::Kernel.instance_method(:class).bind_call(subject)
+            ::Kernel.instance_method(:class).bind_call(subject)
           end
 
           # Never `inspect`: Pundit's own message quotes the record, and on a relation it runs the query.

@@ -38,9 +38,18 @@ class ArmoryClassNamed
   def self.model_name = "ArmoryClassLax"
 end
 
-class ArmoryClassRelation
+class ArmoryClassKlass
   def klass = ArmoryClassDeclared
+  def text(**) = "SECRET"
 end
+
+class ArmoryClassKlassPolicy < ArmoryClassStrictPolicy; end
+
+class ArmoryClassRaisingKlass
+  def klass(_required) = raise(NameError, "from the client's text")
+end
+
+class ArmoryClassRaisingKlassPolicy < ArmoryClassStrictPolicy; end
 
 RSpec.describe "a record's own answers do not pick its policy" do
   let(:armory) { GraphQL::Armory::Authorization }
@@ -107,10 +116,24 @@ RSpec.describe "a record's own answers do not pick its policy" do
     expect(adapter.authorized?(:someone, ArmoryClassNamed.new, rule)).to be(true)
   end
 
-  it "still takes the policy of a relation from the class it holds" do
-    relation = ArmoryClassRelation.new
+  it "does not let a record's klass method choose its policy" do
+    expect(adapter.authorized?(:someone, ArmoryClassKlass.new, rule)).to be(false)
+    expect(ask(ArmoryClassKlass.new).dig("data", "note")).to be_nil
+    expect(adapter.scope(:someone, [ArmoryClassKlass.new], rule)).to eq([])
+  end
 
-    expect(adapter.scope(:someone, relation, rule)).to eq(relation)
+  it "does not let a klass method choose the policy of a list that is no relation" do
+    expect(adapter.scope(:someone, ArmoryClassKlass.new, rule)).to eq([])
+  end
+
+  it "does not call a record's klass method" do
+    expect(adapter.authorized?(:someone, ArmoryClassRaisingKlass.new, rule)).to be(false)
+  end
+
+  it "still takes the policy of a real relation from its model" do
+    expect(adapter.scope(world.alice, Credit.all, rule)).to be_a(ActiveRecord::Relation)
+    expect { adapter.authorized?(world.alice, Credit.all, armory::Rule.new(:no_such_action)) }
+      .to raise_error(armory::AdapterError, /#{Credit.policy_class} does not define no_such_action\?/)
   end
 
   it "still takes a class or a model name as it is" do
