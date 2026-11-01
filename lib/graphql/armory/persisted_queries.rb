@@ -59,7 +59,7 @@ module GraphQL
         schema.instance_variable_set(:@armory_persisted_queries, gate)
         schema.singleton_class.prepend(Guard)
         schema.query_class(schema.query_class)
-        schema.query_analyzer(BuiltQueries)
+        schema.trace_with(BuiltQueries)
       end
 
       # Decides what a request runs: answers `[refusal, document]`, where a refusal is the error message, a
@@ -130,17 +130,18 @@ module GraphQL
         end
       end
 
-      # A `GraphQL::Query` the app builds itself skips the schema's query class, but not its analyzers. `Execution::Next`
-      # ignores an analysis error on a query with `validate: false`, so that one raises: nothing in its multiplex runs.
-      class BuiltQueries < GraphQL::Analysis::Analyzer
-        def result
-          return if Lookup === query
+      # A `GraphQL::Query` the app builds itself skips the schema's query class. The check sits where a query starts running,
+      # on both engines: an analyzer can be skipped by a variable error, swallowed by another analyzer's ExecutionError, or
+      # ignored with `validate: false`. A `run_partials` answers for the query it came from.
+      module BuiltQueries
+        def execute_query(query:)
+          built = query.respond_to?(:query) ? query.query : query
+          unless Lookup === built
+            refusal = built.schema.armory_persisted_queries.built_query(built.context)
+            raise GraphQL::ExecutionError.new(refusal, extensions: { "code" => REFUSAL_CODES.fetch(refusal) }) if refusal
+          end
 
-          refusal = query.schema.armory_persisted_queries.built_query(query.context)
-          return unless refusal
-          raise ConfigurationError, "strict mode cannot refuse a built query with validate: false; set armory_allow_raw_query: true or validate it" if query.validate == false
-
-          GraphQL::AnalysisError.new(refusal, extensions: { "code" => REFUSAL_CODES.fetch(refusal) })
+          super
         end
       end
 
