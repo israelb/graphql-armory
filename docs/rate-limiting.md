@@ -276,7 +276,7 @@ store.calls                                         # [[:take, "user:1", { cost:
 - `limit:` a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
 - `window:` positive seconds over which `limit` points refill, continuously.
 - `soft:` `true` (default) charges and records without refusing; `false` refuses.
-- `key:` a callable `(query)` answering the client key; by default `context[:rate_limit_key]`. It must be a non-empty String. Without one, the query raises `ConfigurationError`, on every query: a key built from something that can be nil (an IP behind a misconfigured balancer) needs a fallback, such as `context[:rate_limit_key] = request.remote_ip || "unknown"`, where all such clients share one bucket.
+- `key:` a callable `(query)` answering the client key; by default `context[:rate_limit_key]`. It must be a non-empty String. Without one, the query raises `ConfigurationError`, on every query: a key built from something that can be nil (an IP behind a misconfigured balancer) needs a fallback, such as `context[:rate_limit_key] = request.remote_ip.presence || "unknown"`, where all such clients share one bucket.
 - `on_store_error:` a callable `(error, query)` called when the store raises; the query then runs (fails open). By default it warns.
 - `sinks:` callables that hear `:rate_limit_store_failed` when the store raises; see [Telemetry](telemetry.md#rate-limiting).
 - `extensions:` `true` adds `"rateLimit" => { cost, limit, remaining, resetIn }` to every response of a limited client; `false` (default) leaves responses unchanged.

@@ -126,8 +126,6 @@ GraphQL::Armory::PersistedQueries::Manifest.load("persisted-queries.json", diges
 
 `digest: false` accepts ids that are not digests (names such as `invoices-v1`). Then nothing proves an id belongs to its query: anyone who can edit the file can change what an id runs.
 
-Relay's example network layer sends the id as `doc_id`. Pass it yourself: `operation_id: params[:doc_id]`.
-
 ### Rolling it out
 
 1. Generate the manifest in the client build and ship it with the server.

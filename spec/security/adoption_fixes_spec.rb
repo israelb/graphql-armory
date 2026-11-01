@@ -54,6 +54,21 @@ RSpec.describe "Adoption fixes" do
       expect(adapter.actor({ current_ability: :given })).to eq(:given)
     end
 
+    it "gives two CanCanCan adapters on one context each its own Ability" do
+      ability = Class.new do
+        attr_reader :user
+
+        def initialize(user) = @user = user
+      end
+      context = Class.new(Hash) { def namespace(_name) = (@store ||= {}) }.new
+      context[:viewer] = :first
+      context[:other] = :second
+
+      adapters::CanCan.new(ability_class: ability, user_key: :viewer).actor(context)
+
+      expect(adapters::CanCan.new(ability_class: ability, user_key: :other).actor(context).user).to eq(:second)
+    end
+
     it "refuses at boot a key that is not a Symbol or a String" do
       [nil, 1, []].each do |key|
         expect { adapters::Pundit.new(user_key: key) }.to raise_error(ArgumentError, /user_key/)
@@ -110,6 +125,23 @@ RSpec.describe "Adoption fixes" do
       RUBY
 
       expect(output).to include("actions 1")
+    end
+
+    it "still audits when the app named the task first, to add a prerequisite" do
+      output = run_ruby(<<~RUBY)
+        require "rake"
+        include Rake::DSL
+        task :setup
+        task "graphql_armory:audit" => :setup
+        load "tasks/graphql_armory.rake"
+        begin
+          Rake::Task["graphql_armory:audit"].invoke
+        rescue SystemExit => error
+          puts "exit \#{error.status}"
+        end
+      RUBY
+
+      expect(output).to include("exit 1")
     end
 
     it "does not load Rails for an app that has none" do

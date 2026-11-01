@@ -89,7 +89,8 @@ module GraphQL
 
           def ability_for(context)
             store = context.namespace(:armory)
-            store[:cancan_ability] ||= ability_class.new(context[@user_key])
+            abilities = store[:cancan_abilities] ||= {}
+            abilities[self] ||= ability_class.new(context[@user_key])
           end
 
           def ability_class

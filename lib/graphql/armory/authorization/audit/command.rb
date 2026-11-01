@@ -6,6 +6,14 @@ module GraphQL
       class Audit
         # What `rake graphql_armory:audit[YourSchema]` runs: prints the report and answers an exit status.
         class Command
+          # The rake task's action. The app's Rake file may name the task first, to add a prerequisite, so the task existing does
+          # not mean this ran: the file looks for this object among its actions.
+          RAKE_ACTION = proc do |_task, args|
+            Rake::Task[:environment].invoke if Rake::Task.task_defined?(:environment)
+            status = new.(args[:schema])
+            exit(status) unless status.zero?
+          end
+
           def initialize(out: $stdout)
             @out = out
           end
