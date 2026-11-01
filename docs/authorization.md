@@ -192,6 +192,34 @@ A declaration (`own_checks:`, `own_denial_hooks:`, `override_reason:`, `authoriz
 
 Upgrading can make an audit that used to pass fail, because the audit reports more: read each new problem instead of declaring it to get the build green.
 
+### Adopting it on a schema with many problems
+
+A first audit of an existing schema can report hundreds of problems. A baseline records them so the build fails only on new ones, while the team works through the list:
+
+```sh
+bundle exec rake "graphql_armory:audit_baseline[AppSchema,config/graphql_armory_baseline.json]"   # once; commit the file
+bundle exec rake "graphql_armory:audit[AppSchema,config/graphql_armory_baseline.json]"            # in CI
+```
+
+```ruby
+expect(AppSchema).to be_fully_authorized(baseline: "config/graphql_armory_baseline.json")
+```
+
+**A baseline does not protect anything.** The accepted problems are still open, and a refused user may still get that data. `report.ok?` stays false and the output lists every accepted problem under "still open".
+
+| What happens | Result |
+|---|---|
+| A problem not in the file | Fails, named under "new" |
+| An accepted problem whose message changed, for example after an upgrade | Fails as new: read it, then edit the file |
+| An accepted problem that grew: a field or a `loads:` added to that type, or a type added under that base class or interface | Fails as new, naming what it now reaches |
+| An accepted problem that now appears more times | The extra ones fail as new |
+| An accepted problem that is gone | Fails until it leaves the file, so it cannot come back unseen |
+| A file that is missing or invalid | Fails: it never runs as if there were no baseline |
+| A schema without the plugin | Cannot be accepted: install the plugin first |
+| An `:own_check` or a `:hook` problem | Cannot be accepted: whatever uses that method later would pass unseen. Remove it, or declare it in `own_checks:` or `own_denial_hooks:` with a reason, which the audit lists |
+
+Run `audit_baseline` again after fixing problems: on a file that exists it only removes what is gone, and it never adds. To accept a new problem, edit the file by hand, so it shows in the pull request: add its kind, path and message as the output prints them; `count` and `covers` may be left out, and then the entry accepts one problem that reaches nothing, so run `audit_baseline` afterwards to fill them in. The file holds each problem's kind, path, message and count, and the names it reaches (`covers`), and no data of the app. Removing what a problem reaches is fine: running `audit_baseline` narrows the entry.
+
 ### Redefined fields and arguments
 
 When a field is hidden from a user, by `visible?` or anything else, and the request carries no visibility profile, graphql-ruby does not answer "no such field": it looks for another definition of that name and serves it. So this rule does not run for a user the child's field is hidden from:

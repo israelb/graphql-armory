@@ -7,6 +7,12 @@ namespace :graphql_armory do
   action = GraphQL::Armory::Authorization::Audit::Command::RAKE_ACTION
   unless Rake::Task.task_defined?("graphql_armory:audit") && Rake::Task["graphql_armory:audit"].actions.include?(action)
     desc "Lists every type, field and argument of a schema that no authorization rule covers (exit 1 if any)"
-    task :audit, [:schema], &action
+    task :audit, [:schema, :baseline], &action
+  end
+
+  baseline_action = GraphQL::Armory::Authorization::Audit::Command::BASELINE_ACTION
+  unless Rake::Task.task_defined?("graphql_armory:audit_baseline") && Rake::Task["graphql_armory:audit_baseline"].actions.include?(baseline_action)
+    desc "Writes the audit's problems to a baseline file, or removes from it what is gone; it never adds to a file that exists"
+    task :audit_baseline, [:schema, :baseline], &baseline_action
   end
 end

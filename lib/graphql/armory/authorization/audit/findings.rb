@@ -23,9 +23,10 @@ module GraphQL
             @bypasses << Report::Bypass.new(path, reason)
           end
 
-          def report
+          def report(reach = nil)
             Report.new(problems: @problems.sort_by { |problem| [problem.path, problem.kind.to_s] },
-                       bypasses: @bypasses.sort_by(&:path))
+                       bypasses: @bypasses.sort_by(&:path),
+                       reach: reach)
           end
         end
       end

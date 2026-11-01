@@ -16,10 +16,16 @@ module GraphQL
 
           attr_reader :problems, :bypasses
 
-          def initialize(problems:, bypasses:)
+          def initialize(problems:, bypasses:, reach: nil)
             @problems = problems.freeze
             @bypasses = bypasses.freeze
+            @reach = reach
             freeze
+          end
+
+          # What a problem reaches beyond its own name: see Reach. Worked out only for a baseline, so a plain audit never reads it.
+          def reach_of(problem)
+            @reach ? @reach.(problem.path) : []
           end
 
           def ok?
