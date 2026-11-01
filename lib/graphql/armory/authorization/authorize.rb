@@ -41,8 +41,10 @@ module GraphQL
           rule.observed? && telemetry.listening? && !adapter.is_a?(Adapters::Null) && read_only?(context)
         end
 
+        # A partial always answers `query?`, whatever the operation that ran it: only the query it came from can tell.
         def read_only?(context)
           query = context.query if context.respond_to?(:query)
+          query = query.query while defined?(GraphQL::Query::Partial) && query.is_a?(GraphQL::Query::Partial)
           query.respond_to?(:query?) && query.query? == true
         end
 

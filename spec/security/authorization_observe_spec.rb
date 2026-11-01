@@ -165,6 +165,19 @@ RSpec.describe "Authorization: observing a rule" do
       expect(response.dig("data", "invoices")).to eq([])
     end
 
+    it "serves a list with no scope row by row, and records each: the check on each object cannot tell it is inside a list" do
+      type = observed_type
+      query_type = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :none, reason: "root", covers_fields: true
+        field :invoices, [type], null: true, authorize: :none, reason: "x", scope: false
+      end
+      response = run(schema_of(type, query_type: query_type), "{ invoices { secret } }")
+
+      expect(response.dig("data", "invoices")).to eq([{ "secret" => "SECRET" }])
+      expect(signals.map(&:first)).to include(:observed)
+    end
+
     it "still refuses an in-memory lookup outside what the policy allows" do
       model = Class.new do
         def self.primary_key = "id"
@@ -227,6 +240,34 @@ RSpec.describe "Authorization: observing a rule" do
         Class.new(GraphQL::Schema::RelayClassicMutation) do
           include plugin::Base
           authorize :approve, model: Object, observe: "y"
+        end
+      end.to raise_error(ArgumentError, /observe/)
+    end
+
+    it "refuses it on a field that holds a resolver or a mutation: the field's rule would be all that stops its body" do
+      plain = Class.new(GraphQL::Schema::Resolver) do
+        type String, null: true
+        def resolve = "ran"
+      end
+      field_klass = base_field
+
+      expect do
+        Class.new(base_object) do
+          graphql_name "Query"
+          field_class field_klass
+          field :touch, resolver: plain, authorize: :manage, observe: "y"
+        end
+      end.to raise_error(ArgumentError, /observe/)
+
+      write = Class.new(GraphQL::Schema::Mutation) do
+        graphql_name "Pay"
+        field :ok, String, null: true
+      end
+      expect do
+        Class.new(base_object) do
+          graphql_name "Mutation"
+          field_class field_klass
+          field :pay, mutation: write, authorize: :manage, observe: "y"
         end
       end.to raise_error(ArgumentError, /observe/)
     end

@@ -73,7 +73,7 @@ module GraphQL
           EdgeRules.(definitions, findings)
           InterfaceRules.(definitions, findings)
           InputLoads.(definitions, findings)
-          ObservedRules.(definitions, findings)
+          ObservedRules.(schema, definitions, findings)
           VisibilityModels.(schema, definitions, findings)
           IntrospectionFields.(schema, findings)
           findings.problem(:model, "Schema", listing_error.message) if listing_error && !findings.problem?(:model)

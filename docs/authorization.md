@@ -150,11 +150,12 @@ When the policy answers `false` or `nil`, **the data is served to a user the rul
 | A policy that raises, is missing, or answers anything else | Raises or refuses, as without `observe:` |
 | A type or field with no rule | Denied: there is no rule to observe |
 | A mutation or a subscription, including a read in its response | Refused: only a query runs |
-| A list, a `loads:` or a `find_by:` | Still goes through the user's scope, and an in-memory lookup still asks the policy: rows are lost, and nothing is recorded about them |
+| A list of an object type, a `loads:` or a `find_by:` | Still goes through the user's scope, and an in-memory lookup still asks the policy: rows are lost, and nothing is recorded about them |
+| A list with no scope: of an interface or a union, `scope: false`, Relay `nodes(ids:)` | **Served row by row and recorded**: the check on each object is all that protects these lists, and it cannot tell it is inside one. A foreign row reaches the user |
 | `visible_when:` | Still hides: the rule it builds is not observed |
-| `observe:` on a mutation, a resolver, an argument, a bypass, or a field with no action of its own | Raises `ArgumentError` when declared |
+| `observe:` on a mutation, a resolver, a field that holds either, an argument, a bypass, or a field with no action of its own | Raises `ArgumentError` when declared |
 
-**Limits.** A sink that raises loses that signal, reported to `on_sink_error:`, and the data is still served. `Telemetry::Notifications` counts as listening even when nothing subscribes to it. A rule on a type with lists can already lose rows while observed: declare its `scope` only when you trust it, because observing it would mean a second query per list and serving other users' rows.
+**Limits.** A sink that raises loses that signal, reported to `on_sink_error:`, and the data is still served. `Telemetry::Notifications` counts as listening even when nothing subscribes to it. A rule on a type with lists can already lose rows while observed: declare its `scope` only when you trust it, because observing it would mean a second query per list and serving other users' rows. Any clear "no" counts: with CanCanCan that includes the guard that refuses a Symbol a type returns, and an adapter you wrap around `Adapters::Null` is not recognised as null. `load_through_scope: false` opts out of the scope, so a foreign record is served and recorded. While a rule is observed, `audit_baseline` refuses to write: remove `observe:` first.
 
 ## Lists, connections and lookups
 

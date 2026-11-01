@@ -26,6 +26,7 @@ module GraphQL
             if !observe.nil? && (!authorize.is_a?(Symbol) || authorize == :none)
               raise ArgumentError, "observe: needs an action of the field's own: `authorize: :manage, observe: \"...\"`"
             end
+            raise ArgumentError, "observe: does not apply to a field with a resolver or a mutation: what it runs cannot be undone" if !observe.nil? && kwargs[:resolver_class]
             Rule.new(authorize, observe: observe) unless observe.nil?
 
             @armory_observe = observe
