@@ -10,12 +10,18 @@ module GraphQL
       # A client's id is looked up across all of them, so any client may run any manifest's operation: they are one
       # allowlist, not one per client. Any problem raises at boot.
       class Manifests
-        # `paths` is a glob pattern, a path, or a list of them. A pattern that matches nothing raises: in strict mode it
-        # would refuse every client.
+        # `paths` is a glob pattern, a path, or a list of them. One that finds nothing raises: in strict mode its clients
+        # would all be refused.
         def self.build(paths, digest: :sha256)
           names = Array(paths)
-          files = names.flat_map { |path| File.exist?(path) ? [path] : Dir.glob(path).sort }.uniq
-          raise ConfigurationError, "no manifest found in #{names.empty? ? "an empty list" : names.join(", ")}" if files.empty?
+          raise ConfigurationError, "no manifest found in an empty list" if names.empty?
+
+          files = names.flat_map do |name|
+            found = File.exist?(name) ? [name] : Dir.glob(name).sort
+            raise ConfigurationError, "no manifest found in #{name}" if found.empty?
+
+            found
+          end.uniq
 
           new(files.map { |file| Manifest.load(file, digest: digest) })
         end

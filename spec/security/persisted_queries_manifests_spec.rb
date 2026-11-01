@@ -79,6 +79,8 @@ RSpec.describe GraphQL::Armory::PersistedQueries::Manifests do
       Dir.mktmpdir do |dir|
         expect { described_class.build(File.join(dir, "*.json")) }.to raise_error(persisted::ConfigurationError, /no manifest/)
         expect { described_class.build([]) }.to raise_error(persisted::ConfigurationError, /no manifest/)
+        good = write_manifest(dir, "good.json", invoices)
+        expect { described_class.build([good, File.join(dir, "typo.json")]) }.to raise_error(persisted::ConfigurationError, /typo.json/)
       end
     end
 

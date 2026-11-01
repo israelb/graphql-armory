@@ -136,7 +136,7 @@ use GraphQL::Armory::PersistedQueries, store: GraphQL::Armory::PersistedQueries:
 
 `Manifests.build` takes a glob pattern, a path or a list of them, and `digest:`. For manifests with different digests, load each one and pass them: `Manifests.new([Manifest.load("web.json"), Manifest.load("relay.json", digest: :md5)])`.
 
-It raises at boot when a pattern matches nothing, when a file does not load, or when two manifests hold different queries for one id, which only ids that are not digests can do. Keep a version's manifest for as long as that version is in use: removing it refuses those clients with `:unknown_operation`.
+It raises at boot when a pattern or a path finds nothing, when a file does not load, or when two manifests hold different queries for one id, which only ids that are not digests can do. Keep a version's manifest for as long as that version is in use: removing it refuses those clients with `:unknown_operation`.
 
 They are one allowlist: any client may run any manifest's operation. A new manifest still needs a deploy.
 
