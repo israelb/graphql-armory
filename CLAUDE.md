@@ -109,9 +109,11 @@ actual, advisories apart, `## Not probed`, path of P with a one-line index of it
 code that reproduces it and its cause, or says the cause is unknown.
 ```
 
-Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Open blockers after that become one decision for the user. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier stays on `opus`, so another model reviews the code.
+**Design review before code (security behavior).** Before the first RED spec of a change that opens, relaxes or adds a check, a read-only agent (`general-purpose`, `opus`, no Docker, no probes) gets the design and the current code and answers one question: how would you break it? It names each gap with the code path that causes it. The design is fixed before any code. This is where the hole of a design is found cheaply; the verifier below is for what survives it.
 
-Depth by change: security behavior gets the full verifier and that recheck. Docs get their claims checked against the code on `sonnet`, with no probe list.
+**Hard cap: one full verification and one recheck per PR.** Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. The recheck is a new agent only when the correction changed the design; when it only closed the reported gaps, the parent reruns the kept probe files on the branch, on the interpreter and `next` with graphql 2.6 (2.4 is CI's). A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Whatever stays open after the recheck becomes one decision for the user and issues with a reproduction that was run; never a third round. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier stays on `opus`, so another model reviews the code.
+
+Depth by change: security behavior gets the design review, the full verifier and that recheck. Docs get their claims checked against the code on `sonnet`, with no probe list.
 
 **Audit-versus-runtime matrix.** `spec/security/audit_runtime_matrix_spec.rb` crosses where a rule lives, where its `policy:` lives and whether a bypass applies, on both engines. Its invariant: if a refused user gets the data, the audit must not say ok. A finding of a new shape adds a shape to it, not only a spec of its own.
 
