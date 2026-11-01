@@ -49,6 +49,8 @@ module GraphQL
         end
 
         def observe(subject, rule, context)
+          # A type's rule, not a field's: a field with a resolver on this object must not run for this user. See Integration.observed?
+          (context.namespace(:armory)[:observed] ||= {}.compare_by_identity)[subject] = true if rule.attribute.nil?
           telemetry.record(:observed, context: context, type: class_name(subject), action: rule.action, reason: rule.observe)
           true
         end

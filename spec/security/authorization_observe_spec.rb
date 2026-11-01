@@ -152,6 +152,44 @@ RSpec.describe "Authorization: observing a rule" do
       expect(response.dig("data", "pay")).to be_nil
     end
 
+    it "does not run a resolver on an observed type, itself or inherited, and serves the other fields" do
+      ran = []
+      plain = Class.new(GraphQL::Schema::Resolver) do
+        type String, null: true
+        define_method(:resolve) { ran << :body; "ran" }
+      end
+      parent = Class.new(base_object) do
+        graphql_name "Parent"
+        authorize :read, model: Object
+        field :secret, String
+        field :touch, resolver: plain
+      end
+      type = Class.new(parent) do
+        graphql_name "Invoice"
+        authorize :read, model: Object, observe: "rollout"
+      end
+      response = run(schema_of(type), "{ invoice { secret touch } }")
+
+      expect(response.dig("data", "invoice", "secret")).to eq("SECRET")
+      expect(response.dig("data", "invoice", "touch")).to be_nil
+      expect(ran).to be_empty
+    end
+
+    it "runs that resolver for a user the policy allows" do
+      plain = Class.new(GraphQL::Schema::Resolver) do
+        type String, null: true
+        def resolve = "ran"
+      end
+      type = Class.new(base_object) do
+        graphql_name "Invoice"
+        authorize :read, model: Object, observe: "rollout"
+        field :touch, resolver: plain
+      end
+      response = run(schema_of(type, adapter: armory::Adapters::Substitute.new(allow: true)), "{ invoice { touch } }")
+
+      expect(response.dig("data", "invoice", "touch")).to eq("ran")
+    end
+
     it "still narrows a list through the scope" do
       type = observed_type
       query_type = Class.new(base_object) do

@@ -150,6 +150,7 @@ When the policy answers `false` or `nil`, **the data is served to a user the rul
 | A policy that raises, is missing, or answers anything else | Raises or refuses, as without `observe:` |
 | A type or field with no rule | Denied: there is no rule to observe |
 | A mutation or a subscription, including a read in its response | Refused: only a query runs |
+| A field with a `resolver:` or a `mutation:`, on an object observed through its type's rule | Refused, and its body does not run: it can write. Other fields of the object are served |
 | A list of an object type, a `loads:` or a `find_by:` | Still goes through the user's scope, and an in-memory lookup still asks the policy: rows are lost, and nothing is recorded about them |
 | A list with no scope: of an interface or a union, `scope: false`, Relay `nodes(ids:)` | **Served row by row and recorded**: the check on each object is all that protects these lists, and it cannot tell it is inside one. A foreign row reaches the user |
 | `visible_when:` | Still hides: the rule it builds is not observed |

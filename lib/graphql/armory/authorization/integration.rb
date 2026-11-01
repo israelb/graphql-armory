@@ -124,6 +124,12 @@ module GraphQL
         end
         private_class_method :declared_model
 
+        # Whether this object got here only because its type's rule is observed.
+        def self.observed?(object, context)
+          observed = context.namespace(:armory)[:observed]
+          observed ? observed.key?(object) : false
+        end
+
         # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.
         def self.allowed?(subject, rule, context)
           store = context.namespace(:armory)
