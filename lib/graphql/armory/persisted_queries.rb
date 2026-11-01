@@ -59,6 +59,7 @@ module GraphQL
         schema.instance_variable_set(:@armory_persisted_queries, gate)
         schema.singleton_class.prepend(Guard)
         schema.query_class(schema.query_class)
+        schema.query_analyzer(BuiltQueries)
       end
 
       # Decides what a request runs: answers `[refusal, document]`, where a refusal is the error message, a
@@ -106,6 +107,15 @@ module GraphQL
           end
         end
 
+        # A query the app built itself, which never went through the lookup. It runs its own text, so an operation id means
+        # nothing on it. Answers the refusal, or nil to let it run.
+        def built_query(context)
+          return refuse(RAW_QUERY_REFUSED, :raw_query, context).first if @strict && context[:armory_allow_raw_query] != true
+
+          @telemetry.record(@strict ? :raw_query_allowed : :raw_query_run, context: context)
+          nil
+        end
+
         private
 
         # The signal says why, never which operation id or query: a client chooses those.
@@ -117,6 +127,20 @@ module GraphQL
         # Apollo's clients may send the query with its id; graphql-ruby's subscriptions resend it printed.
         def same_query?(text, operation)
           text == operation.body || text == operation.document.to_query_string
+        end
+      end
+
+      # A `GraphQL::Query` the app builds itself skips the schema's query class, but not its analyzers. `Execution::Next`
+      # ignores an analysis error on a query with `validate: false`, so that one raises: nothing in its multiplex runs.
+      class BuiltQueries < GraphQL::Analysis::Analyzer
+        def result
+          return if Lookup === query
+
+          refusal = query.schema.armory_persisted_queries.built_query(query.context)
+          return unless refusal
+          raise ConfigurationError, "strict mode cannot refuse a built query with validate: false; set armory_allow_raw_query: true or validate it" if query.validate == false
+
+          GraphQL::AnalysisError.new(refusal, extensions: { "code" => REFUSAL_CODES.fetch(refusal) })
         end
       end
 

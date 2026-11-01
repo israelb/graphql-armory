@@ -216,7 +216,7 @@ Context keys: `operation_id` (a String; anything else is an unknown id), `armory
 
 - A request with an id runs only the stored document for that id, or nothing.
 - In strict mode a raw query runs only when the app's context says `armory_allow_raw_query: true`. The plugin does not decide who is staff: your controller does.
-- Queries built by your own code as `GraphQL::Query` objects (for example in `multiplex`) bypass the plugin's lookup. In strict mode they are not refused either: the check happens when the plugin's query class builds the query.
+- Queries built by your own code as `GraphQL::Query` objects (for example in `multiplex`) run their own text, so an operation id means nothing on them. In strict mode they are refused unless the context holds `armory_allow_raw_query: true`, and they are recorded like any raw query. One built with `validate: false` raises `ConfigurationError` instead, because `Execution::Next` ignores an analysis error on it; nothing in its multiplex runs.
 - In strict mode, schema introspection run through the plugin is refused too. `Schema.to_json` and `rake graphql:schema:json` need `context: { armory_allow_raw_query: true }` (the rake task's `load_context`). `Schema.to_definition` and `Schema.validate` are not affected.
 - The manifest lives in the server's code: adding an operation needs a deploy. See the runtime store below.
 - Subscriptions: graphql-ruby re-runs a subscription with its printed query, which the plugin accepts when it matches the stored document. Subscriptions are not tested with persisted queries yet.
