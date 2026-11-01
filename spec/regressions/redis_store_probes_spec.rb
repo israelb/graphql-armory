@@ -20,7 +20,7 @@ RSpec.describe "runtime store probes" do
 
   secret = "s3cretP4ss"
   doc_path = File.expand_path("../../docs/persisted-queries.md", __dir__)
-  doc_path = "/app/docs/persisted-queries.md" unless File.exist?(doc_path)
+  doc_path = "#{Dir.pwd}/docs/persisted-queries.md" unless File.exist?(doc_path)
 
   let(:errors) { [] }
   let(:signals) { [] }
@@ -91,7 +91,7 @@ RSpec.describe "runtime store probes" do
   end
 
   def exe(*args, env: {})
-    Open3.capture3({ "REDIS_URL" => ENV.fetch("REDIS_URL") }.merge(env), RbConfig.ruby, "-Ilib", "exe/graphql-armory-publish", *args, chdir: "/app")
+    Open3.capture3({ "REDIS_URL" => ENV.fetch("REDIS_URL") }.merge(env), RbConfig.ruby, "-Ilib", "exe/graphql-armory-publish", *args, chdir: Dir.pwd)
   end
 
   def write_manifest(dir, name, hash)
@@ -797,7 +797,7 @@ RSpec.describe "runtime store probes" do
       expect(st.exitstatus).to eq(1)
       expect(o + e).not_to include("s3cretP4ss")
       expect(e).to match(message) if message
-      expect(e).not_to include("/app/lib"), "backtrace leaked: #{e[0, 300]}"
+      expect(e).not_to include("#{Dir.pwd}/lib"), "backtrace leaked: #{e[0, 300]}"
     end
 
     it "P48 preservation: real publish exits 0, rerun unchanged, value is the text" do
@@ -956,7 +956,7 @@ RSpec.describe "runtime store probes" do
       $probe_built_gem ||= begin
         out = Dir.mktmpdir("gemout")
         Bundler.with_unbundled_env do
-          o, st = Open3.capture2e("gem", "build", "graphql-armory.gemspec", "--output", File.join(out, "armory.gem"), chdir: "/app")
+          o, st = Open3.capture2e("gem", "build", "graphql-armory.gemspec", "--output", File.join(out, "armory.gem"), chdir: Dir.pwd)
           raise o unless st.success?
         end
         File.join(out, "armory.gem")
