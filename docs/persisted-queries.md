@@ -126,6 +126,20 @@ GraphQL::Armory::PersistedQueries::Manifest.load("persisted-queries.json", diges
 
 `digest: false` accepts ids that are not digests (names such as `invoices-v1`). Then nothing proves an id belongs to its query: anyone who can edit the file can change what an id runs.
 
+### Several clients
+
+Each frontend's build, and every mobile version still in use, has its own manifest. `Manifests` puts them behind one `store:`:
+
+```ruby
+use GraphQL::Armory::PersistedQueries, store: GraphQL::Armory::PersistedQueries::Manifests.build("config/persisted_queries/*.json"), strict: true
+```
+
+`Manifests.build` takes a glob pattern, a path or a list of them, and `digest:`. For manifests with different digests, load each one and pass them: `Manifests.new([Manifest.load("web.json"), Manifest.load("relay.json", digest: :md5)])`.
+
+A pattern skips dotfiles and drops a missing `{a,b}` alternative, and `[` in a name reads as a pattern, so `a[1].json` loads `a1.json` when that file exists. List exact paths when a pattern could miss something, and avoid `[` in names. It raises at boot when a pattern or a path finds nothing, when a file does not load, or when two manifests hold different queries for one id, which only ids that are not digests can do. Keep a version's manifest for as long as that version is in use: removing it refuses those clients with `:unknown_operation`.
+
+They are one allowlist: any client may run any manifest's operation. A new manifest still needs a deploy.
+
 ### Rolling it out
 
 1. Generate the manifest in the client build and ship it with the server.
@@ -193,6 +207,8 @@ A signal holds only the reason. To know who sent the request, a sink that takes 
 - Works with your own `query_class`, whether it is set before `use`, after it, or in a child schema: the plugin subclasses it.
 - `use` it once per schema hierarchy. A second `use`, on the same schema or a child, raises instead of replacing the first one's settings.
 - A store whose `fetch` raises or answers something without `document` makes the request raise: it fails closed, as an exception.
+
+`Manifests.build(paths, digest: :sha256)` loads manifests from a glob pattern, a path or a list. `Manifests.new(manifests = [])` joins `Manifest` objects (subclasses are refused: their `fetch` would not run). `fetch(id)`, `size`, `empty?`. With no manifests it holds nothing, so every id is unknown, and `strict: false` refuses it at boot.
 
 Context keys: `operation_id` (a String; anything else is an unknown id), `armory_allow_raw_query` (only `true` allows).
 

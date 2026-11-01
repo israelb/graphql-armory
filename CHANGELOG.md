@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `PersistedQueries::Manifests` puts several manifests behind one `store:`, for several frontends and mobile versions still in use: `Manifests.build("config/persisted_queries/*.json")`. It raises at boot when a pattern matches nothing or two manifests disagree on an id. They are one allowlist, and a new manifest still needs a deploy.
 - `PersistedQueries.operation_id` now reads Relay's `doc_id`, so Relay clients need no change to send their id.
 - The Pundit and CanCanCan adapters take `user_key:`, for an app whose context holds the user under another key: `Adapters::Pundit.new(user_key: :viewer)`. It used to take a subclass.
 - In Rails, `rake graphql_armory:audit[YourSchema]` now loads by itself, through a Railtie that loads only when Rails is there. The task now runs the app's `:environment` when it runs, not only when it was defined before the task, so clearing the task's prerequisites no longer skips it. An adapter subclass with its own `initialize` must call `super`: without it, nobody has a user and everyone is denied.
