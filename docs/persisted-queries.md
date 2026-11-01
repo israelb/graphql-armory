@@ -126,6 +126,20 @@ GraphQL::Armory::PersistedQueries::Manifest.load("persisted-queries.json", diges
 
 `digest: false` accepts ids that are not digests (names such as `invoices-v1`). Then nothing proves an id belongs to its query: anyone who can edit the file can change what an id runs.
 
+### Several clients
+
+Each frontend's build, and every mobile version still in use, has its own manifest. `Manifests` puts them behind one `store:`:
+
+```ruby
+use GraphQL::Armory::PersistedQueries, store: GraphQL::Armory::PersistedQueries::Manifests.build("config/persisted_queries/*.json"), strict: true
+```
+
+`Manifests.build` takes a glob pattern, a path or a list of them, and `digest:`. For manifests with different digests, load each one and pass them: `Manifests.new([Manifest.load("web.json"), Manifest.load("relay.json", digest: :md5)])`.
+
+It raises at boot when a pattern matches nothing, when a file does not load, or when two manifests hold different queries for one id, which only ids that are not digests can do. Keep a version's manifest for as long as that version is in use: removing it refuses those clients with `:unknown_operation`.
+
+They are one allowlist: any client may run any manifest's operation. A new manifest still needs a deploy.
+
 ### Rolling it out
 
 1. Generate the manifest in the client build and ship it with the server.

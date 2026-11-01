@@ -17,6 +17,8 @@ module GraphQL
 
         Operation = Struct.new(:id, :name, :body, :document, keyword_init: true)
 
+        attr_reader :operations
+
         def self.load(path, digest: :sha256)
           data = begin
             JSON.parse(File.read(path, mode: "r:bom|utf-8"))

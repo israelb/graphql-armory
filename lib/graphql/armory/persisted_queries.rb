@@ -185,5 +185,6 @@ module GraphQL
 end
 
 require "graphql/armory/persisted_queries/manifest"
+require "graphql/armory/persisted_queries/manifests"
 require "graphql/armory/persisted_queries/store"
 require "graphql/armory/persisted_queries/controls"
