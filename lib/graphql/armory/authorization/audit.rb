@@ -12,6 +12,7 @@ require "graphql/armory/authorization/audit/own_checks"
 require "graphql/armory/authorization/audit/overrides"
 require "graphql/armory/authorization/audit/foreign_policies"
 require "graphql/armory/authorization/audit/type_rules"
+require "graphql/armory/authorization/audit/observed_rules"
 require "graphql/armory/authorization/audit/edge_rules"
 require "graphql/armory/authorization/audit/interface_rules"
 require "graphql/armory/authorization/audit/input_loads"
@@ -72,6 +73,7 @@ module GraphQL
           EdgeRules.(definitions, findings)
           InterfaceRules.(definitions, findings)
           InputLoads.(definitions, findings)
+          ObservedRules.(schema, definitions, findings)
           VisibilityModels.(schema, definitions, findings)
           IntrospectionFields.(schema, findings)
           findings.problem(:model, "Schema", listing_error.message) if listing_error && !findings.problem?(:model)

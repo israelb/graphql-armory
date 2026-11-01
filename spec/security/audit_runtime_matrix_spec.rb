@@ -1026,6 +1026,29 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     expect(response.dig("data", "doc")).to be_nil
   end
 
+  it "does not say ok for a rule under observe:, which serves a refused user" do
+    plugin = armory
+    type = Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, policy: ArmoryMatrixStrictPolicy, model: ArmoryMatrixDoc
+      field :notes, String, null: true, authorize: :manage, observe: "rollout"
+    end
+    query_class = Class.new(base_object) do
+      graphql_name "Query"
+      authorize :none, reason: "root", covers_fields: true
+      field :doc, type, null: true, authorize: :none, reason: "x"
+    end
+    schema = Class.new(base_schema) do
+      use plugin, adapter: :pundit, sinks: [->(_signal, _data) {}]
+      query query_class
+    end
+    response = execute_query(schema, "{ doc { notes } }", root_value: Struct.new(:doc).new(ArmoryMatrixDoc.new), context: { current_user: :someone })
+
+    expect(response.dig("data", "doc", "notes")).to eq("SECRET")
+    expect(armory::Audit.(schema).ok?).to be(false)
+    expect(armory::Audit.(schema).problems.map(&:kind)).to include(:observed)
+  end
+
   it "says nothing when the type names no policy" do
     type = Class.new(parent_type(&field_rule)) do
       graphql_name "Doc"

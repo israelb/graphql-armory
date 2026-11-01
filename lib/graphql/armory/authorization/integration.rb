@@ -60,7 +60,7 @@ module GraphQL
 
           # An in-memory scope yields an Array, which cannot look one record up: find it, then ask the rule.
           record = model.find_by(conditions)
-          record if record && allowed?(record, rule, context)
+          record if record && allowed?(record, rule.enforced, context)
         end
 
         # Loads a `loads:` argument inside the user's scope. When the schema defines `object_from_id` (global
@@ -123,6 +123,17 @@ module GraphQL
           owner.armory_rule&.model if owner.respond_to?(:armory_rule)
         end
         private_class_method :declared_model
+
+        # Observing a type opens the only check that stands before everything inside it, whatever class its fields are. A
+        # resolver or a mutation can write, and a write cannot be undone, so a type holding one cannot be observed.
+        def self.refuse_unobservable(type, context)
+          known = context.namespace(:armory)[:observable] ||= {}.compare_by_identity
+          field = known.fetch(type) { known[type] = type.all_field_definitions.find(&:resolver) }
+          return unless field
+
+          raise ConfigurationError, "#{type.graphql_name} cannot be observed: its field #{field.graphql_name} has a resolver or a mutation, which can write. " \
+                                    "Remove observe:, or put it on its plain fields"
+        end
 
         # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.
         def self.allowed?(subject, rule, context)

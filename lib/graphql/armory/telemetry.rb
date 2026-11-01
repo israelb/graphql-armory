@@ -48,6 +48,11 @@ module GraphQL
         @on_sink_error = on_sink_error || DEFAULT_ON_SINK_ERROR
       end
 
+      # Whether anything hears what is recorded.
+      def listening?
+        !@sinks.empty?
+      end
+
       # Every sink gets the same frozen data, so one sink (or a subscriber) cannot change what the next one sees.
       def record(signal, context: nil, **data)
         return nil if @sinks.empty?
@@ -124,6 +129,10 @@ module GraphQL
 
           @recorded << [signal, data]
           nil
+        end
+
+        def listening?
+          true
         end
 
         def recorded?(signal)

@@ -10,6 +10,7 @@ module GraphQL
         #   field :id, ID, authorize: :none, reason: "ids are public"     # declared bypass
         #   field :owner_id, ID, authorize: true                          # the parent type's own action
         #   field :notes, String, authorize: :manage, visible_when: :export  # hidden from users who cannot export
+        #   field :notes, String, authorize: :manage, observe: "rollout"  # served and recorded, see Authorize
         #
         # A field with no rule is covered by its type's rule, unless the type is bypassed:
         # coverage does not propagate from a bypass, so that field is denied.
@@ -19,9 +20,16 @@ module GraphQL
         module Field
           # `find_by: :id` looks the object up inside the user's scope instead of calling the resolver.
           # `loads:` arguments also load through the scope unless `load_through_scope: false`.
-          def initialize(*args, authorize: nil, reason: nil, find_by: nil, load_through_scope: true, visible_when: nil, override_reason: nil, **kwargs, &block)
+          def initialize(*args, authorize: nil, reason: nil, observe: nil, find_by: nil, load_through_scope: true, visible_when: nil, override_reason: nil, **kwargs, &block)
             raise ConfigurationError, "override_reason: must say why the override is safe" if !override_reason.nil? && override_reason.to_s.strip.empty?
 
+            if !observe.nil? && (!authorize.is_a?(Symbol) || authorize == :none)
+              raise ArgumentError, "observe: needs an action of the field's own: `authorize: :manage, observe: \"...\"`"
+            end
+            raise ArgumentError, "observe: does not apply to a field with a resolver or a mutation: what it runs cannot be undone" if !observe.nil? && kwargs[:resolver_class]
+            Rule.new(authorize, observe: observe) unless observe.nil?
+
+            @armory_observe = observe
             @armory_override_reason = override_reason
             @armory_declared = authorize
             @armory_reason = reason
@@ -32,7 +40,7 @@ module GraphQL
             extension(Integration::FindBy, key: find_by) if find_by
           end
 
-          attr_reader :armory_declared, :armory_reason, :armory_visible_when, :armory_override_reason
+          attr_reader :armory_declared, :armory_reason, :armory_observe, :armory_visible_when, :armory_override_reason
 
           def armory_load_through_scope?
             @armory_load_through_scope
@@ -72,6 +80,9 @@ module GraphQL
           def authorized?(object, args, context)
             rule = armory_rule_for(owner, context)
             return false if rule.nil?
+            if resolver && rule.is_a?(Rule) && rule.observed?
+              raise ConfigurationError, "#{owner.graphql_name}.#{graphql_name} has a resolver or a mutation, which can write, so it cannot use an observed rule"
+            end
 
             (rule == :covered || Integration.allowed?(object, Integration.with_owner_model(rule, owner), context)) && super
           end
@@ -100,7 +111,7 @@ module GraphQL
             when :none
               Rule.none(reason: @armory_reason)
             else
-              Rule.new(@armory_declared, policy: armory_policy, attribute: original_name)
+              Rule.new(@armory_declared, policy: armory_policy, attribute: original_name, observe: @armory_observe)
             end
           end
         end

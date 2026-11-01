@@ -21,6 +21,8 @@ module GraphQL
           def authorize(action, reason: nil, on_denied: :default, **options)
             raise ArgumentError, "on_denied must be one of #{ON_DENIED.inspect}, got #{on_denied.inspect}" unless ON_DENIED.include?(on_denied)
 
+            raise ArgumentError, "observe: does not apply to a mutation or a resolver: what it runs cannot be undone" if options.key?(:observe)
+
             @armory_on_denied = on_denied
             @armory_rule = Rule.new(action, reason: reason, **options)
           end

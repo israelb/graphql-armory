@@ -133,6 +133,7 @@ The sink reads the context through a view that answers `[]`, `fetch`, `dig` and 
 |---|---|---|
 | `:allowed` | The policy or ability said yes | `type`, `action` |
 | `:denied` | It said no, nil or anything that is not a clear yes | `type`, `action` |
+| `:observed` | It said no to a rule under `observe:`, so the data was served | `type`, `action`, `reason` |
 | `:bypassed` | The rule is `authorize :none, reason: "..."` | `type` (not on lists), `reason` |
 | `:scoped` | A list or lookup went through the user's scope | `action` |
 
