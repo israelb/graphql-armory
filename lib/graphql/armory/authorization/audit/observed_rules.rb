@@ -40,7 +40,7 @@ module GraphQL
           end
 
           def self.unobservable(type)
-            Definitions.fields_at_every_level(type).find(&:resolver)
+            type.all_field_definitions.find(&:resolver)
           end
           private_class_method :observed_reason, :unobservable
 

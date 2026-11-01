@@ -128,7 +128,7 @@ module GraphQL
         # resolver or a mutation can write, and a write cannot be undone, so a type holding one cannot be observed.
         def self.refuse_unobservable(type, context)
           known = context.namespace(:armory)[:observable] ||= {}.compare_by_identity
-          field = known.fetch(type) { known[type] = Definitions.fields_at_every_level(type).find(&:resolver) }
+          field = known.fetch(type) { known[type] = type.all_field_definitions.find(&:resolver) }
           return unless field
 
           raise ConfigurationError, "#{type.graphql_name} cannot be observed: its field #{field.graphql_name} has a resolver or a mutation, which can write. " \

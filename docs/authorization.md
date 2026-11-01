@@ -150,9 +150,10 @@ When the policy answers `false` or `nil`, **the data is served to a user the rul
 | A policy that raises, is missing, or answers anything else | Raises or refuses, as without `observe:` |
 | A type or field with no rule | Denied: there is no rule to observe |
 | A mutation or a subscription, including a read in its response | Refused: only a query runs |
-| A type under `observe:` with a field that has a `resolver:` or a `mutation:`, its own, inherited or from an interface | Raises `ConfigurationError` on every query that reaches the type, and its resolvers do not run: observing the type would open the only check before them, and they can write. Remove `observe:`, or put it on the type's plain fields |
-| The same, on the root type | Also raises and runs nothing, but graphql-ruby's own rescue reports it as a `NoMethodError` whose `cause` is the `ConfigurationError`: its handler reads a context that does not exist yet |
-| `authorize: true` with a resolver, where the type's rule is observed | Raises `ConfigurationError` |
+| A mutation whose response returns a type that cannot be observed | The mutation's own body has already run when that type raises: its write stands |
+| A type under `observe:` with a field that has a `resolver:` or a `mutation:`, its own, inherited or from an interface; a definition shadowed in a subclass does not count | Raises `ConfigurationError` on every query that reaches the type, and its resolvers do not run: observing the type would open the only check before them, and they can write. Remove `observe:`, or put it on the type's plain fields |
+| The same, on the root type | Runs nothing, but the error depends on the engine: on the interpreter with graphql 2.6, graphql-ruby's own rescue reports a `NoMethodError` caused by the `ConfigurationError`. A `rescue_from` handler can turn it into an empty result, so run the audit, which names the type |
+| `authorize: true` with a resolver, where the type's rule is observed | Raises `ConfigurationError`, after graphql-ruby has coerced the arguments: their `prepare:` has run, as it does before any field's rule |
 | A list of an object type, a `loads:` or a `find_by:` | Still goes through the user's scope, and an in-memory lookup still asks the policy: rows are lost, and nothing is recorded about them |
 | A list with no scope: of an interface or a union, `scope: false`, Relay `nodes(ids:)` | **Served row by row and recorded**: the check on each object is all that protects these lists, and it cannot tell it is inside one. A foreign row reaches the user |
 | `visible_when:` | Still hides: the rule it builds is not observed |

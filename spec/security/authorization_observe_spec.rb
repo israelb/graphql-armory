@@ -224,6 +224,30 @@ RSpec.describe "Authorization: observing a rule" do
       expect(ran).to be_empty
     end
 
+    it "reads only what can run: a shadowed field neither breaks the type nor stops it being observed" do
+      ran = []
+      plain = resolver_counting(ran)
+      klass = base_field
+      parent = Class.new(base_object) do
+        graphql_name "Parent"
+        field_class klass
+        authorize :read, model: Object
+        field(:gone, String, null: true) { argument :x, ThisConstantDoesNotExist }
+        field :touch, resolver: plain
+      end
+      type = Class.new(parent) do
+        graphql_name "Invoice"
+        authorize :read, model: Object, observe: "rollout"
+        field :gone, String, null: true, hash_key: :secret
+        field :touch, String, null: true, hash_key: :secret
+        field :secret, String
+      end
+      response = run(schema_of(type), "{ invoice { secret } }")
+
+      expect(response.dig("data", "invoice", "secret")).to eq("SECRET")
+      expect(ran).to be_empty
+    end
+
     it "still narrows a list through the scope" do
       type = observed_type
       query_type = Class.new(base_object) do
