@@ -211,11 +211,13 @@ expect(AppSchema).to be_fully_authorized(baseline: "config/graphql_armory_baseli
 |---|---|
 | A problem not in the file | Fails, named under "new" |
 | An accepted problem whose message changed, for example after an upgrade | Fails as new: read it, then edit the file |
+| An accepted problem that grew: a field or a `loads:` added to that type, or a type added under that base class or interface | Fails as new, naming what it now reaches |
+| An accepted problem that now appears more times | The extra ones fail as new |
 | An accepted problem that is gone | Fails until it leaves the file, so it cannot come back unseen |
 | A file that is missing or invalid | Fails: it never runs as if there were no baseline |
 | A schema without the plugin | Cannot be accepted: install the plugin first |
 
-Run `audit_baseline` again after fixing problems: on a file that exists it only removes what is gone, and it never adds. To accept a new problem, edit the file by hand, so it shows in the pull request. The file holds each problem's kind, path and message, and no data of the app.
+Run `audit_baseline` again after fixing problems: on a file that exists it only removes what is gone, and it never adds. To accept a new problem, edit the file by hand, so it shows in the pull request. The file holds each problem's kind, path, message and count, and the names it reaches (`covers`), and no data of the app. Removing what a problem reaches is fine: running `audit_baseline` narrows the entry.
 
 ### Redefined fields and arguments
 

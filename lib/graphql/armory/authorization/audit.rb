@@ -3,6 +3,7 @@
 require "set"
 require "graphql/armory/authorization/audit/report"
 require "graphql/armory/authorization/audit/baseline"
+require "graphql/armory/authorization/audit/reach"
 require "graphql/armory/authorization/audit/command"
 require "graphql/armory/authorization/audit/findings"
 require "graphql/armory/authorization/audit/library_methods"
@@ -74,7 +75,7 @@ module GraphQL
           VisibilityModels.(schema, definitions, findings)
           IntrospectionFields.(schema, findings)
           findings.problem(:model, "Schema", listing_error.message) if listing_error && !findings.problem?(:model)
-          findings.report
+          findings.report(Reach.new(definitions))
         end
 
         private

@@ -96,6 +96,80 @@ RSpec.describe GraphQL::Armory::Authorization::Audit::Baseline do
     end
   end
 
+  describe "an entry accepts the problem as it was, no larger" do
+    def schema_with(query_type)
+      adapter = GraphQL::Armory::Authorization::Adapters::Substitute.new
+      Class.new(ArmoryEngine.base_schema) do
+        query query_type
+        use GraphQL::Armory::Authorization, adapter: adapter
+      end
+    end
+
+    def open_query(&extra)
+      Class.new(GraphQL::Schema::Object) do
+        graphql_name "Query"
+        field :total, String
+        class_eval(&extra) if extra
+      end
+    end
+
+    it "fails when a field is added to an accepted type" do
+      baseline = described_class.from(audit.(schema_with(open_query)))
+      result = baseline.(audit.(schema_with(open_query { field :all_users, String })))
+
+      expect(result.passes?).to be(false)
+      expect(result.to_s).to include("now also reaches", "allUsers")
+    end
+
+    it "passes when a field leaves it, and write narrows the entry" do
+      in_tmp do |path|
+        described_class.write(audit.(schema_with(open_query { field :all_users, String })), path)
+
+        narrower = audit.(schema_with(open_query))
+        expect(described_class.load(path).(narrower).passes?).to be(true)
+        expect(described_class.write(narrower, path).entries.first.covers).not_to include(a_string_matching(/allUsers/))
+      end
+    end
+
+    it "accepts one problem per count: a repeat of an accepted problem is new" do
+      twice = audit::Report.new(problems: [old_problem, old_problem], bypasses: [])
+
+      expect(described_class.from(report(old_problem)).(twice).new_problems).to eq([old_problem])
+      expect(described_class.from(twice).(twice).passes?).to be(true)
+    end
+
+    it "fails when a type is added under an accepted base class" do
+      lax = Class.new(GraphQL::Schema::Object) do
+        include GraphQL::Armory::Authorization::Base
+        def self.name = "ArmoryBaselineLaxBase"
+        def self.authorized?(_object, _context) = true
+      end
+      first = Class.new(lax) { graphql_name "First"; authorize :none, reason: "x"; field :a, String }
+      second = Class.new(lax) { graphql_name "Second"; authorize :none, reason: "x"; field :b, String }
+      query_of = lambda do |*types|
+        Class.new(GraphQL::Schema::Object) do
+          include GraphQL::Armory::Authorization::Base
+          graphql_name "Query"
+          authorize :none, reason: "x"
+          types.each { |type| field type.graphql_name.downcase.to_sym, type, null: true }
+        end
+      end
+
+      baseline = described_class.from(audit.(schema_with(query_of.(first))))
+
+      expect(baseline.(audit.(schema_with(query_of.(first, second)))).passes?).to be(false)
+    end
+
+    it "reads an entry with no count or covers as the narrowest: one problem that reaches nothing" do
+      in_tmp do |path|
+        File.write(path, JSON.generate("version" => 1, "problems" => [{ "kind" => "no_rule", "path" => "Invoice", "message" => old_problem.message }]))
+
+        expect(described_class.load(path).(report(old_problem)).passes?).to be(true)
+        expect(described_class.load(path).(report(old_problem, old_problem)).passes?).to be(false)
+      end
+    end
+  end
+
   describe ".write" do
     it "writes one sorted entry per line of review, with the message" do
       in_tmp do |path|
@@ -152,6 +226,10 @@ RSpec.describe GraphQL::Armory::Authorization::Audit::Baseline do
         expect(schema).to be_fully_authorized(baseline: path)
         expect(schema).not_to be_fully_authorized
       end
+    end
+
+    it "refuses a path given without the keyword: it would be ignored on a clean schema" do
+      expect { be_fully_authorized("baseline.json") }.to raise_error(ArgumentError, /baseline: path/)
     end
 
     describe GraphQL::Armory::Authorization::Audit::Command do

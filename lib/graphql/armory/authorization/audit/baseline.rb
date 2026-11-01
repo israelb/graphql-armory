@@ -10,21 +10,26 @@ module GraphQL
         # A report's `ok?` never changes because of it: a schema with problems is not ok, with or without a baseline.
         #
         #   Baseline.load("config/graphql_armory_baseline.json").(report).passes?
+        #
+        # An entry accepts one problem as it was: how many times it appeared, and what it reached (see Reach). A problem that
+        # grew, because a field or a subclass was added to what it covers, is not the problem someone accepted.
         class Baseline
           VERSION = 1
-          Entry = Struct.new(:kind, :path, :message) do
-            def to_h = { "kind" => kind, "path" => path, "message" => message }
+          Entry = Struct.new(:kind, :path, :message, :count, :covers) do
+            def key = [kind, path, message]
+            def to_h = { "kind" => kind, "path" => path, "message" => message, "count" => count, "covers" => covers }
           end
 
           # What a report comes to against a baseline. It has no `ok?`, so nobody reads a pass as a clean schema.
           class Result
-            attr_reader :report, :new_problems, :accepted, :gone
+            attr_reader :report, :new_problems, :accepted, :gone, :grown
 
-            def initialize(report:, new_problems:, accepted:, gone:)
+            def initialize(report:, new_problems:, accepted:, gone:, grown: {})
               @report = report
               @new_problems = new_problems.freeze
               @accepted = accepted.freeze
               @gone = gone.freeze
+              @grown = grown.freeze
               freeze
             end
 
@@ -35,17 +40,22 @@ module GraphQL
 
             def to_s
               sections = [
-                section("#{new_problems.size} new #{plural('problem', new_problems.size)}:", new_problems),
+                section("#{new_problems.size} new #{plural('problem', new_problems.size)}:", new_problems.map { |problem| new_line(problem) }),
                 section("#{gone.size} accepted #{plural('problem', gone.size)} no longer found (remove them from the baseline):", gone.map { |entry| "#{entry.path} (#{entry.kind}): #{entry.message}" }),
                 section("#{accepted.size} accepted in the baseline, still open:", accepted),
                 bypasses_text
               ].compact
               sections.unshift("Passes only because of its baseline.") if passes? && !accepted.empty?
-              sections.unshift("No new problems.") if sections.empty?
+              sections.unshift("No problems.") if passes? && accepted.empty?
               "#{sections.join("\n\n")}\n"
             end
 
             private
+
+            def new_line(problem)
+              extra = grown[problem]
+              extra ? "#{problem} (it now also reaches #{extra.join(', ')})" : problem.to_s
+            end
 
             def section(title, lines)
               return if lines.empty?
@@ -62,20 +72,23 @@ module GraphQL
             end
           end
 
-          # Every problem of a report, accepted.
+          # Every problem of a report, accepted as it is now.
           def self.from(report)
-            new(report.problems.map { |problem| Entry.new(problem.kind.to_s, problem.path, problem.message) })
+            new(report.problems.group_by { |problem| [problem.kind.to_s, problem.path, problem.message] }.map do |(kind, path, message), problems|
+              Entry.new(kind, path, message, problems.size, report.reach_of(problems.first))
+            end)
           end
 
           def self.load(path)
             data = begin
               JSON.parse(File.read(path, mode: "r:bom|utf-8"))
-            rescue JSON::ParserError
+            rescue JSON::ParserError, ArgumentError, EncodingError
+              # Not the parser's message: it quotes the file's content.
               raise ConfigurationError, "the baseline #{path} is not valid JSON"
             rescue SystemCallError => error
               raise ConfigurationError, "the baseline #{path} cannot be read (#{error.class})"
             end
-            unless data.is_a?(Hash) && data["version"] == VERSION && data["problems"].is_a?(Array)
+            unless data.is_a?(Hash) && data["version"].eql?(VERSION) && data["problems"].is_a?(Array)
               raise ConfigurationError, "the baseline #{path} needs version #{VERSION} and a list of problems"
             end
 
@@ -89,14 +102,23 @@ module GraphQL
             kept = File.exist?(path) ? load(path).kept_from(baseline) : baseline
             File.write(path, "#{JSON.pretty_generate('version' => VERSION, 'problems' => kept.entries.map(&:to_h))}\n")
             kept
+          rescue SystemCallError => error
+            raise ConfigurationError, "the baseline #{path} cannot be written (#{error.class})"
           end
 
+          # With no count or covers an entry accepts the narrowest thing: one problem that reaches nothing.
           def self.entry_from(entry, path)
             unless entry.is_a?(Hash) && %w[kind path message].all? { |key| entry[key].is_a?(String) }
               raise ConfigurationError, "the baseline #{path} needs a kind, a path and a message in each problem"
             end
 
-            Entry.new(*entry.values_at("kind", "path", "message"))
+            count = entry.fetch("count", 1)
+            covers = entry.fetch("covers", [])
+            unless count.is_a?(Integer) && count.positive? && covers.is_a?(Array) && covers.all?(String)
+              raise ConfigurationError, "the baseline #{path} needs a positive count and a list of Strings in covers"
+            end
+
+            Entry.new(*entry.values_at("kind", "path", "message"), count, covers)
           end
           private_class_method :entry_from
 
@@ -109,23 +131,52 @@ module GraphQL
               raise ConfigurationError, "a baseline cannot accept a schema that never installed the plugin: install it first"
             end
 
-            @entries = entries.uniq.sort_by(&:to_a).freeze
+            @entries = entries.map { |entry| Entry.new(entry.kind, entry.path, entry.message, entry.count || 1, entry.covers || []) }.uniq(&:key).sort_by(&:to_a).freeze
           end
 
           def call(report)
-            accepted, new_problems = report.problems.partition { |problem| entries.include?(entry_of(problem)) }
-            found = report.problems.map { |problem| entry_of(problem) }
-            Result.new(report: report, new_problems: new_problems, accepted: accepted, gone: entries - found)
+            by_key = entries.to_h { |entry| [entry.key, entry] }
+            seen = Hash.new(0)
+            grown = {}
+            accepted, new_problems = report.problems.partition do |problem|
+              entry = by_key[key_of(problem)]
+              next false unless entry
+
+              extra = beyond(report.reach_of(problem), entry.covers)
+              grown[problem] = extra unless extra.empty?
+              extra.empty? && (seen[entry.key] += 1) <= entry.count
+            end
+            found = report.problems.map { |problem| key_of(problem) }
+            Result.new(report: report, new_problems: new_problems, accepted: accepted, grown: grown,
+                       gone: entries.reject { |entry| found.include?(entry.key) })
           end
 
+          # This baseline without what `other` no longer holds: nothing grows.
           def kept_from(other)
-            self.class.new(entries & other.entries)
+            current = other.entries.to_h { |entry| [entry.key, entry] }
+            self.class.new(entries.filter_map do |entry|
+              now = current[entry.key]
+              next unless now
+
+              Entry.new(entry.kind, entry.path, entry.message, [entry.count, now.count].min, common(entry.covers, now.covers))
+            end)
           end
 
           private
 
-          def entry_of(problem)
-            Entry.new(problem.kind.to_s, problem.path, problem.message)
+          def key_of(problem)
+            [problem.kind.to_s, problem.path, problem.message]
+          end
+
+          # What `now` holds beyond `accepted`, counting repeats: two classes may share a name.
+          def beyond(now, accepted)
+            left = accepted.tally
+            now.reject { |item| left[item].to_i.positive? && (left[item] -= 1) }
+          end
+
+          def common(one, other)
+            left = other.tally
+            one.select { |item| left[item].to_i.positive? && (left[item] -= 1) }
           end
         end
       end
