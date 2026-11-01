@@ -23,7 +23,10 @@ module GraphQL
             type.graphql_name == head || type.ancestors.any? { |ancestor| ancestor.name == head || named?(ancestor, head) }
           end
 
+          # graphql-ruby's own classes answer `graphql_name` too (`Member`, `Object`): a type named like one must not reach everything.
           def named?(ancestor, head)
+            return false if ancestor.name&.start_with?("GraphQL::")
+
             ancestor.respond_to?(:graphql_name) && ancestor.graphql_name == head
           rescue GraphQL::Error
             false # an anonymous class with no name of its own

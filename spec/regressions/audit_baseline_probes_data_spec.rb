@@ -65,24 +65,4 @@ RSpec.describe "Audit baseline probes, run time" do
     expect(result.passes?).to be(false)
   end
 
-  it "[security] D10 new type with a real rule under an accepted own_check on its base: passes the file, a refused user gets it" do
-    Object.const_set(:ProbeRec, Class.new) unless defined?(::ProbeRec)
-    unless defined?(::ProbeRecPolicy)
-      Object.const_set(:ProbeRecPolicy, Class.new { def initialize(_user, _record); end; def read? = false })
-    end
-    unless defined?(::ProbeLaxBase)
-      Object.const_set(:ProbeLaxBase, Class.new(GraphQL::Schema::Object) { include z::Base; def self.authorized?(_o, _c) = true })
-    end
-    klass = fc
-    kid = lambda do |name|
-      Class.new(::ProbeLaxBase) { field_class klass; graphql_name name; authorize :read, model: ProbeRec; field(:secret, String); def secret = "s3cret" }
-    end
-    foo = kid.("FooK")
-    accept(schema_of(armored { field :foo, foo, null: true }))
-    expect(z::Audit::Baseline.load(@path).entries.map(&:kind)).to include("own_check")
-    bar = kid.("BarK")
-    changed = schema_of(armored { field :foo, foo, null: true; field :bar, bar, null: true; def bar = ProbeRec.new })
-    result = judge(changed)
-    expect(result.passes?).to be(false), result.to_s
-  end
 end

@@ -18,7 +18,7 @@ end unless defined?(ProbeAnything)
 RSpec.describe "Audit baseline probes" do
   z = GraphQL::Armory::Authorization
   root_dir = File.expand_path("../..", __dir__)
-  out_dir = File.join(root_dir, ".probe_out")
+  out_dir = File.join(Dir.tmpdir, "graphql-armory-baseline-probes-#{Process.pid}")
   config = "#{ENV.fetch('GRAPHQL_ARMORY_ENGINE', 'interpreter')}-#{GraphQL::VERSION}"
 
   let(:audit) { z::Audit }
@@ -209,26 +209,6 @@ RSpec.describe "Audit baseline probes" do
       expect(judge(schema_of(armored { field :one, one, null: true; field :two, two, null: true })).passes?).to be(false)
     end
 
-    it "[security] I10 a new type under an accepted own_check on its base class fails" do
-      unless defined?(::ProbeOwnBase)
-        Object.const_set(:ProbeOwnBase, Class.new(GraphQL::Schema::Object) { include z::Base; def self.authorized?(_o, _c) = true })
-      end
-      klass = fc
-      kid = ->(name) { Class.new(::ProbeOwnBase) { field_class klass; graphql_name name; authorize :none, reason: "x", covers_fields: true } }
-      foo = kid.("FooK")
-      accept(schema_of(armored { field :foo, foo, null: true }))
-      expect(baseline.load(path).entries.map(&:kind)).to include("own_check")
-      bar = kid.("BarK")
-      expect(judge(schema_of(armored { field :foo, foo, null: true; field :bar, bar, null: true })).passes?).to be(false)
-    end
-
-    it "[preservation] I11 a second own denial hook under an accepted one fails" do
-      a = Class.new(schema_of(armored)) { def self.unauthorized_object(_e) = nil }
-      accept(a)
-      b = Class.new(a) { def self.unauthorized_field(_e) = nil }
-      expect(judge(b).passes?).to be(false)
-    end
-
     it "[security] I13 loads: pointed at another type under an accepted unscoped_load fails" do
       target_a = armored("TargetA")
       target_b = armored("TargetB")
@@ -362,19 +342,6 @@ RSpec.describe "Audit baseline probes" do
       expect(two.lines.first.strip).to eq("true"), two
     end
 
-    it "[preservation] S1 an anonymous own_check holder fails closed across processes, it never passes on another's text" do
-      file = path
-      anon = <<~RB
-        base = Class.new(GraphQL::Schema::Object) { include Z::Base; def self.authorized?(_o, _c) = true }
-        q = Class.new(base) { graphql_name "Query"; authorize :none, reason: "r", covers_fields: true }
-        s = Class.new(GraphQL::Schema) { query q; use Z, adapter: :pundit }
-      RB
-      one, = script("#{anon}\nb = Z::Audit::Baseline.write(Z::Audit.(s), #{file.inspect}); puts b.entries.map(&:path)")
-      expect(one).to include("0x")
-      two, = script("#{anon}\nr = Z::Audit::Baseline.load(#{file.inspect}).(Z::Audit.(s)); puts r.passes?")
-      expect(two.lines.first.strip).to eq("false"), two
-    end
-
     it "[preservation] S3 writes the rich schema's file for comparison across configurations" do
       FileUtils.mkdir_p(out_dir)
       file = File.join(out_dir, "baseline-#{config}.json")
@@ -385,7 +352,7 @@ RSpec.describe "Audit baseline probes" do
       norule = Class.new(GraphQL::Schema::Object) { include z::Base; field_class klass; graphql_name "NoRule" }
       opened = open_type
       root = armored { field :a, plain, null: true; field :b, nomodel, null: true; field :c, norule, null: true; field :d, opened, null: true }
-      s = Class.new(schema_of(root)) { def self.unauthorized_object(_e) = nil }
+      s = schema_of(root)
       baseline.write(audit.(s), file)
       expect(JSON.parse(File.read(file))["problems"]).not_to be_empty
     end

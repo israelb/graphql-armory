@@ -124,12 +124,17 @@ module GraphQL
 
           attr_reader :entries
 
-          # `new` is inert: it accepts nothing, so every problem is new. A schema with no plugin cannot be accepted: then
-          # no rule runs at all, and there is nothing to adopt gradually.
+          # What a baseline never accepts: with no plugin, no rule runs at all, so there is nothing to adopt gradually; an own
+          # check or a denial hook reaches whatever uses it later, which no entry can pin down, and each already has its
+          # declaration with a reason (`own_checks:`, `own_denial_hooks:`).
+          REFUSED = { "plugin" => "a baseline cannot accept a schema that never installed the plugin: install it first",
+                      "own_check" => "a baseline cannot accept an own check: remove it, or declare it in own_checks: with a reason",
+                      "hook" => "a baseline cannot accept a denial hook: remove it, or declare it in own_denial_hooks: with a reason" }.freeze
+
+          # `new` is inert: it accepts nothing, so every problem is new.
           def initialize(entries = [])
-            if entries.any? { |entry| entry.kind == "plugin" }
-              raise ConfigurationError, "a baseline cannot accept a schema that never installed the plugin: install it first"
-            end
+            refused = entries.find { |entry| REFUSED.key?(entry.kind) }
+            raise ConfigurationError, "#{REFUSED.fetch(refused.kind)} (#{refused.path})" if refused
 
             @entries = entries.map { |entry| Entry.new(entry.kind, entry.path, entry.message, entry.count || 1, entry.covers || []) }.uniq(&:key).sort_by(&:to_a).freeze
           end

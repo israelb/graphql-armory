@@ -74,6 +74,29 @@ RSpec.describe GraphQL::Armory::Authorization::Audit::Baseline do
     end
   end
 
+  it "refuses to accept an own check or a denial hook: no entry can pin down what uses them later" do
+    own_check = audit::Report::Problem.new(:own_check, "Foo.authorized?", "can skip the rule")
+    hook = audit::Report::Problem.new(:hook, "Schema.unauthorized_object", "wins over the plugin's")
+
+    expect { described_class.from(report(own_check)) }.to raise_error(error, /own_checks:.*Foo/)
+    expect { described_class.from(report(hook)) }.to raise_error(error, /own_denial_hooks:/)
+    in_tmp do |path|
+      File.write(path, JSON.generate("version" => 1, "problems" => [{ "kind" => "own_check", "path" => "Foo.authorized?", "message" => "x" }]))
+      expect { described_class.load(path) }.to raise_error(error, /own_checks:/)
+    end
+  end
+
+  it "does not let a type named like a library class reach the whole schema" do
+    member = Class.new(GraphQL::Schema::Object) { graphql_name "Member"; field :a, String }
+    query = Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :member, member; field :other, String }
+    adapter = GraphQL::Armory::Authorization::Adapters::Substitute.new
+    schema = Class.new(ArmoryEngine.base_schema) { query query; use GraphQL::Armory::Authorization, adapter: adapter }
+
+    entry = described_class.from(audit.(schema)).entries.find { |candidate| candidate.path == "Member" }
+
+    expect(entry.covers).to eq(["field:Member.a:String", "type:Member"])
+  end
+
   describe ".load" do
     it "raises on what it cannot read, so a typo never passes" do
       in_tmp do |path|
@@ -136,28 +159,6 @@ RSpec.describe GraphQL::Armory::Authorization::Audit::Baseline do
 
       expect(described_class.from(report(old_problem)).(twice).new_problems).to eq([old_problem])
       expect(described_class.from(twice).(twice).passes?).to be(true)
-    end
-
-    it "fails when a type is added under an accepted base class" do
-      lax = Class.new(GraphQL::Schema::Object) do
-        include GraphQL::Armory::Authorization::Base
-        def self.name = "ArmoryBaselineLaxBase"
-        def self.authorized?(_object, _context) = true
-      end
-      first = Class.new(lax) { graphql_name "First"; authorize :none, reason: "x"; field :a, String }
-      second = Class.new(lax) { graphql_name "Second"; authorize :none, reason: "x"; field :b, String }
-      query_of = lambda do |*types|
-        Class.new(GraphQL::Schema::Object) do
-          include GraphQL::Armory::Authorization::Base
-          graphql_name "Query"
-          authorize :none, reason: "x"
-          types.each { |type| field type.graphql_name.downcase.to_sym, type, null: true }
-        end
-      end
-
-      baseline = described_class.from(audit.(schema_with(query_of.(first))))
-
-      expect(baseline.(audit.(schema_with(query_of.(first, second)))).passes?).to be(false)
     end
 
     it "reads an entry with no count or covers as the narrowest: one problem that reaches nothing" do
