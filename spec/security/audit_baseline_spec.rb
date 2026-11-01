@@ -88,13 +88,15 @@ RSpec.describe GraphQL::Armory::Authorization::Audit::Baseline do
 
   it "does not let a type named like a library class reach the whole schema" do
     member = Class.new(GraphQL::Schema::Object) { graphql_name "Member"; field :a, String }
-    query = Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :member, member; field :other, String }
+    object = Class.new(GraphQL::Schema::Object) { graphql_name "Object"; field :b, String }
+    query = Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :member, member; field :object, object; field :other, String }
     adapter = GraphQL::Armory::Authorization::Adapters::Substitute.new
     schema = Class.new(ArmoryEngine.base_schema) { query query; use GraphQL::Armory::Authorization, adapter: adapter }
 
     entry = described_class.from(audit.(schema)).entries.find { |candidate| candidate.path == "Member" }
 
     expect(entry.covers).to eq(["field:Member.a:String", "type:Member"])
+    expect(described_class.from(audit.(schema)).entries.find { |candidate| candidate.path == "Object" }.covers).to eq(["field:Object.b:String", "type:Object"])
   end
 
   describe ".load" do

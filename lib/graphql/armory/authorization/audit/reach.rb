@@ -8,6 +8,8 @@ module GraphQL
         # names, with their fields and `loads:`. A problem on a type or a base class says nothing about what is added to it
         # later, so a baseline compares this to tell the problem someone accepted from a larger one.
         class Reach
+          LIBRARY = [::Object, ::BasicObject, ::Kernel, ::Comparable].freeze
+
           def initialize(definitions)
             @definitions = definitions
           end
@@ -20,13 +22,16 @@ module GraphQL
           private
 
           def holds?(type, head)
-            type.graphql_name == head || type.ancestors.any? { |ancestor| ancestor.name == head || named?(ancestor, head) }
+            type.graphql_name == head || type.ancestors.any? { |ancestor| app_class?(ancestor) && (ancestor.name == head || named?(ancestor, head)) }
           end
 
-          # graphql-ruby's own classes answer `graphql_name` too (`Member`, `Object`): a type named like one must not reach everything.
-          def named?(ancestor, head)
-            return false if ancestor.name&.start_with?("GraphQL::")
+          # Ruby's and graphql-ruby's own classes are in every type's ancestors, and graphql-ruby's answer `graphql_name` too: a
+          # type named `Object` or `Member` must not reach everything.
+          def app_class?(ancestor)
+            !LIBRARY.include?(ancestor) && !ancestor.name&.start_with?("GraphQL::")
+          end
 
+          def named?(ancestor, head)
             ancestor.respond_to?(:graphql_name) && ancestor.graphql_name == head
           rescue GraphQL::Error
             false # an anonymous class with no name of its own
