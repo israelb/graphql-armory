@@ -35,6 +35,22 @@ module GraphQL
           true
         end
 
+        # Observing opens one thing only: a clear "no" to a read, with someone listening, from an adapter someone configured.
+        # A mutation or a subscription keeps refusing, even on a read inside its response: only a query runs nothing it cannot undo.
+        def observes?(rule, context)
+          rule.observed? && telemetry.listening? && !adapter.is_a?(Adapters::Null) && read_only?(context)
+        end
+
+        def read_only?(context)
+          query = context.query if context.respond_to?(:query)
+          query.respond_to?(:query?) && query.query? == true
+        end
+
+        def observe(subject, rule, context)
+          telemetry.record(:observed, context: context, type: class_name(subject), action: rule.action, reason: rule.observe)
+          true
+        end
+
         # The record's own `class` can be a data member, and the error for it quotes the record.
         def class_name(subject)
           ::Kernel.instance_method(:class).bind_call(subject).name
@@ -45,6 +61,8 @@ module GraphQL
 
           case answer
           when true, false, nil
+            return observe(subject, rule, context) if answer != true && observes?(rule, context)
+
             allowed = answer == true
             telemetry.record(allowed ? :allowed : :denied, context: context, type: class_name(subject), action: rule.action)
             allowed

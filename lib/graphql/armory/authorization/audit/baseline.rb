@@ -129,7 +129,8 @@ module GraphQL
           # declaration with a reason (`own_checks:`, `own_denial_hooks:`).
           REFUSED = { "plugin" => "a baseline cannot accept a schema that never installed the plugin: install it first",
                       "own_check" => "a baseline cannot accept an own check: remove it, or declare it in own_checks: with a reason",
-                      "hook" => "a baseline cannot accept a denial hook: remove it, or declare it in own_denial_hooks: with a reason" }.freeze
+                      "hook" => "a baseline cannot accept a denial hook: remove it, or declare it in own_denial_hooks: with a reason",
+                      "observed" => "a baseline cannot accept observe: it serves what the rule would refuse, and it already says why" }.freeze
 
           # `new` is inert: it accepts nothing, so every problem is new.
           def initialize(entries = [])

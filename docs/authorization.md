@@ -125,6 +125,37 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 - Code written to get past it. The audit reads the classes, it does not run your methods: a declared alias of a library method, a class of yours named under `GraphQL::`, or a forged `__FILE__` are not caught. The audit protects against mistakes, not against the app's own code.
 - `rescue_from(NotAuthorizedError)`: with `on_unauthorized: :raise`, rescuing is what you are meant to do, so keep that handler's message generic. The interpreter catches field denials there and not object denials, which then raise out of the query; `Execution::Next` catches both.
 
+## Observing a rule before enforcing it
+
+To learn who a new rule would refuse on a schema already in production, name the rule and say why:
+
+```ruby
+class Types::Invoice < Types::BaseObject
+  authorize :read, observe: "rollout of invoices, ticket 123"
+end
+
+field :notes, String, authorize: :manage, observe: "rollout of notes, ticket 124"
+
+use GraphQL::Armory::Authorization, adapter: :pundit,
+  sinks: [->(signal, data) { Rails.logger.info("armory #{signal} #{data}") if signal == :observed }]
+```
+
+When the policy answers `false` or `nil`, **the data is served to a user the rule would refuse**, and an `:observed` signal is recorded in place of `:denied`. Remove `observe:` to enforce the rule. There is no switch for a whole schema: each rule says it, with its reason, and the audit reports each one as `:observed` until it is gone, so `report.ok?` is false and a baseline cannot accept it.
+
+| Case | What happens under `observe:` |
+|---|---|
+| A query, and the policy answers `false` or `nil` | Served, `:observed` recorded |
+| No `sinks:` | Refused: observing with nobody listening is only an open door |
+| `Adapters::Null` | Refused |
+| A policy that raises, is missing, or answers anything else | Raises or refuses, as without `observe:` |
+| A type or field with no rule | Denied: there is no rule to observe |
+| A mutation or a subscription, including a read in its response | Refused: only a query runs |
+| A list, a `loads:` or a `find_by:` | Still goes through the user's scope, and an in-memory lookup still asks the policy: rows are lost, and nothing is recorded about them |
+| `visible_when:` | Still hides: the rule it builds is not observed |
+| `observe:` on a mutation, a resolver, an argument, a bypass, or a field with no action of its own | Raises `ArgumentError` when declared |
+
+**Limits.** A sink that raises loses that signal, reported to `on_sink_error:`, and the data is still served. `Telemetry::Notifications` counts as listening even when nothing subscribes to it. A rule on a type with lists can already lose rows while observed: declare its `scope` only when you trust it, because observing it would mean a second query per list and serving other users' rows.
+
 ## Lists, connections and lookups
 
 Lists of a type are narrowed through `InvoicePolicy::Scope` (relations) or by calling the policy per item (arrays). Return a relation when you can: SQL filters before Ruby sees anything.
@@ -187,6 +218,7 @@ load "tasks/graphql_armory.rake"
 | `:ignored_rule` | A rule that does not run, or a field or argument defined more than once. | See [Redefined fields and arguments](#redefined-fields-and-arguments) and [Lists, connections and lookups](#lists-connections-and-lookups). |
 | `:foreign_model` | A field rule is defined on an interface or a parent whose model is not this type's, so the policy of this type's model is never asked for that field. A record of another class or a laxer subclass gets past it. Redefine the field on this type with its `authorize:` and an `override_reason:`, or name the same model on the parent. |
 | `:foreign_policy` | A type or a Base resolver names a `policy:`, but a rule it uses is defined on an interface, a parent, an input object or a resolver, so that rule asks another policy. A user this type's policy refuses can get the data. A field never sees its resolved type, so this cannot be fixed at runtime. | Move the rule to the class that names the policy and remove the original, or name the `policy:` on the class that defines the rule, if it can hold one: an interface or an input object cannot. There is no declaration for it. |
+| `:observed` | A rule under `observe:` serves what it would refuse. A baseline cannot accept it. | Remove `observe:` to enforce the rule. |
 
 A declaration (`own_checks:`, `own_denial_hooks:`, `override_reason:`, `authorize :none, reason:`) is your word: the audit stops reporting that problem and lists the reason, so a reviewer can read it. It does not read what your code does. A declaration that names nothing in use is itself a problem.
 
@@ -380,7 +412,7 @@ use GraphQL::Armory::Authorization, adapter: :pundit,
 # armory denied {:type=>"Invoice", :action=>:read}
 ```
 
-Signals are `:allowed`, `:denied`, `:bypassed` (an `authorize :none` rule ran) and `:scoped` (a list went through the user's scope). Data holds only `type`, `action` and `reason`, never record attributes. `GraphQL::Armory::Telemetry::Notifications` reports them to `ActiveSupport::Notifications`. Every signal, what to watch for and how to test it: [Telemetry](telemetry.md). A `sinks:` that is not an Array of callables raises `Telemetry::ConfigurationError` at boot.
+Signals are `:allowed`, `:denied`, `:observed` (a rule under `observe:` would have refused; its data also holds the `reason`), `:bypassed` (an `authorize :none` rule ran) and `:scoped` (a list went through the user's scope). Data holds only `type`, `action` and `reason`, never record attributes. `GraphQL::Armory::Telemetry::Notifications` reports them to `ActiveSupport::Notifications`. Every signal, what to watch for and how to test it: [Telemetry](telemetry.md). A `sinks:` that is not an Array of callables raises `Telemetry::ConfigurationError` at boot.
 
 ## Guarantees and limits
 

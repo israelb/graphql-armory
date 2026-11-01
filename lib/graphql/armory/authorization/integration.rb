@@ -60,7 +60,7 @@ module GraphQL
 
           # An in-memory scope yields an Array, which cannot look one record up: find it, then ask the rule.
           record = model.find_by(conditions)
-          record if record && allowed?(record, rule, context)
+          record if record && allowed?(record, rule.enforced, context)
         end
 
         # Loads a `loads:` argument inside the user's scope. When the schema defines `object_from_id` (global
