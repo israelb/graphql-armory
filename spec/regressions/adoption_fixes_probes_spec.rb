@@ -521,7 +521,7 @@ RSpec.describe "Adoption fixes probes" do
       rails_app(@app)
       out, status = rake(@app, "-T", "graphql_armory")
       expect(status).to eq(0)
-      expect(out.scan("graphql_armory:audit").size).to eq(1)
+      expect(out.scan(/graphql_armory:audit(?!_)/).size).to eq(1)
     end
 
     it "[security] R2 clean exits 0; :environment once and before the autoloaded schema" do
@@ -561,7 +561,7 @@ RSpec.describe "Adoption fixes probes" do
       out, status = rake(@app, "graphql_armory:audit[DirtySchema]")
       expect(status).to eq(1)
       expect(out).to include("actions=1 leak=nil")
-      expect(rake(@app, "-T", "graphql_armory").first.scan("graphql_armory:audit").size).to eq(1)
+      expect(rake(@app, "-T", "graphql_armory").first.scan(/graphql_armory:audit(?!_)/).size).to eq(1)
     end
 
     it "[security] R6b a hand load before load_tasks: one action, dirty exits 1" do
@@ -587,7 +587,7 @@ RSpec.describe "Adoption fixes probes" do
       out, status = Open3.capture2e({ "APP_DIR" => @app }, "bundle", "exec", "ruby", "bin/rails", "graphql_armory:audit[CleanSchema]", chdir: @app)
       expect(status.exitstatus).to eq(0), out
       out, = Open3.capture2e({ "APP_DIR" => @app }, "bundle", "exec", "ruby", "bin/rails", "-T", "graphql_armory", chdir: @app)
-      expect(out.scan("graphql_armory:audit").size).to eq(1)
+      expect(out.scan(/graphql_armory:audit(?!_)/).size).to eq(1)
     end
 
     it "[preservation] R9a Rails: a Rakefile that adds a prerequisite before load_tasks keeps a working audit that exits 1" do
@@ -764,7 +764,7 @@ RSpec.describe "Adoption fixes probes" do
       rails_app(@app, gem_line: "Bundler.require(:default)")
       out, status = rake(@app, "-T", "graphql_armory")
       expect(status).to eq(0), out
-      expect(out.scan("graphql_armory:audit").size).to eq(1)
+      expect(out.scan(/graphql_armory:audit(?!_)/).size).to eq(1)
     end
 
     it "[preservation] T7 authorization/rspec loads with no Rails, and no Railtie" do

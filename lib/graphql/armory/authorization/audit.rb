@@ -2,6 +2,7 @@
 
 require "set"
 require "graphql/armory/authorization/audit/report"
+require "graphql/armory/authorization/audit/baseline"
 require "graphql/armory/authorization/audit/command"
 require "graphql/armory/authorization/audit/findings"
 require "graphql/armory/authorization/audit/library_methods"
