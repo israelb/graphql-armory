@@ -59,6 +59,7 @@ module GraphQL
         schema.instance_variable_set(:@armory_persisted_queries, gate)
         schema.singleton_class.prepend(Guard)
         schema.query_class(schema.query_class)
+        schema.trace_with(BuiltQueries)
       end
 
       # Decides what a request runs: answers `[refusal, document]`, where a refusal is the error message, a
@@ -106,6 +107,15 @@ module GraphQL
           end
         end
 
+        # A query the app built itself, which never went through the lookup. It runs its own text, so an operation id means
+        # nothing on it. Answers the refusal, or nil to let it run.
+        def built_query(context)
+          return refuse(RAW_QUERY_REFUSED, :raw_query, context).first if @strict && context[:armory_allow_raw_query] != true
+
+          @telemetry.record(@strict ? :raw_query_allowed : :raw_query_run, context: context)
+          nil
+        end
+
         private
 
         # The signal says why, never which operation id or query: a client chooses those.
@@ -117,6 +127,21 @@ module GraphQL
         # Apollo's clients may send the query with its id; graphql-ruby's subscriptions resend it printed.
         def same_query?(text, operation)
           text == operation.body || text == operation.document.to_query_string
+        end
+      end
+
+      # A `GraphQL::Query` the app builds itself skips the schema's query class. The check sits where a query starts running,
+      # on both engines: an analyzer can be skipped by a variable error, swallowed by another analyzer's ExecutionError, or
+      # ignored with `validate: false`. A `run_partials` answers for the query it came from.
+      module BuiltQueries
+        def execute_query(query:)
+          built = query.respond_to?(:query) ? query.query : query
+          unless Lookup === built
+            refusal = built.schema.armory_persisted_queries.built_query(built.context)
+            raise GraphQL::ExecutionError.new(refusal, extensions: { "code" => REFUSAL_CODES.fetch(refusal) }) if refusal
+          end
+
+          super
         end
       end
 
