@@ -140,6 +140,84 @@ A pattern skips dotfiles and drops a missing `{a,b}` alternative, and `[` in a n
 
 They are one allowlist: any client may run any manifest's operation. A new manifest still needs a deploy.
 
+### Publishing without a server deploy
+
+With a `Manifest`, a new query reaches the server only with a server deploy. When frontends deploy on their own, even minutes apart, their users get `UNKNOWN_OPERATION` until the server catches up, and every query change needs a backend deploy. With `RedisStore`, the frontend's CI publishes its operations before the frontend goes out, and the server reads them as they are asked for, with no deploy and no restart.
+
+```mermaid
+sequenceDiagram
+    participant CI as Frontend CI
+    participant R as Redis
+    participant F as Frontend
+    participant S as GraphQL server
+
+    CI->>CI: Build the frontend, generate the manifest
+    CI->>R: graphql-armory-publish manifest.json (SET NX per id)
+    Note over CI,R: A failure stops the deploy
+    CI->>F: Deploy the frontend
+    F->>S: Request with an operation id
+    alt The server already read this id
+        S->>S: Answer from memory
+    else First time it sees this id
+        S->>R: GET the id
+        R-->>S: The query
+        S->>S: Check the digest, parse, keep in memory
+    end
+    S-->>F: The result of the stored query
+```
+
+On the server:
+
+```ruby
+class AppSchema < GraphQL::Schema
+  use GraphQL::Armory::PersistedQueries,
+    store: GraphQL::Armory::PersistedQueries::RedisStore.build(
+      redis: Redis.new(url: ENV.fetch("PERSISTED_QUERIES_REDIS_URL"), timeout: 0.5, reconnect_attempts: 0),
+      on_error: ->(error) { Rails.error.report(error) }
+    ),
+    strict: true
+end
+```
+
+In the frontend's CI, before its deploy:
+
+```sh
+gem install graphql-armory redis
+REDIS_URL="$PUBLISHER_REDIS_URL" graphql-armory-publish dist/persisted-queries.json
+```
+
+It exits 1 on any problem, so the deploy stops. Publishing again is safe, so a failed run can simply run again. It takes several files, `--digest` and `--prefix`, and answers the same as `Publisher.call(manifest, redis:)` in Ruby. A CI with no Ruby can run `SET <prefix><id> <query> NX` itself: the default prefix is `graphql-armory:persisted-queries:` and the value is the query text. Check each answer: a refused `SET` means the id already exists, and it must hold the same query.
+
+**Who can publish decides what strict mode allows.** Anyone who can write to these keys can make the server run any query they choose, under its digest. So:
+
+- Give the server read access only, and the CI its own write access. With Redis ACLs:
+  ```
+  ACL SETUSER armory-server on >SERVER_PASSWORD ~graphql-armory:persisted-queries:* +get
+  ACL SETUSER armory-ci on >CI_PASSWORD ~graphql-armory:persisted-queries:* +get +set
+  ```
+  On a database other than 0, add `+select` to both: the client selects it when it connects.
+- Keep the CI's credential away from pull requests from forks and from the app's own servers.
+- The gem adds no endpoint to your API, so publishing cannot be reached from it.
+
+What happens when something fails:
+
+| Situation | What the client gets | What you see |
+|---|---|---|
+| Redis is down, the server already read the id | The normal result | Nothing |
+| Redis is down, the server has not read the id | `UNKNOWN_OPERATION`, nothing runs | `on_error` with the error, plus `:operation_refused` |
+| The id was never published | `UNKNOWN_OPERATION`, nothing runs | `:operation_refused` |
+| The stored query is not the digest of its id, or does not parse | `UNKNOWN_OPERATION`, nothing runs | `on_error` with `RedisStore::CorruptOperation`, plus `:operation_refused` |
+| The CI publishes another query under an id that exists | Nothing changes for clients | `PublishError`, exit 1 |
+
+By default `on_error` warns with the error's class only: Redis's messages may hold the URL and its password. `warn` prints nothing under `ruby -W0`, so pass your own `on_error` in production. An `on_error` that raises makes the request fail, and nothing runs.
+
+Limits:
+
+- Set a short Redis timeout, as above: during an outage each id the server does not know waits for it, and a client can send many such ids. Ids are checked for shape first, and one that cannot be an id never reaches Redis.
+- Removing a key does not revoke an operation until every server restarts: a server keeps what it read, with no limit but what was published.
+- They are one allowlist: any client may run any published operation. Use another `prefix:` for each allowlist you want apart. With `digest: false`, do not nest one prefix inside another: an id holding `:` could reach the other allowlist. With a digest, the check refuses it.
+- Keep these keys where they cannot expire or be evicted (`noeviction`, or a Redis of their own). A lost key looks like an id never published.
+
 ### Rolling it out
 
 1. Generate the manifest in the client build and ship it with the server.
@@ -210,6 +288,8 @@ A signal holds only the reason. To know who sent the request, a sink that takes 
 
 `Manifests.build(paths, digest: :sha256)` loads manifests from a glob pattern, a path or a list. `Manifests.new(manifests = [])` joins `Manifest` objects (subclasses are refused: their `fetch` would not run). `fetch(id)`, `size`, `empty?`. With no manifests it holds nothing, so every id is unknown, and `strict: false` refuses it at boot.
 
+`RedisStore.build(redis:, prefix: "graphql-armory:persisted-queries:", digest: :sha256, on_error:)` reads what a publisher stored; `new` with no Redis holds nothing, and `strict: false` refuses it at boot. `Publisher.call(manifest, redis:, prefix:)` answers `published` and `unchanged`, and raises `Publisher::PublishError` rather than change an id. `RedisStore::Client::Substitute` stands in for Redis in tests.
+
 Context keys: `operation_id` (a String; anything else is an unknown id), `armory_allow_raw_query` (only `true` allows).
 
 ## Guarantees and limits
@@ -218,20 +298,12 @@ Context keys: `operation_id` (a String; anything else is an unknown id), `armory
 - In strict mode a raw query runs only when the app's context says `armory_allow_raw_query: true`. The plugin does not decide who is staff: your controller does.
 - Queries built by your own code as `GraphQL::Query` objects (for example in `multiplex`) run their own text, so an operation id means nothing on them. In strict mode they are refused unless the context holds `armory_allow_raw_query: true`, and they are recorded like any raw query. The check is a trace on `execute_query`, so `run_partials` and `validate: false` are covered. Two limits: built text that does not validate gets the ordinary validation errors, with no signal and with field suggestions, because validation runs first (nothing resolves); and your own code can skip the check by choosing another trace: `context[:trace]` on a multiplex (or on a query, on the interpreter), or a `trace_mode` or `default_trace_mode` given a class that does not include `trace_with` modules. A signal is recorded per execution, so each `run_partials` entry records one. On `Execution::Next`, a refused query with `validate: false` and variables that do not coerce, or a validation timeout, returns a nil result: nothing runs, the refusal is recorded and sits in `context.errors`.
 - In strict mode, schema introspection run through the plugin is refused too. `Schema.to_json` and `rake graphql:schema:json` need `context: { armory_allow_raw_query: true }` (the rake task's `load_context`). `Schema.to_definition` and `Schema.validate` are not affected.
-- The manifest lives in the server's code: adding an operation needs a deploy. See the runtime store below.
+- A `Manifest` lives in the server's code: adding an operation needs a deploy. `RedisStore` does not: see "Publishing without a server deploy".
 - Subscriptions: graphql-ruby re-runs a subscription with its printed query, which the plugin accepts when it matches the stored document. Subscriptions are not tested with persisted queries yet.
 
-## Planned: a runtime store
+## Planned: more runtime stores
 
-The manifest is the simplest store: one file, no database, deployed with the code. Teams that ship clients independently of the server (mobile apps, several frontends) need operations published without a server deploy. That is planned for later, behind the same `store:` interface:
-
-- **A database table** (ActiveRecord) holding operations per client, with the digest checked on write.
-- **A sync endpoint** the client build calls to publish its operations, authenticated per client with an HMAC of the request body and a secret per client.
-- **Several clients**, each with its own operations and secret, so one client cannot publish under another's name.
-- **Archiving** operations that old app versions no longer use, without deleting their history.
-- **Publishing without redeploying**: the server reads new operations as soon as they are synced.
-
-Until then, any object that answers `fetch(id)` with an operation can be passed as `store:`.
+`RedisStore` is one store behind the `store:` interface. Still planned: a database table, an endpoint a client build calls to publish, operations and secrets per client, and archiving what old app versions no longer use. Until then, any object that answers `fetch(id)` with an operation can be passed as `store:`.
 
 ## References
 

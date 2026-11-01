@@ -47,7 +47,7 @@ module GraphQL
         end
       end
 
-      # `store:` answers `fetch(id)` with an operation (`body` and `document`) or nil: a Manifest, or your own.
+      # `store:` answers `fetch(id)` with an operation (`body` and `document`) or nil: a Manifest, a RedisStore, or your own.
       # `strict: true` refuses raw queries unless the context holds `armory_allow_raw_query: true`.
       def self.use(schema, store:, strict: false, sinks: [], on_sink_error: nil)
         gate = Gate.build(store: store, strict: strict, sinks: sinks, on_sink_error: on_sink_error)
@@ -212,4 +212,6 @@ end
 require "graphql/armory/persisted_queries/manifest"
 require "graphql/armory/persisted_queries/manifests"
 require "graphql/armory/persisted_queries/store"
+require "graphql/armory/persisted_queries/redis_store"
+require "graphql/armory/persisted_queries/publisher"
 require "graphql/armory/persisted_queries/controls"
