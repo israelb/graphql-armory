@@ -150,6 +150,8 @@ RSpec.describe "observe: recheck B1 B3 B4 B2-docs" do
 
   def run(schema, doc, context: {}, **options)
     execute_query(schema, doc, context: { record: record, current_user: :someone }.merge(context), **options).to_h
+  rescue GraphQL::Armory::Authorization::ConfigurationError => error
+    { "raised" => error.message } # a type holding a resolver cannot be observed
   end
 
   def multiplex(schema, queries)

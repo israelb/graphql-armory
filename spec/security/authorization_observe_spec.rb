@@ -152,42 +152,76 @@ RSpec.describe "Authorization: observing a rule" do
       expect(response.dig("data", "pay")).to be_nil
     end
 
-    it "does not run a resolver on an observed type, itself or inherited, and serves the other fields" do
-      ran = []
-      plain = Class.new(GraphQL::Schema::Resolver) do
+    def resolver_counting(ran)
+      Class.new(GraphQL::Schema::Resolver) do
         type String, null: true
         define_method(:resolve) { ran << :body; "ran" }
       end
+    end
+
+    it "raises on a type holding a resolver, inherited or not, and runs nothing: observing would open the only check before it" do
+      ran = []
+      plain = resolver_counting(ran)
       parent = Class.new(base_object) do
         graphql_name "Parent"
         authorize :read, model: Object
-        field :secret, String
         field :touch, resolver: plain
       end
       type = Class.new(parent) do
         graphql_name "Invoice"
         authorize :read, model: Object, observe: "rollout"
+        field :secret, String
       end
-      response = run(schema_of(type), "{ invoice { secret touch } }")
 
-      expect(response.dig("data", "invoice", "secret")).to eq("SECRET")
-      expect(response.dig("data", "invoice", "touch")).to be_nil
+      expect { run(schema_of(type), "{ invoice { secret touch } }") }.to raise_error(error, /Invoice cannot be observed: its field touch/)
       expect(ran).to be_empty
     end
 
-    it "runs that resolver for a user the policy allows" do
-      plain = Class.new(GraphQL::Schema::Resolver) do
-        type String, null: true
-        def resolve = "ran"
-      end
+    it "raises whatever the field's class, and for an allowed user too: the schema is wrong, not the user" do
+      ran = []
+      plain = resolver_counting(ran)
       type = Class.new(base_object) do
         graphql_name "Invoice"
         authorize :read, model: Object, observe: "rollout"
+        field_class GraphQL::Schema::Field
         field :touch, resolver: plain
       end
-      response = run(schema_of(type, adapter: armory::Adapters::Substitute.new(allow: true)), "{ invoice { touch } }")
+      schema = schema_of(type, adapter: armory::Adapters::Substitute.new(allow: true))
 
-      expect(response.dig("data", "invoice", "touch")).to eq("ran")
+      expect { run(schema, "{ invoice { touch } }") }.to raise_error(error, /cannot be observed/)
+      expect(ran).to be_empty
+    end
+
+    it "raises on authorize: true with a resolver, where only the parent's rule is observed" do
+      ran = []
+      plain = resolver_counting(ran)
+      klass = base_field
+      parent = Class.new(base_object) do
+        graphql_name "Parent"
+        field_class klass
+        authorize :read, model: Object, observe: "rollout"
+        field :touch, resolver: plain, authorize: true
+      end
+      child = Class.new(parent) do
+        graphql_name "Invoice"
+        authorize :show, model: Object
+      end
+
+      expect { run(schema_of(child, adapter: armory::Adapters::Substitute.new(allow: true)), "{ invoice { touch } }") }.to raise_error(error, /touch has a resolver/)
+      expect(ran).to be_empty
+    end
+
+    it "runs nothing on an observed root type holding a resolver, though graphql-ruby's rescue changes the error" do
+      ran = []
+      plain = resolver_counting(ran)
+      query_type = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :read, model: Object, observe: "rollout"
+        field :touch, resolver: plain
+      end
+
+      expect { run(schema_of(nil, query_type: query_type), "{ touch }") }.to raise_error(StandardError)
+      expect(ran).to be_empty
     end
 
     it "still narrows a list through the scope" do
@@ -347,6 +381,42 @@ RSpec.describe "Authorization: observing a rule" do
       paths = armory::Audit.(schema_of(type, query_type: query_type)).problems.select { |problem| problem.kind == :observed }.map(&:path)
 
       expect(paths).to contain_exactly("Invoice.secret", "Child")
+    end
+
+    it "reports authorize: true on a parent whose rule is observed, and says when a resolver makes the type raise" do
+      klass = base_field
+      plain = Class.new(GraphQL::Schema::Resolver) do
+        type String, null: true
+        def resolve = "ran"
+      end
+      parent = Class.new(base_object) do
+        graphql_name "Parent"
+        field_class klass
+        authorize :read, model: Object, observe: "rollout"
+        field :secret, String, authorize: true
+      end
+      child = Class.new(parent) do
+        graphql_name "Invoice"
+        authorize :show, model: Object
+      end
+      raising = Class.new(base_object) do
+        graphql_name "Raising"
+        authorize :read, model: Object, observe: "rollout"
+        field :touch, resolver: plain
+      end
+      query_type = Class.new(base_object) do
+        graphql_name "Query"
+        authorize :none, reason: "root", covers_fields: true
+        field :invoice, child, null: true, authorize: :none, reason: "x"
+        field :raising, raising, null: true, authorize: :none, reason: "x"
+      end
+
+      report = armory::Audit.(schema_of(child, query_type: query_type))
+      observed = report.problems.select { |problem| problem.kind == :observed }
+
+      expect(report.ok?).to be(false)
+      expect(observed.map(&:path)).to include("Invoice.secret", "Raising")
+      expect(observed.find { |problem| problem.path == "Raising" }.message).to include("raises on every query", "touch")
     end
 
     it "cannot be accepted in a baseline: it has its declaration, and it serves refused users" do

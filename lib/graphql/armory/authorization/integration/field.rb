@@ -80,8 +80,9 @@ module GraphQL
           def authorized?(object, args, context)
             rule = armory_rule_for(owner, context)
             return false if rule.nil?
-            # A resolver or a mutation can write, and a write cannot be undone: observing its type does not open it.
-            return false if resolver && Integration.observed?(object, context)
+            if resolver && rule.is_a?(Rule) && rule.observed?
+              raise ConfigurationError, "#{owner.graphql_name}.#{graphql_name} has a resolver or a mutation, which can write, so it cannot use an observed rule"
+            end
 
             (rule == :covered || Integration.allowed?(object, Integration.with_owner_model(rule, owner), context)) && super
           end
