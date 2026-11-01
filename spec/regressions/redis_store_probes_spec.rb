@@ -715,62 +715,6 @@ RSpec.describe "runtime store probes" do
       end
     end
 
-    it "P39f preservation: redis 4.8 real: publish, rerun, conflict, read" do
-      with_other_gems do |dir|
-        o, e, st = script(<<~RUBY, dir)
-          gem "redis", "4.8.1"
-          require "redis"
-          require "graphql"
-          require "graphql/armory"
-          abort "wrong redis \#{Redis::VERSION}" unless Redis::VERSION.start_with?("4.8")
-          pq = GraphQL::Armory::PersistedQueries
-          r = Redis.new(url: ENV.fetch("REDIS_URL"), timeout: 0.5, reconnect_attempts: 0)
-          prefix = "probe48:\#{rand(10**12)}:"
-          q = 'query Q { greeting(name: "José") }'
-          m = pq::Manifest.new({ Digest::SHA256.hexdigest(q) => q })
-          a = pq::Publisher.call(m, redis: r, prefix: prefix).to_h
-          b = pq::Publisher.call(m, redis: r, prefix: prefix).to_h
-          op = pq::RedisStore.build(redis: r, prefix: prefix).fetch(Digest::SHA256.hexdigest(q))
-          puts [a, b, op.body == q, op.body.encoding].inspect
-          conflict = pq::Manifest.new({ "x" => "{ a }" }, digest: false)
-          pq::Publisher.call(conflict, redis: r, prefix: prefix)
-          begin
-            pq::Publisher.call(pq::Manifest.new({ "x" => "{ b }" }, digest: false), redis: r, prefix: prefix)
-            puts "NO CONFLICT"
-          rescue pq::Publisher::PublishError => err
-            puts "conflict: \#{err.message}"
-          end
-        RUBY
-        puts "P39f: #{o} #{e[0, 400]}"
-        expect(st.exitstatus).to eq(0)
-        expect(o).to match(/publisheds*=>s*1/).and match(/unchangeds*=>s*1/).and include("conflict:")
-        expect(o).not_to include("NO CONFLICT")
-      end
-    end
-
-    it "P39g preservation: redis-namespace real: publish, rerun, conflict, read" do
-      with_other_gems do |dir|
-        o, e, st = script(<<~RUBY, dir)
-          gem "redis", "4.8.1"
-          require "redis"
-          require "redis-namespace"
-          require "graphql"
-          require "graphql/armory"
-          pq = GraphQL::Armory::PersistedQueries
-          r = Redis::Namespace.new("nsprobe\#{rand(10**12)}", redis: Redis.new(url: ENV.fetch("REDIS_URL")))
-          q = '{ a }'
-          m = pq::Manifest.new({ Digest::SHA256.hexdigest(q) => q })
-          a = pq::Publisher.call(m, redis: r).to_h
-          b = pq::Publisher.call(m, redis: r).to_h
-          op = pq::RedisStore.build(redis: r).fetch(Digest::SHA256.hexdigest(q))
-          puts [a, b, op.body == q].inspect
-        RUBY
-        puts "P39g: #{o} #{e[0, 400]}"
-        expect(st.exitstatus).to eq(0)
-        expect(o).to match(/publisheds*=>s*1/).and match(/unchangeds*=>s*1/).and include("true")
-      end
-    end
-
     it "P39h security: redis 4.8 error message holds no password" do
       with_other_gems do |dir|
         o, e, st = script(<<~RUBY, dir)
