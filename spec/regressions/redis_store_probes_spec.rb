@@ -711,7 +711,7 @@ RSpec.describe "runtime store probes" do
     def script(body, gemdir)
       Bundler.with_unbundled_env do
         env = { "GEM_PATH" => "#{gemdir}:#{Bundler.bundle_path rescue "/bundle/ruby/3.3.0"}:/bundle/ruby/3.3.0", "REDIS_URL" => ENV.fetch("REDIS_URL") }
-        Open3.capture3(env, RbConfig.ruby, "-I/app/lib", "-e", body)
+        Open3.capture3(env, RbConfig.ruby, "-I#{Dir.pwd}/lib", "-e", body)
       end
     end
 
