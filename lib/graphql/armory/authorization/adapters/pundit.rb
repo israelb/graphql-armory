@@ -12,8 +12,15 @@ module GraphQL
         # overrides and namespaced models work. A policy must answer `true`, `false` or `nil`:
         # anything else (a lazy, a record) is handed back as is and the core refuses it.
         class Pundit
+          # `user_key:` is the context key that holds the user.
+          def initialize(user_key: :current_user)
+            raise ArgumentError, "user_key must be a Symbol or a String, got #{user_key.class}" unless user_key.is_a?(Symbol) || user_key.is_a?(String)
+
+            @user_key = user_key
+          end
+
           def actor(context)
-            context[:current_user]
+            context[@user_key]
           end
 
           def authorized?(user, subject, rule)
