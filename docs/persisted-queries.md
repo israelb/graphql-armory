@@ -195,6 +195,7 @@ It exits 1 on any problem, so the deploy stops. Publishing again is safe, so a f
   ACL SETUSER armory-server on >SERVER_PASSWORD ~graphql-armory:persisted-queries:* +get
   ACL SETUSER armory-ci on >CI_PASSWORD ~graphql-armory:persisted-queries:* +get +set
   ```
+  On a database other than 0, add `+select` to both: the client selects it when it connects.
 - Keep the CI's credential away from pull requests from forks and from the app's own servers.
 - The gem adds no endpoint to your API, so publishing cannot be reached from it.
 
@@ -208,13 +209,13 @@ What happens when something fails:
 | The stored query is not the digest of its id, or does not parse | `UNKNOWN_OPERATION`, nothing runs | `on_error` with `RedisStore::CorruptOperation`, plus `:operation_refused` |
 | The CI publishes another query under an id that exists | Nothing changes for clients | `PublishError`, exit 1 |
 
-By default `on_error` warns with the error's class only: Redis's messages may hold the URL and its password. An `on_error` that raises makes the request fail, and nothing runs.
+By default `on_error` warns with the error's class only: Redis's messages may hold the URL and its password. `warn` prints nothing under `ruby -W0`, so pass your own `on_error` in production. An `on_error` that raises makes the request fail, and nothing runs.
 
 Limits:
 
 - Set a short Redis timeout, as above: during an outage each id the server does not know waits for it, and a client can send many such ids. Ids are checked for shape first, and one that cannot be an id never reaches Redis.
 - Removing a key does not revoke an operation until every server restarts: a server keeps what it read, with no limit but what was published.
-- They are one allowlist: any client may run any published operation. Use another `prefix:` for each allowlist you want apart.
+- They are one allowlist: any client may run any published operation. Use another `prefix:` for each allowlist you want apart. With `digest: false`, do not nest one prefix inside another: an id holding `:` could reach the other allowlist. With a digest, the check refuses it.
 - Keep these keys where they cannot expire or be evicted (`noeviction`, or a Redis of their own). A lost key looks like an id never published.
 
 ### Rolling it out

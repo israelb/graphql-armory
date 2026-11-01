@@ -57,6 +57,17 @@ RSpec.describe GraphQL::Armory::PersistedQueries::RedisStore do
     expect(client.calls).to eq([])
   end
 
+  it "answers unknown for an id with invalid bytes or another encoding, as a Manifest does" do
+    [[255, 97, 98, 99].pack("C*").force_encoding("UTF-8"), "abc".encode("UTF-16")].each { |id| expect(store.fetch(id)).to be_nil }
+
+    expect(client.calls).to eq([])
+    expect(errors).to eq([])
+  end
+
+  it "does not read a missing digest as no check" do
+    expect { described_class.new(redis: client, digest: nil) }.to raise_error(KeyError)
+  end
+
   it "keeps answering what it already read when Redis fails, refuses the rest and says so" do
     publisher.(manifest_of(invoices))
     store.fetch(invoices_id)
@@ -113,6 +124,20 @@ RSpec.describe GraphQL::Armory::PersistedQueries::RedisStore do
       expect(run(invoices_id)["data"]).to eq("invoices" => ["A-1"])
       expect(run(Digest::SHA256.hexdigest("{ secret }"))["errors"].first["message"]).to eq(persisted::UNKNOWN_OPERATION)
       expect(resolved).to eq([:invoices])
+    end
+
+    it "refuses an id with invalid bytes, and records it" do
+      seen = []
+      query_type = persisted::Controls::Query.example
+      wired = store
+      recording = Class.new(ArmoryEngine.base_schema) do
+        query query_type
+        use GraphQL::Armory::PersistedQueries, store: wired, strict: true, sinks: [->(signal, data) { seen << [signal, data] }]
+      end
+      result = execute_query(recording, nil, context: { operation_id: [255, 97, 98, 99].pack("C*").force_encoding("UTF-8") }, root_value: root).to_h
+
+      expect(result["errors"].first["message"]).to eq(persisted::UNKNOWN_OPERATION)
+      expect(seen).to eq([[:operation_refused, { reason: :unknown_operation }]])
     end
 
     it "refuses an unknown id while Redis is down, and runs nothing" do

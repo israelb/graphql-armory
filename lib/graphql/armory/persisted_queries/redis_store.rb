@@ -84,14 +84,15 @@ module GraphQL
         def initialize(redis: Client::Null.new, prefix: DEFAULT_PREFIX, digest: :sha256, on_error: DEFAULT_ON_ERROR)
           @redis = redis
           @prefix = prefix
-          @digest = digest && Manifest::DIGESTS.fetch(digest)
+          @digest = digest == false ? nil : Manifest::DIGESTS.fetch(digest)
           @on_error = on_error
           @operations = {}
           @mutex = Mutex.new
         end
 
         def fetch(id)
-          return unless id.is_a?(String) && id.match?(Manifest::ID_LIKE)
+          # Bytes: a regexp raises on a client's broken encoding.
+          return unless id.is_a?(String) && id.b.match?(Manifest::ID_LIKE)
 
           @operations[id] || read(id)
         end
