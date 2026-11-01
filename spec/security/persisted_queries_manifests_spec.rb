@@ -58,7 +58,7 @@ RSpec.describe GraphQL::Armory::PersistedQueries::Manifests do
   end
 
   it "refuses what is not a Manifest" do
-    [nil, "a.json", [Object.new], [{ "id" => "query" }]].each do |manifests|
+    [nil, "a.json", [Object.new], [{ "id" => "query" }], [Class.new(persisted::Manifest).new({ Digest::SHA256.hexdigest(invoices) => invoices })]].each do |manifests|
       expect { described_class.new(manifests) }.to raise_error(persisted::ConfigurationError, /manifests/)
     end
   end
@@ -100,6 +100,31 @@ RSpec.describe GraphQL::Armory::PersistedQueries::Manifests do
         expect { described_class.build(File.join(dir, "*.json")) }.to raise_error(persisted::ConfigurationError, /digest/)
         expect(described_class.build(File.join(dir, "*.json"), digest: false).size).to eq(1)
       end
+    end
+  end
+
+  it "refuses at boot an empty store with raw queries allowed, as the Null store" do
+    query_type = persisted::Controls::Query.example
+    store = described_class.new
+
+    expect do
+      Class.new(ArmoryEngine.base_schema) do
+        query query_type
+        use GraphQL::Armory::PersistedQueries, store: store, strict: false
+      end
+    end.to raise_error(persisted::ConfigurationError, /strict: false needs a store/)
+  end
+
+  it "refuses a path that is not one, and a file named like the pattern does not hide its matches" do
+    Dir.mktmpdir do |dir|
+      web = write_manifest(dir, "web.json", invoices)
+      write_manifest(dir, "*.json", greeting)
+
+      expect(described_class.build(File.join(dir, "*.json")).size).to eq(2)
+      [nil, 1, :a, { a: 1 }, [["a"]]].each do |paths|
+        expect { described_class.build(paths) }.to raise_error(persisted::ConfigurationError, /Strings or Pathnames/)
+      end
+      File.open(web) { |io| expect(described_class.build(io).size).to eq(1) }
     end
   end
 

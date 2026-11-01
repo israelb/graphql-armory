@@ -136,7 +136,7 @@ use GraphQL::Armory::PersistedQueries, store: GraphQL::Armory::PersistedQueries:
 
 `Manifests.build` takes a glob pattern, a path or a list of them, and `digest:`. For manifests with different digests, load each one and pass them: `Manifests.new([Manifest.load("web.json"), Manifest.load("relay.json", digest: :md5)])`.
 
-It raises at boot when a pattern or a path finds nothing, when a file does not load, or when two manifests hold different queries for one id, which only ids that are not digests can do. Keep a version's manifest for as long as that version is in use: removing it refuses those clients with `:unknown_operation`.
+A pattern skips dotfiles and drops a missing `{a,b}` alternative, and `[` in a directory name reads as a pattern: list exact paths when that matters. It raises at boot when a pattern or a path finds nothing, when a file does not load, or when two manifests hold different queries for one id, which only ids that are not digests can do. Keep a version's manifest for as long as that version is in use: removing it refuses those clients with `:unknown_operation`.
 
 They are one allowlist: any client may run any manifest's operation. A new manifest still needs a deploy.
 
@@ -207,6 +207,8 @@ A signal holds only the reason. To know who sent the request, a sink that takes 
 - Works with your own `query_class`, whether it is set before `use`, after it, or in a child schema: the plugin subclasses it.
 - `use` it once per schema hierarchy. A second `use`, on the same schema or a child, raises instead of replacing the first one's settings.
 - A store whose `fetch` raises or answers something without `document` makes the request raise: it fails closed, as an exception.
+
+`Manifests.build(paths, digest: :sha256)` loads manifests from a glob pattern, a path or a list. `Manifests.new(manifests = [])` joins `Manifest` objects (subclasses are refused: their `fetch` would not run). `fetch(id)`, `size`, `empty?`. With no manifests it holds nothing, so every id is unknown, and `strict: false` refuses it at boot.
 
 Context keys: `operation_id` (a String; anything else is an unknown id), `armory_allow_raw_query` (only `true` allows).
 

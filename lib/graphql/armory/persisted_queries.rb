@@ -77,7 +77,7 @@ module GraphQL
             raise ConfigurationError, "store: must answer fetch(id) with an operation or nil, like a Manifest"
           end
           raise ConfigurationError, "strict: must be true or false, got #{strict.inspect}" unless strict == true || strict == false
-          raise ConfigurationError, "strict: false needs a store: with the Null store only raw queries would run" if !strict && store.is_a?(Store::Null)
+          raise ConfigurationError, "strict: false needs a store: with the Null store only raw queries would run" if !strict && (store.is_a?(Store::Null) || (store.respond_to?(:empty?) && store.empty?))
 
           @store = store
           @strict = strict
