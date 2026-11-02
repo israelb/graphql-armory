@@ -15,9 +15,12 @@ module GraphQL
           end
 
           def self.audit(interface, definitions, findings)
-            bypassed = Integration.any_bypass?(definitions.select { |type| type.kind.object? && type <= interface })
+            implementers = definitions.select { |type| type.kind.object? && type <= interface }
+            bypassed = Integration.any_bypass?(implementers)
+            covered = implementers.any? { |type| type.respond_to?(:armory_rule) && PlainResolvers.covering?(type.armory_rule) }
             interface.own_fields.values.flatten.each do |field|
               path = "#{interface.graphql_name}.#{field.original_name}"
+              PlainResolvers.report(findings, path, field) if covered && !bypassed && PlainResolvers.open?(field)
               unless field.respond_to?(:armory_declared)
                 findings.problem(:unprotected, path, "its field class does not include Base, so it is not checked on a bypassed implementer") if bypassed
                 next

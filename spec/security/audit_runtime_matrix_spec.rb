@@ -1077,3 +1077,435 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
     expect(armory::Audit.(schema_of(type)).problems.map(&:kind)).not_to include(:foreign_policy)
   end
 end
+
+class ArmoryMatrixRefusingPolicy < ArmoryMatrixDocPolicy
+  def read? = false
+end
+
+# A type's covers_fields says a rule runs elsewhere. On a resolver or mutation with no Base, none does.
+RSpec.describe "audit against runtime, for a resolver with no Base under a covering type" do
+  let(:armory) { GraphQL::Armory::Authorization }
+  let(:base_argument) do
+    plugin = armory
+    Class.new(GraphQL::Schema::Argument) { include plugin::Base }
+  end
+  let(:base_field) do
+    plugin = armory
+    argument = base_argument
+    Class.new(GraphQL::Schema::Field) do
+      include plugin::Base
+      argument_class argument
+    end
+  end
+  let(:base_object) do
+    plugin = armory
+    field = base_field
+    Class.new(GraphQL::Schema::Object) do
+      include plugin::Base
+      field_class field
+    end
+  end
+  let(:payload_class) { Class.new(base_object) { authorize :none, reason: "the mutation holds the rule", covers_fields: true } }
+  let(:plain_resolver) do
+    Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainSecret"
+      type String, null: true
+      def resolve = "SECRET"
+    end
+  end
+  let(:ruled_type) do
+    Class.new(base_object) do
+      graphql_name "Doc"
+      authorize :read, policy: ArmoryMatrixRefusingPolicy, model: ArmoryMatrixDoc
+      field :notes, String, null: true
+    end
+  end
+
+  def covering_root(name = "Query", &body)
+    Class.new(base_object) do
+      graphql_name name
+      authorize :none, reason: "root", covers_fields: true
+      class_eval(&body) if body
+    end
+  end
+
+  def query_root
+    covering_root { field :ping, String, null: true, authorize: :none, reason: "x" }
+  end
+
+  def schema_with(query_root, mutation_root = nil)
+    plugin = armory
+    Class.new(base_schema) do
+      query query_root
+      mutation(mutation_root) if mutation_root
+      use plugin, adapter: :pundit
+    end
+  end
+
+  def served(schema, document)
+    # Execution::Next reads a plain field from the object, not from a method on the type.
+    execute_query(schema, document, root_value: Struct.new(:secret).new("SECRET"), context: { current_user: :someone }).to_h
+  end
+
+  def unprotected(schema)
+    armory::Audit.(schema).problems.select { |problem| problem.kind == :unprotected }.map(&:path)
+  end
+
+  def plain_mutation(superclass = GraphQL::Schema::Mutation)
+    holder = base_field
+    payload = payload_class
+    Class.new(superclass) do
+      graphql_name "PlainWrite"
+      field_class holder
+      object_class payload
+      field :secret, String, null: true, hash_key: :secret
+      def resolve(**)
+        { secret: "SECRET" }
+      end
+    end
+  end
+
+  it "reports a plain resolver the covering type serves" do
+    resolver = plain_resolver
+    schema = schema_with(covering_root { field :secret, resolver: resolver })
+
+    expect(served(schema, "{ secret }").dig("data", "secret")).to eq("SECRET")
+    expect(unprotected(schema)).to eq(["Query.secret"])
+    expect(armory::Audit.(schema).ok?).to eq(false)
+  end
+
+  it "reports a plain mutation the covering root serves" do
+    mutation = plain_mutation
+    schema = schema_with(query_root, covering_root("Mutation") { field :plain, mutation: mutation })
+
+    expect(served(schema, "mutation { plain { secret } }").dig("data", "plain", "secret")).to eq("SECRET")
+    expect(unprotected(schema)).to eq(["Mutation.plain"])
+  end
+
+  it "reports a plain relay mutation" do
+    mutation = plain_mutation(GraphQL::Schema::RelayClassicMutation)
+    schema = schema_with(query_root, covering_root("Mutation") { field :plain, mutation: mutation })
+
+    expect(served(schema, "mutation { plain(input: {}) { secret } }").dig("data", "plain", "secret")).to eq("SECRET")
+    expect(unprotected(schema)).to eq(["Mutation.plain"])
+  end
+
+  it "reports a plain mutation even when it answers a type with a rule: it has already written" do
+    answer = ruled_type
+    mutation = Class.new(GraphQL::Schema::Mutation) do
+      graphql_name "PlainWrite"
+      type answer, null: true
+      def resolve = nil
+    end
+    schema = schema_with(query_root, covering_root("Mutation") { field :plain, mutation: mutation })
+
+    expect(unprotected(schema)).to eq(["Mutation.plain"])
+  end
+
+  it "reports a plain subscription" do
+    plain = Class.new(GraphQL::Schema::Subscription) do
+      graphql_name "PlainSubscription"
+      type String, null: true
+    end
+    root = covering_root("Subscription") { field :plain, subscription: plain }
+    queries = query_root
+    plugin = armory
+    schema = Class.new(base_schema) do
+      query queries
+      subscription root
+      use plugin, adapter: :pundit
+    end
+
+    expect(unprotected(schema)).to eq(["Subscription.plain"])
+  end
+
+  it "reports a plain resolver on a field class with no Base" do
+    resolver = plain_resolver
+    plain_field = Class.new(GraphQL::Schema::Field)
+    schema = schema_with(covering_root do
+      field_class plain_field
+      field :secret, resolver: resolver
+    end)
+
+    expect(served(schema, "{ secret }").dig("data", "secret")).to eq("SECRET")
+    expect(unprotected(schema)).to eq(["Query.secret"])
+  end
+
+  it "reports a plain resolver that answers an interface: an implementer may hold no rule" do
+    holder = base_field
+    interface = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Thing"
+      field_class holder
+      field :notes, String, null: true, authorize: :none, reason: "x"
+    end
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainThing"
+      type interface, null: true
+      def resolve = nil
+    end
+    implementer = Class.new(base_object) do
+      graphql_name "Implementer"
+      authorize :none, reason: "x", covers_fields: true
+      implements interface
+    end
+    schema = schema_with(covering_root do
+      field :thing, resolver: resolver
+      field :implementer, implementer, null: true, authorize: :none, reason: "x"
+    end)
+
+    expect(unprotected(schema)).to eq(["Query.thing"])
+  end
+
+  it "reports an interface's plain resolver once, on the interface, when an implementer covers it" do
+    holder = base_field
+    resolver = plain_resolver
+    interface = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Thing"
+      field_class holder
+      field :secret, resolver: resolver
+    end
+    first, second = %w[First Second].map do |name|
+      Class.new(base_object) do
+        graphql_name name
+        authorize :none, reason: "x", covers_fields: true
+        implements interface
+      end
+    end
+    schema = schema_with(covering_root do
+      field :first, first, null: true, authorize: :none, reason: "x"
+      field :second, second, null: true, authorize: :none, reason: "x"
+    end)
+
+    expect(unprotected(schema)).to eq(["Thing.secret"])
+  end
+
+  it "reports an interface brought in by another interface with include, which makes no type membership" do
+    holder = base_field
+    resolver = plain_resolver
+    inner = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Inner"
+      field_class holder
+      field :secret, resolver: resolver
+    end
+    outer = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Outer"
+      field_class holder
+      include inner
+    end
+    open = Class.new(base_object) do
+      graphql_name "Open"
+      authorize :none, reason: "x", covers_fields: true
+      implements outer
+    end
+    schema = schema_with(covering_root { field :open, open, null: true, authorize: :none, reason: "x" })
+
+    expect(unprotected(schema)).to eq(["Inner.secret"])
+  end
+
+  it "reports a plain resolver in the payload of a mutation with on_denied: :errors, whose refusal answers a live payload" do
+    holder = base_field
+    payload = payload_class
+    resolver = plain_resolver
+    plugin = armory
+    mutation = Class.new(GraphQL::Schema::Mutation) do
+      include plugin::Base
+      graphql_name "RuledWrite"
+      field_class holder
+      object_class payload
+      authorize :manage, policy: ArmoryMatrixStrictPolicy, model: ArmoryMatrixDoc, on_denied: :errors
+      field :secret, resolver: resolver
+    end
+    schema = schema_with(query_root, covering_root("Mutation") { field :ruled, mutation: mutation })
+
+    expect(unprotected(schema)).to contain_exactly(a_string_ending_with(".secret"))
+  end
+
+  it "reports a plain resolver on the mutation root that answers a type with a rule: it has already run" do
+    answer = ruled_type
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainCreate"
+      type answer, null: true
+      def resolve = nil
+    end
+    schema = schema_with(query_root, covering_root("Mutation") { field :create, resolver: resolver })
+
+    expect(unprotected(schema)).to eq(["Mutation.create"])
+  end
+
+  it "reports a plain resolver on a generated name of a connection" do
+    plugin = armory
+    holder = base_field
+    node = ruled_type
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainNodes"
+      type [String], null: true
+      def resolve = ["SECRET"]
+    end
+    connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+      include plugin::Base
+      graphql_name "DocConnection"
+      authorize :none, reason: "x", covers_fields: true
+      field_class holder
+      edge_type node.edge_type, nodes_field: false
+      field :nodes, resolver: resolver
+    end
+    schema = schema_with(covering_root { field :docs, connection, null: true, authorize: :none, reason: "x" })
+
+    expect(unprotected(schema)).to include("DocConnection.nodes")
+  end
+
+  it "says nothing of a plain resolver that answers a generated connection of a type with a rule" do
+    answer = ruled_type
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainDocs"
+      type answer.connection_type, null: true
+      def resolve = []
+    end
+    schema = schema_with(covering_root { field :docs, resolver: resolver })
+
+    expect(unprotected(schema)).to eq([])
+  end
+
+  it "reports a plain resolver that answers a connection with a field of its own" do
+    answer = ruled_type
+    connection = Class.new(answer.connection_type) do
+      graphql_name "CountedDocs"
+      field :total, String, null: true
+    end
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainDocs"
+      type connection, null: true
+      def resolve = []
+    end
+    schema = schema_with(covering_root { field :docs, resolver: resolver })
+
+    expect(unprotected(schema)).to contain_exactly("CountedDocs", "Query.docs")
+  end
+
+  context "what stays as it was" do
+    it "lists a plain resolver whose field declares authorize: :none, by its own path" do
+      resolver = plain_resolver
+      schema = schema_with(covering_root { field :secret, resolver: resolver, authorize: :none, reason: "public on purpose" })
+      report = armory::Audit.(schema)
+
+      expect(report.ok?).to eq(true)
+      expect(report.bypasses.map(&:path)).to include("Query.secret")
+      expect(served(schema, "{ secret }").dig("data", "secret")).to eq("SECRET")
+    end
+
+    it "says nothing of a plain resolver that answers a type with a rule: that type refuses" do
+      answer = ruled_type
+      resolver = Class.new(GraphQL::Schema::Resolver) do
+        graphql_name "PlainDoc"
+        type answer, null: true
+        def resolve = ArmoryMatrixDoc.new
+      end
+      schema = schema_with(covering_root { field :doc, resolver: resolver })
+
+      expect(served(schema, "{ doc { notes } }").dig("data", "doc")).to be_nil
+      expect(unprotected(schema)).to eq([])
+    end
+
+    it "says nothing of a plain resolver that answers a list of a type with a rule" do
+      answer = ruled_type
+      resolver = Class.new(GraphQL::Schema::Resolver) do
+        graphql_name "PlainDocs"
+        type [answer, { null: true }], null: true
+        def resolve = [ArmoryMatrixDoc.new]
+      end
+      schema = schema_with(covering_root { field :docs, resolver: resolver })
+
+      expect(served(schema, "{ docs { notes } }").dig("data", "docs")).to eq([])
+      expect(unprotected(schema)).to eq([])
+    end
+
+    it "says nothing of a plain resolver under a type with a rule, which ran" do
+      resolver = plain_resolver
+      type = Class.new(base_object) do
+        graphql_name "Doc"
+        authorize :read, policy: ArmoryMatrixDocPolicy, model: ArmoryMatrixDoc
+        field :secret, resolver: resolver
+      end
+      schema = schema_with(covering_root { field :doc, type, null: true, authorize: :none, reason: "x" })
+
+      expect(unprotected(schema)).to eq([])
+    end
+
+    it "does not call a plain resolver served when the parent that defines it denies it" do
+      resolver = plain_resolver
+      parent = Class.new(base_object) do
+        graphql_name "Parent"
+        authorize :none, reason: "x"
+        field :secret, resolver: resolver
+      end
+      child = Class.new(parent) do
+        graphql_name "Child"
+        authorize :none, reason: "x", covers_fields: true
+      end
+      schema = schema_with(covering_root { field :child, child, null: true, authorize: :none, reason: "x" })
+
+      expect(unprotected(schema)).to eq([])
+    end
+
+    it "does not report a plain resolver in the payload of a mutation with a rule, which ran" do
+      holder = base_field
+      payload = payload_class
+      resolver = plain_resolver
+      plugin = armory
+      mutation = Class.new(GraphQL::Schema::Mutation) do
+        include plugin::Base
+        graphql_name "RuledWrite"
+        field_class holder
+        object_class payload
+        authorize :manage, policy: ArmoryMatrixDocPolicy, model: ArmoryMatrixDoc
+        field :secret, resolver: resolver
+        def resolve(**)
+          {}
+        end
+      end
+      schema = schema_with(query_root, covering_root("Mutation") { field :ruled, mutation: mutation })
+
+      expect(unprotected(schema)).to eq([])
+    end
+
+    it "keeps a resolver with Base and a rule as it was" do
+      plugin = armory
+      resolver = Class.new(GraphQL::Schema::Resolver) do
+        include plugin::Base
+        graphql_name "RuledSecret"
+        type String, null: true
+        authorize :manage, policy: ArmoryMatrixDocPolicy, model: ArmoryMatrixDoc
+        def resolve = "SECRET"
+      end
+      schema = schema_with(covering_root { field :secret, resolver: resolver })
+
+      expect(unprotected(schema)).to eq([])
+    end
+
+    # A documented limit: covers_fields declares these public, and the audit lists the type by name.
+    it "leaves a plain method field under a covering type to that declaration" do
+      schema = schema_with(covering_root do
+        field :secret, String, null: true
+      end)
+      report = armory::Audit.(schema)
+
+      expect(served(schema, "{ secret }").dig("data", "secret")).to eq("SECRET")
+      expect(report.ok?).to eq(true)
+      expect(report.bypasses.map(&:path)).to include("Query")
+    end
+
+    it "leaves a resolver_method: under a covering type to that declaration" do
+      schema = schema_with(covering_root do
+        field :secret, String, null: true, resolver_method: :read_secret
+        def read_secret = object.secret
+      end)
+
+      expect(served(schema, "{ secret }").dig("data", "secret")).to eq("SECRET")
+      expect(armory::Audit.(schema).ok?).to eq(true)
+    end
+  end
+end

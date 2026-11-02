@@ -6,7 +6,8 @@ module GraphQL
       class Audit
         # An object type's rule, and what its fields, resolvers and arguments declare under it.
         class TypeRules
-          def initialize(adapter = Adapters::Null.new, findings = Findings.new, foreign_policies = ForeignPolicies.new(adapter, findings))
+          def initialize(adapter = Adapters::Null.new, findings = Findings.new, foreign_policies = ForeignPolicies.new(adapter, findings), write_roots = [])
+            @write_roots = write_roots
             @adapter = adapter
             @findings = findings
             @foreign_policies = foreign_policies
@@ -87,6 +88,7 @@ module GraphQL
             audit_loads(field, path)
             # An inherited interface field is reported as uncovered on its interface; every other check still runs here.
             inherited = bypassed && interface_field?(field)
+            PlainResolvers.report(@findings, path, field) if served_with_no_rule?(type, field)
             if bypassed && !inherited && !field.respond_to?(:armory_declared)
               return @findings.problem(:field_without_rule, path, "its field class does not include Base, so no rule runs on it: its type is bypassed and graphql-ruby's own " \
                                                                   "authorized? answers true, so the field is served with no check. Use a field class that includes Base")
@@ -98,6 +100,13 @@ module GraphQL
             audit_inherited_rule(type, field, path, model) if model
             audit_visibility(field, path, model: model, reported: reported)
             audit_arguments(field.all_argument_definitions, path, reported: reported)
+          end
+
+          # Asked of the type that serves it and of the class that defines it, as runtime does: a parent that does not cover it denies it.
+          def served_with_no_rule?(type, field)
+            return false unless PlainResolvers.covering?(type.armory_rule) && !interface_field?(field) && PlainResolvers.open?(field, write_root: @write_roots.include?(type))
+
+            !(field.respond_to?(:armory_denied_by_owner?) && field.armory_denied_by_owner?)
           end
 
           # A field runs under its owner: graphql-ruby never tells it the concrete type. A rule defined above that type asks

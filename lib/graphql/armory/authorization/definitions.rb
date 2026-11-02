@@ -66,11 +66,18 @@ module GraphQL
           references << arguments_of(type) if type.kind.input_object?
           references.concat(type.interface_type_memberships.map(&:abstract_type)) if type.respond_to?(:interface_type_memberships)
           references.concat(type.orphan_types) if type.kind.interface?
+          references.concat(included_interfaces(type)) if type.kind.interface?
           references.concat(type.type_memberships.map(&:object_type)) if type.kind.union?
           references << type.node_type if connection?(type)
           references.flatten.compact
         end
         private_class_method :referenced_types
+
+        # An interface brought in with `include` makes no type membership, and its fields are served all the same.
+        def self.included_interfaces(type)
+          type.ancestors.select { |ancestor| !ancestor.equal?(type) && ancestor.respond_to?(:kind) && ancestor.kind.interface? }
+        end
+        private_class_method :included_interfaces
 
         # Every definition of every field, nearest first: a hidden one falls back to the next of its name, and
         # `all_field_definitions` merges them by name. `field ... do ... end` blocks are loaded here, because only

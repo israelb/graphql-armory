@@ -9,6 +9,7 @@ require "graphql/armory/authorization/audit/findings"
 require "graphql/armory/authorization/audit/library_methods"
 require "graphql/armory/authorization/audit/denial_hooks"
 require "graphql/armory/authorization/audit/own_checks"
+require "graphql/armory/authorization/audit/plain_resolvers"
 require "graphql/armory/authorization/audit/overrides"
 require "graphql/armory/authorization/audit/foreign_policies"
 require "graphql/armory/authorization/audit/type_rules"
@@ -68,7 +69,7 @@ module GraphQL
           end
 
           foreign_policies = ForeignPolicies.new(adapter, findings)
-          type_rules = TypeRules.new(adapter, findings, foreign_policies)
+          type_rules = TypeRules.new(adapter, findings, foreign_policies, [schema.mutation, schema.subscription].compact)
           audited_types(definitions).each { |type| type_rules.(type) }
           definitions.each { |type| foreign_policies.relay(type) if type.kind.object? && RELAY_TYPES.any? { |relay| type <= relay } }
           EdgeRules.(definitions, findings)
@@ -90,10 +91,11 @@ module GraphQL
             Definitions.fields_at_every_level(type).any? { |field| !field.owner.equal?(GraphQL::Types::Relay::PageInfo) }
         end
 
-        # A connection or an edge holds only what graphql-ruby generates, until a subclass, its parent or an interface adds a field.
+        # A connection or an edge holds only what graphql-ruby generates, until a subclass, its parent or an interface adds a field,
+        # or gives a generated name a resolver of its own.
         def extended_relay?(type)
           GENERATED_RELAY_FIELDS.any? do |relay, names|
-            type < relay && Definitions.fields_at_every_level(type).any? { |field| !names.include?(field.original_name) }
+            type < relay && Definitions.fields_at_every_level(type).any? { |field| !names.include?(field.original_name) || field.resolver }
           end
         end
 
