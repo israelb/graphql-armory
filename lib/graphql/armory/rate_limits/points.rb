@@ -85,7 +85,8 @@ module GraphQL
         private
 
         # Reads every balance first, so a query one key refuses leaves the others as they were, then charges each key.
-        # Two queries can race between the two steps: then the refused one leaves the other keys charged.
+        # Two queries can race between the two steps: then the refused one leaves the other keys charged. A key whose store
+        # fails is left out, and the others still decide: an attacker who can pick a dead shard must not cancel a refusal.
         def call_several(query, keys, cost)
           limits = Settings.limits_for(@limit, keys, query)
           if limits.empty?
@@ -93,14 +94,14 @@ module GraphQL
             return nil
           end
 
-          budgets = begin
-            read = balances(limits) unless @soft
-            read&.any? { |budget| budget[:remaining] < cost } ? read : charged(limits, cost)
-          rescue ConfigurationError
-            raise
-          rescue StandardError => error
+          read = takes(query, limits, 0, false) unless @soft
+          budgets = if read&.any? { |budget| budget[:remaining] < cost }
+                      read
+                    else
+                      takes(query, read ? read.to_h { |budget| budget.values_at(:key, :limit) } : limits, cost, @soft, charging: true)
+                    end
+          if budgets.empty?
             query.context[CONTEXT_KEY] = nil
-            @on_store_error.call(error, query)
             return nil
           end
 
@@ -113,17 +114,17 @@ module GraphQL
           refusal(cost, binding[:limit], binding[:remaining]) if limited && !@soft
         end
 
-        def balances(limits)
-          limits.map do |key, limit|
-            _taken, remaining = Settings.checked(@store.take(key, cost: 0, limit: limit, window: @window, force: false), :take, "the Integer points left")
-            { key: key, limit: limit, remaining: remaining }
-          end
-        end
-
-        def charged(limits, cost)
-          limits.map do |key, limit|
-            taken, remaining = Settings.checked(@store.take(key, cost: cost, limit: limit, window: @window, force: @soft), :take, "the Integer points left")
-            { key: key, limit: limit, remaining: remaining, taken: taken }
+        # What the store answers for each key, without the keys whose store failed.
+        def takes(query, limits, cost, force, charging: false)
+          limits.filter_map do |key, limit|
+            answer = begin
+              @store.take(key, cost: cost, limit: limit, window: @window, force: force)
+            rescue StandardError => error
+              @on_store_error.call(error, query)
+              next
+            end
+            taken, remaining = Settings.checked(answer, :take, "the Integer points left")
+            { key: key, limit: limit, remaining: remaining, **(charging ? { taken: taken } : {}) }
           end
         end
 

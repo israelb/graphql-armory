@@ -137,28 +137,39 @@ module GraphQL
 
         private
 
+        # Each key is charged on its own: a store failure on one, or a hook that raises for it, leaves the others charged. The
+        # first error a hook raises is raised afterwards.
         def charge_one(query, debt, cost)
-          others = charge_others(query, debt, cost)
-          answer = @store.take(debt[:key], cost: cost, limit: debt[:limit], window: @window, force: true)
-          _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
-          settle(query, debt, cost, remaining, others)
-        rescue StandardError => error
-          @on_store_error.call(error, query)
-        end
-
-        # Each key is charged on its own: a store failure on one leaves the others charged.
-        def charge_others(query, debt, cost)
-          (debt[:others] || {}).to_h do |key, limit|
-            answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
-            _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
-            [key, remaining]
+          failure = nil
+          charged = (debt[:others] || {}).to_h do |key, limit|
+            [key, charge_key(key, limit, cost)]
           rescue StandardError => error
-            @on_store_error.call(error, query)
+            failure ||= heard(query, error)
             [key, nil]
           end
+          begin
+            settle(query, debt, cost, charge_key(debt[:key], debt[:limit], cost), charged)
+          rescue StandardError => error
+            failure ||= heard(query, error)
+          end
+          raise failure if failure
         end
 
-        # Reads every balance. A refusal charges none, as with one key; otherwise every key owes the whole time.
+        def charge_key(key, limit, cost)
+          answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
+          Settings.checked(answer, :take, "the Integer milliseconds left").last
+        end
+
+        # What the hook raised for this error, if it did.
+        def heard(query, error)
+          @on_store_error.call(error, query)
+          nil
+        rescue StandardError => raised
+          raised
+        end
+
+        # Reads every balance. A refusal charges none, as with one key; otherwise every key owes the whole time. A key whose
+        # store fails at the read still owes it, and the others still decide.
         def call_several(query, keys)
           limits = Settings.limits_for(@limit, keys, query)
           if limits.empty?
@@ -166,16 +177,17 @@ module GraphQL
             return nil
           end
 
-          budgets = begin
-            limits.map do |key, limit|
-              _taken, remaining = Settings.checked(@store.take(key, cost: 0, limit: limit, window: @window, force: false), :take, "the Integer milliseconds left")
-              { key: key, limit: limit, remaining: remaining }
+          budgets = limits.filter_map do |key, limit|
+            answer = begin
+              @store.take(key, cost: 0, limit: limit, window: @window, force: false)
+            rescue StandardError => error
+              @on_store_error.call(error, query)
+              next
             end
-          rescue ConfigurationError
-            raise
-          rescue StandardError => error
+            { key: key, limit: limit, remaining: Settings.checked(answer, :take, "the Integer milliseconds left").last }
+          end
+          if budgets.empty?
             query.context[CONTEXT_KEY] = nil
-            @on_store_error.call(error, query)
             first, *rest = limits.to_a
             owe(query, first[0], first[1], others: rest.to_h)
             return nil
@@ -197,10 +209,13 @@ module GraphQL
           if info[:keys]
             current = others.compact.merge(debt[:key] => remaining)
             info[:keys] = info[:keys].map { |budget| budget.merge(remaining: current.fetch(budget[:key], budget[:remaining])) }
+            # Keys with different limits refill at different rates during the run, so the binding one may have changed.
+            info = info.merge(info[:keys].min_by { |budget| budget[:remaining] })
+            remaining = info[:remaining]
           end
           query.context.namespace(NAMESPACE)[:time] = info
           query.context[CONTEXT_KEY] = info
-          debt[:extension]&.merge!("remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
+          debt[:extension]&.merge!("limit" => info[:limit], "remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
         end
 
         # Per query and per limiter, not in the context hash: queries of a multiplex may share one hash, and a

@@ -98,8 +98,10 @@ module GraphQL
           query.context.namespace(NAMESPACE)[:concurrency_slots] ||= []
         end
 
-        # Takes a slot per key, in order. A refusal gives back what this query took here, at once: a multiplex can run on
-        # for long. Each slot is listed as it is taken, so a raise later on still lets `Release` give it back.
+        # Takes a slot per key, in order, and stops at the first full key, so a refused client holds a shared key as little
+        # as it can. A refusal gives back what this query took here, at once: a multiplex can run on for long. Each slot is
+        # listed as it is taken, so a raise later on still lets `Release` give it back. A key whose store fails is left out,
+        # and the others still decide.
         def call_several(query, keys)
           limits = Settings.limits_for(@limit, keys, query)
           if limits.empty?
@@ -108,13 +110,14 @@ module GraphQL
           end
 
           taken = []
-          held = limits.map do |key, limit|
+          held = []
+          limits.each do |key, limit|
             token = SecureRandom.hex(16)
             answer = begin
               @store.acquire(key, token: token, limit: limit, ttl: @stale_after, force: @soft)
             rescue StandardError => error
               @on_store_error.call(error, query)
-              return nil
+              next
             end
             acquired, active = Settings.checked(answer, :acquire, "the Integer slots held")
             if acquired || @soft
@@ -122,8 +125,11 @@ module GraphQL
               taken << slot
               slots_of(query) << slot
             end
-            { key: key, limit: limit, active: active, acquired: acquired }
+            held << { key: key, limit: limit, active: active, acquired: acquired }
+            break unless acquired || @soft
           end
+          return nil if held.empty?
+
           settle_several(query, held, taken)
         end
 

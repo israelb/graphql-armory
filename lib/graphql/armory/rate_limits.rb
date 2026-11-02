@@ -33,7 +33,7 @@ module GraphQL
         end
 
         def several_keys?(keys)
-          keys.is_a?(Array) && keys.size.between?(1, MAX_KEYS) && keys.uniq.size == keys.size && keys.all? { |key| key.is_a?(String) && !key.empty? }
+          keys.is_a?(Array) && keys.size.between?(1, MAX_KEYS) && keys.all? { |key| key.is_a?(String) && !key.empty? } && keys.map(&:b).uniq.size == keys.size
         end
 
         # The limit of each key, with the keys that have none left out. All of them are asked before any store call, so

@@ -133,13 +133,13 @@ RSpec.describe "Rate limits: several keys per query" do
       expect(limits::Points.headers(response)["RateLimit-Remaining"]).to eq("10")
     end
 
-    it "lets the query through when the store fails, and calls the hook" do
+    it "lets the query through when the store fails on every key, and calls the hook for each" do
       failures = []
       store.fail_with(IOError.new("down"))
       failing = schema_with(limits::Points, store: store, limit: 100, soft: false, on_store_error: ->(error, _query) { failures << error.class })
 
       expect(run(failing).dig("data", "report")).to eq("big")
-      expect(failures).to eq([IOError])
+      expect(failures).to eq([IOError, IOError])
     end
 
     it "keeps a single key as it was: one store call and no keys in the record" do
@@ -152,6 +152,90 @@ RSpec.describe "Rate limits: several keys per query" do
     it "treats a list of one as a list" do
       expect(run(schema, key: ["user:1"]).context[:rate_limit_points][:keys]).to eq([{ key: "user:1", limit: 100, remaining: 60 }])
     end
+  end
+
+  describe "a store that fails on one key" do
+    def failing_on(bad)
+      original = store.method(:take)
+      store.define_singleton_method(:take) do |key, cost:, limit:, window:, force: false|
+        raise IOError, "down" if key == bad
+
+        original.call(key, cost: cost, limit: limit, window: window, force: force)
+      end
+    end
+
+    it "keeps a refusal from another key, on Points" do
+      spend("user:1", 100, 100)
+      failing_on("ip:dead")
+      schema = schema_with(limits::Points, store: store, limit: 100, soft: false, on_store_error: ->(_error, _query) {})
+
+      expect(run(schema, key: ["ip:dead", "user:1"])["errors"]).not_to be_nil
+      expect(resolved).to be_empty
+    end
+
+    it "charges the healthy keys, on Points" do
+      failing_on("ip:dead")
+      heard = []
+      schema = schema_with(limits::Points, store: store, limit: 100, soft: false, on_store_error: ->(error, _query) { heard << error.class })
+
+      expect(run(schema, key: ["ip:dead", "user:1"]).dig("data", "report")).to eq("big")
+      expect(balance("user:1", 100)).to eq(60)
+      expect(heard).to eq([IOError])
+    end
+
+    it "keeps a refusal from another key, on Time" do
+      clock = limits::Clock::Substitute.new
+      spend("user:1", 1_000, 1_000)
+      failing_on("ip:dead")
+      schema = schema_with(limits::Time, store: store, limit: 1_000, soft: false, clock: clock, on_store_error: ->(_error, _query) {})
+
+      expect(run(schema, key: ["ip:dead", "user:1"])["errors"]).not_to be_nil
+      expect(resolved).to be_empty
+    end
+
+    it "keeps a refusal from another key, on Concurrency" do
+      store.occupy("user:1")
+      original = store.method(:acquire)
+      store.define_singleton_method(:acquire) do |key, token:, limit:, ttl:, force: false|
+        raise IOError, "down" if key == "ip:dead"
+
+        original.call(key, token: token, limit: limit, ttl: ttl, force: force)
+      end
+      schema = schema_with(limits::Concurrency, store: store, limit: 1, soft: false, on_store_error: ->(_error, _query) {})
+
+      expect(run(schema, key: ["ip:dead", "user:1"])["errors"]).not_to be_nil
+      expect(resolved).to be_empty
+    end
+
+    it "charges every healthy key on Time when a hook raises on one, and hears it once" do
+      clock = limits::Clock::Substitute.new
+      time_root = limits::Controls::Time.example(clock, resolved, seconds: 0.25)
+      original = store.method(:take)
+      store.define_singleton_method(:take) do |key, cost:, limit:, window:, force: false|
+        raise IOError, "down" if key == "ip:dead" && cost.positive?
+
+        original.call(key, cost: cost, limit: limit, window: window, force: force)
+      end
+      heard = []
+      hook = lambda do |error, _query|
+        heard << error.class
+        raise "hook"
+      end
+      schema = schema_with(limits::Time, store: store, limit: 1_000, soft: false, clock: clock, on_store_error: hook)
+
+      expect do
+        execute_query(schema, "{ report }", root_value: time_root, context: { rate_limit_key: ["user:1", "ip:dead", "ip:2"] })
+      end.to raise_error(RuntimeError, "hook")
+      expect(heard).to eq([IOError])
+      expect(original.call("user:1", cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
+      expect(original.call("ip:2", cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
+    end
+  end
+
+  it "refuses two keys that differ only in encoding: they are one bucket on Redis" do
+    schema = schema_with(limits::Points, store: store, limit: 100, soft: false)
+
+    expect { run(schema, key: ["é", "é".b]) }.to raise_error(limits::ConfigurationError)
   end
 
   describe "Concurrency" do
