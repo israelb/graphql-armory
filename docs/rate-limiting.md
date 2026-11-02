@@ -276,7 +276,7 @@ store.calls                                         # [[:take, "user:1", { cost:
 - `limit:` a positive Integer, or a callable `(key, query)` answering a positive Integer or nil.
 - `window:` positive seconds over which `limit` points refill, continuously.
 - `soft:` `true` (default) charges and records without refusing; `false` refuses.
-- `key:` a callable `(query)` answering the client key; by default `context[:rate_limit_key]`. It must be a non-empty String. Without one, the query raises `ConfigurationError`, on every query: a key built from something that can be nil (an IP behind a misconfigured balancer) needs a fallback, such as `context[:rate_limit_key] = request.remote_ip.presence || "unknown"`, where all such clients share one bucket.
+- `key:` a callable `(query)` answering the client key; by default `context[:rate_limit_key]`. It must be a non-empty String, or a list of up to 5 different ones for all three limiters: a query runs only if every key allows it. The record, the headers and the extensions show the key that binds, and the record adds `keys:` with each one. Errors never name a key. Without one, the query raises `ConfigurationError`, on every query: a key built from something that can be nil (an IP behind a misconfigured balancer) needs a fallback, such as `context[:rate_limit_key] = request.remote_ip.presence || "unknown"`, where all such clients share one bucket.
 - `on_store_error:` a callable `(error, query)` called when the store raises; the query then runs (fails open). By default it warns.
 - `sinks:` callables that hear `:rate_limit_store_failed` when the store raises; see [Telemetry](telemetry.md#rate-limiting).
 - `extensions:` `true` adds `"rateLimit" => { cost, limit, remaining, resetIn }` to every response of a limited client; `false` (default) leaves responses unchanged.
@@ -313,6 +313,7 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 
 - A query this limiter refuses resolves no field and is not charged. A query that fails validation is not charged. A query refused by another analyzer (`max_depth`, `max_complexity`) is still charged: graphql-ruby runs every analyzer.
 - Each query in a multiplex is charged on its own.
+- With several keys, `Points` reads every balance and then charges, so a refused query leaves the others as they were. Two queries racing between those steps can leave a refused one having charged other keys. `Concurrency` gives back the slots a refused query took at once. `Time` charges every key the whole time; a store failure on one key does not stop the others.
 - `Concurrency` takes one slot per query of a multiplex, and releases them all when the multiplex ends, even when the queries share one context hash. If a release fails, that slot expires after `stale_after`; the others are still released.
 - A query run with its own trace (`context: { trace: ... }`) cannot be released by `Concurrency`, so it raises `ConfigurationError` instead of taking a slot.
 - A resolver that runs another query for the same client (a nested `execute`) takes a second slot while the first is held.
@@ -341,6 +342,16 @@ Every key has its own bucket. A client that gets a new key for each request (a n
 
 What you can do with the gem:
 
+- **Draw from several buckets at once.** A key may be a list of up to 5 different Strings, so rotating one identity leaves the others:
+
+  ```ruby
+  context[:rate_limit_key] = ["user:#{user.id}", "ip:#{request.remote_ip}", ("new-accounts" if user.created_at > 1.day.ago)].compact
+
+  use GraphQL::Armory::RateLimits::Points, store: store, window: 60,
+    limit: ->(key, _query) { key.start_with?("user:") ? 1_000 : key.start_with?("ip:") ? 3_000 : 500 }
+  ```
+
+  A query runs only if every key has the budget, and each key is charged. `limit:` is asked once per key, and a key it answers `nil` for is left out. The prefixes are yours: they keep kinds of key apart in the store. It costs store round trips on every query, about two per key, so use two or three. Do not build a key from the document or its variables: a client could then spend someone else's budget.
 - **Share one bucket among the clients you do not trust yet.** Build the key from something that is not free to rotate, such as the age of the account, so every new account draws from the same small budget:
 
   ```ruby

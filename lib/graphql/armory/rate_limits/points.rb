@@ -59,6 +59,8 @@ module GraphQL
         # The refusal for a query that costs `cost`, or nil to let it run.
         def call(query, cost)
           key = Settings.key_for(@key, query)
+          return call_several(query, key, cost) if key.is_a?(Array)
+
           limit = Settings.limit_for(@limit, key, query)
           if limit.nil?
             record(query, key: key, cost: cost, limit: nil, remaining: nil, limited: false)
@@ -76,19 +78,69 @@ module GraphQL
           taken, remaining = Settings.checked(answer, :take, "the Integer points left")
 
           info = record(query, key: key, cost: cost, limit: limit, remaining: remaining, limited: !taken)
-          if @extensions
-            query.context.response_extensions["rateLimit"] =
-              { "cost" => cost, "limit" => limit, "remaining" => remaining, "resetIn" => self.class.reset_in(info) }
-          end
+          announce(query, info, cost) if @extensions
           refusal(cost, limit, remaining) unless taken || @soft
         end
 
         private
 
+        # Reads every balance first, so a query one key refuses leaves the others as they were, then charges each key.
+        # Two queries can race between the two steps: then the refused one leaves the other keys charged.
+        def call_several(query, keys, cost)
+          limits = Settings.limits_for(@limit, keys, query)
+          if limits.empty?
+            record(query, key: keys.first, cost: cost, limit: nil, remaining: nil, limited: false, keys: [])
+            return nil
+          end
+
+          budgets = begin
+            read = balances(limits) unless @soft
+            read&.any? { |budget| budget[:remaining] < cost } ? read : charged(limits, cost)
+          rescue ConfigurationError
+            raise
+          rescue StandardError => error
+            query.context[CONTEXT_KEY] = nil
+            @on_store_error.call(error, query)
+            return nil
+          end
+
+          refused = budgets.select { |budget| budget.fetch(:taken) { budget[:remaining] >= cost } == false }
+          binding = binding_budget(refused, cost) || budgets.min_by { |budget| budget[:remaining] }
+          limited = !refused.empty?
+          info = record(query, key: binding[:key], cost: cost, limit: binding[:limit], remaining: binding[:remaining], limited: limited,
+                               keys: budgets.map { |budget| budget.slice(:key, :limit, :remaining) })
+          announce(query, info, cost) if @extensions
+          refusal(cost, binding[:limit], binding[:remaining]) if limited && !@soft
+        end
+
+        def balances(limits)
+          limits.map do |key, limit|
+            _taken, remaining = Settings.checked(@store.take(key, cost: 0, limit: limit, window: @window, force: false), :take, "the Integer points left")
+            { key: key, limit: limit, remaining: remaining }
+          end
+        end
+
+        def charged(limits, cost)
+          limits.map do |key, limit|
+            taken, remaining = Settings.checked(@store.take(key, cost: cost, limit: limit, window: @window, force: @soft), :take, "the Integer points left")
+            { key: key, limit: limit, remaining: remaining, taken: taken }
+          end
+        end
+
+        # What the client is told: a key that can never pay, otherwise the longest wait.
+        def binding_budget(refused, cost)
+          refused.find { |budget| cost > budget[:limit] } || refused.max_by { |budget| (cost - budget[:remaining]) / budget[:limit].to_f }
+        end
+
+        def announce(query, info, cost)
+          query.context.response_extensions["rateLimit"] =
+            { "cost" => cost, "limit" => info[:limit], "remaining" => info[:remaining], "resetIn" => self.class.reset_in(info) }
+        end
+
         # In the context hash for instrumentation, and per query for `headers`: queries of a multiplex may share one
         # context hash, where the last query's record wins.
         def record(query, **info)
-          info = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited] }
+          info = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited], **info.slice(:keys) }
           query.context.namespace(NAMESPACE)[:points] = info
           query.context[CONTEXT_KEY] = info
         end

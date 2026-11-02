@@ -74,6 +74,8 @@ module GraphQL
           end
 
           key = Settings.key_for(@key, query)
+          return call_several(query, key) if key.is_a?(Array)
+
           limit = Settings.limit_for(@limit, key, query)
           if limit.nil?
             record(query, key: key, limit: nil, remaining: nil, limited: false)
@@ -136,16 +138,66 @@ module GraphQL
         private
 
         def charge_one(query, debt, cost)
+          others = charge_others(query, debt, cost)
           answer = @store.take(debt[:key], cost: cost, limit: debt[:limit], window: @window, force: true)
           _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
-          settle(query, debt, cost, remaining)
+          settle(query, debt, cost, remaining, others)
         rescue StandardError => error
           @on_store_error.call(error, query)
         end
 
+        # Each key is charged on its own: a store failure on one leaves the others charged.
+        def charge_others(query, debt, cost)
+          (debt[:others] || {}).to_h do |key, limit|
+            answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
+            _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
+            [key, remaining]
+          rescue StandardError => error
+            @on_store_error.call(error, query)
+            [key, nil]
+          end
+        end
+
+        # Reads every balance. A refusal charges none, as with one key; otherwise every key owes the whole time.
+        def call_several(query, keys)
+          limits = Settings.limits_for(@limit, keys, query)
+          if limits.empty?
+            record(query, key: keys.first, limit: nil, remaining: nil, limited: false, keys: [])
+            return nil
+          end
+
+          budgets = begin
+            limits.map do |key, limit|
+              _taken, remaining = Settings.checked(@store.take(key, cost: 0, limit: limit, window: @window, force: false), :take, "the Integer milliseconds left")
+              { key: key, limit: limit, remaining: remaining }
+            end
+          rescue ConfigurationError
+            raise
+          rescue StandardError => error
+            query.context[CONTEXT_KEY] = nil
+            @on_store_error.call(error, query)
+            first, *rest = limits.to_a
+            owe(query, first[0], first[1], others: rest.to_h)
+            return nil
+          end
+
+          limited = budgets.any? { |budget| budget[:remaining].zero? }
+          binding = budgets.select { |budget| budget[:remaining].zero? }.min_by { |budget| budget[:limit] } || budgets.min_by { |budget| budget[:remaining] }
+          info = record(query, key: binding[:key], limit: binding[:limit], remaining: binding[:remaining], limited: limited, keys: budgets)
+          extension = announce(query, info) if @extensions
+          return refusal(binding[:limit]) if limited && !@soft
+
+          owe(query, binding[:key], binding[:limit], info, extension, others: limits.reject { |key, _limit| key == binding[:key] })
+          nil
+        end
+
         # What the client has left once the charge is in, in the record and in the extensions announced earlier.
-        def settle(query, debt, cost, remaining)
+        def settle(query, debt, cost, remaining, others = {})
           info = (debt[:info] || base_record(key: debt[:key], limit: debt[:limit], limited: false)).merge(remaining: remaining, elapsed: cost)
+          if info[:keys]
+            current = others.compact.merge(debt[:key] => remaining)
+            info[:keys] = info[:keys].map { |budget| budget.merge(remaining: current.fetch(budget[:key], budget[:remaining])) }
+          end
           query.context.namespace(NAMESPACE)[:time] = info
           query.context[CONTEXT_KEY] = info
           debt[:extension]&.merge!("remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
@@ -153,9 +205,9 @@ module GraphQL
 
         # Per query and per limiter, not in the context hash: queries of a multiplex may share one hash, and a
         # schema may use several limiters.
-        def owe(query, key, limit, info = nil, extension = nil)
+        def owe(query, key, limit, info = nil, extension = nil, others: {})
           charges = (query.context.namespace(NAMESPACE)[:time_charges] ||= {})
-          charges[self] = { key: key, limit: limit, info: info, extension: extension }
+          charges[self] = { key: key, limit: limit, info: info, extension: extension, others: others }
         end
 
         def record(query, **info)
@@ -165,8 +217,8 @@ module GraphQL
         end
 
         # `elapsed` is nil until the operation ends and is charged; it stays nil for a refused one.
-        def base_record(key:, limit:, limited:, remaining: nil)
-          { key: key, limit: limit, remaining: remaining, elapsed: nil, window: @window, soft: @soft, limited: limited }
+        def base_record(key:, limit:, limited:, remaining: nil, keys: nil)
+          { key: key, limit: limit, remaining: remaining, elapsed: nil, window: @window, soft: @soft, limited: limited, **(keys ? { keys: keys } : {}) }
         end
 
         # The budget before the run; the charge completes the same hash, which the response already holds.
