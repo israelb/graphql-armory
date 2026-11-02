@@ -499,7 +499,7 @@ RSpec.describe "unsized connection refusal probes" do
       expect(hash["data"]).to be_nil
     end
 
-    xit "C4 [O] an earlier analyzer raising ExecutionError skips Points altogether" do
+    it "C4 [O] an earlier analyzer raising ExecutionError skips Points altogether" do
       other = analyzer([]) { raise GraphQL::ExecutionError, "earlier analyzer says no" }
       query, mutation, = type_set(log)
       limiter_store = store
@@ -515,7 +515,7 @@ RSpec.describe "unsized connection refusal probes" do
     end
 
     [["guarded first", "{ guarded items { nodes { name } } }"], ["unsized first", "{ items { nodes { name } } guarded }"]].each do |label, document|
-      xit "C12 [S] a schema author's complexity lambda raising ExecutionError, #{label}: the unsized connection must not run" do
+      it "C12 [S] a schema author's complexity lambda raising ExecutionError, #{label}: the unsized connection must not run" do
         ran = log
         item = Class.new(GraphQL::Schema::Object) do
           field_class ProbeField

@@ -71,8 +71,21 @@ module GraphQL
         # Adds the analyzer and the trace to the schema.
         def install(schema)
           time = self
-          schema.query_analyzer(Class.new(Analyzer) { define_method(:time) { time } })
+          schema.query_analyzer(Class.new(Analyzer) do
+            define_method(:time) { time }
+            define_singleton_method(:armory_limiter) { time }
+          end)
           schema.trace_with(@trace)
+          schema.trace_with(AnalysisGuard)
+        end
+
+        def soft?
+          @soft
+        end
+
+        # Whether this query's client has no limit to charge.
+        def exempt?(query)
+          Settings.exempt?(@key, @limit, query)
         end
 
         # The refusal for a client with no milliseconds left, or nil to let the operation run (and be charged).
@@ -275,7 +288,7 @@ module GraphQL
         # Asks for the balance during analysis, before anything runs.
         class Analyzer < GraphQL::Analysis::Analyzer
           def result
-            time.(query)
+            AnalysisGuard.answer(query, time) { time.(query) }
           end
         end
       end

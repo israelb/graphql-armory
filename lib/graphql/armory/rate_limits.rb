@@ -32,6 +32,11 @@ module GraphQL
           raise ConfigurationError, "no client key for this query: put a non-empty String, or a list of up to #{MAX_KEYS} different ones, in context[:#{KEY}], or give the limiter a key: callable"
         end
 
+        def exempt?(reader, limit, query)
+          key = key_for(reader, query)
+          key.is_a?(Array) ? limits_for(limit, key, query).empty? : limit_for(limit, key, query).nil?
+        end
+
         def several_keys?(keys)
           keys.is_a?(Array) && keys.size.between?(1, MAX_KEYS) && keys.all? { |key| key.is_a?(String) && !key.empty? } && keys.map(&:b).uniq.size == keys.size
         end
@@ -143,6 +148,7 @@ require "graphql/armory/rate_limits/memory_store"
 require "graphql/armory/rate_limits/store"
 require "graphql/armory/rate_limits/clock"
 require "graphql/armory/rate_limits/redis_store"
+require "graphql/armory/rate_limits/analysis_guard"
 require "graphql/armory/rate_limits/points"
 require "graphql/armory/rate_limits/concurrency"
 require "graphql/armory/rate_limits/time"
