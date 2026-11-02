@@ -138,6 +138,18 @@ RSpec.describe "audit of a mutation's payload fields" do
     it_behaves_like "a write that answers null"
   end
 
+  it "reports a public child that inherits a field from a parent with a rule, because it is served with no check" do
+    parent = Class.new(base_mutation) do
+      graphql_name "Parent"
+      authorize :move, model: ArmoryPayloadThing
+      field :done, GraphQL::Types::String, null: true, hash_key: :done
+    end
+    schema = schema_with(mutation_named("Act", parent) { authorize :none, reason: "public", covers_fields: true })
+
+    expect(act(schema, user: :stranger).dig("data", "act", "done")).to eq("yes")
+    expect(kinds(schema)).to include(:payload_outside_mutation)
+  end
+
   describe "what stays clean" do
     it "a field on the mutation that holds the rule" do
       schema = schema_with(mutation_named("Act", base_mutation) do

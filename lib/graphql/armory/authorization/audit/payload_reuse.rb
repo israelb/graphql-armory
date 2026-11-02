@@ -67,7 +67,7 @@ module GraphQL
 
             @findings.problem(:payload_outside_mutation, "#{type.graphql_name}.#{field.original_name}",
                               "returns #{reused.map(&:graphql_name).sort.join(", ")}, a mutation's payload, whose fields are covered by that mutation's rule: " \
-                              "here no such rule runs, so they are served with no check. Return a type of its own")
+                              "here no such rule runs, so they are served with no check. Return a type of its own, or, for a public child of a mutation with a rule, give the parent's field `authorize: :none, reason: \"...\"`")
           end
 
           # A shadowed definition may name a type that never resolved; it cannot serve anything.
