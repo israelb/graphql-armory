@@ -419,7 +419,7 @@ RSpec.describe "PR49 probes" do
     expect_refused(run(schema, "{ node { child { child { leaf } } } }"), /app depth/)
   end
 
-  xit "security G2 QueryComplexity-based app maximum stands when another analyzer raises (no raising lambda)" do
+  it "security G2 QueryComplexity-based app maximum stands when another analyzer raises (no raising lambda)" do
     app_max = Class.new(GraphQL::Analysis::QueryComplexity) do
       define_method(:result) { GraphQL::AnalysisError.new("app cost") if super() > 10 }
     end
