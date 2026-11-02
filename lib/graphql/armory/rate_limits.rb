@@ -9,6 +9,8 @@ module GraphQL
       class ConfigurationError < Armory::Error; end
 
       KEY = :rate_limit_key
+      # Each key costs store round trips on every query, so a list cannot grow with what a client sends.
+      MAX_KEYS = 5
 
       # The settings every limiter shares, checked at boot.
       module Settings
@@ -21,11 +23,23 @@ module GraphQL
           key
         end
 
+        # A String, or a list of them for a query that draws from several buckets.
         def key_for(reader, query)
           key = reader.call(query)
           return key if key.is_a?(String) && !key.empty?
+          return key if several_keys?(key)
 
-          raise ConfigurationError, "no client key for this query: put a non-empty String in context[:#{KEY}], or give the limiter a key: callable"
+          raise ConfigurationError, "no client key for this query: put a non-empty String, or a list of up to #{MAX_KEYS} different ones, in context[:#{KEY}], or give the limiter a key: callable"
+        end
+
+        def several_keys?(keys)
+          keys.is_a?(Array) && keys.size.between?(1, MAX_KEYS) && keys.all? { |key| key.is_a?(String) && !key.empty? } && keys.map(&:b).uniq.size == keys.size
+        end
+
+        # The limit of each key, with the keys that have none left out. All of them are asked before any store call, so
+        # a limit that raises leaves nothing charged or held.
+        def limits_for(limit, keys, query)
+          keys.to_h { |key| [key, limit_for(limit, key, query)] }.compact
         end
 
         def soft(value)

@@ -74,6 +74,8 @@ module GraphQL
           end
 
           key = Settings.key_for(@key, query)
+          return call_several(query, key) if key.is_a?(Array)
+
           limit = Settings.limit_for(@limit, key, query)
           if limit.nil?
             record(query, key: key, limit: nil, remaining: nil, limited: false)
@@ -135,27 +137,92 @@ module GraphQL
 
         private
 
+        # Each key is charged on its own: a store failure on one, or a hook that raises for it, leaves the others charged. The
+        # first error a hook raises is raised afterwards.
         def charge_one(query, debt, cost)
-          answer = @store.take(debt[:key], cost: cost, limit: debt[:limit], window: @window, force: true)
-          _taken, remaining = Settings.checked(answer, :take, "the Integer milliseconds left")
-          settle(query, debt, cost, remaining)
-        rescue StandardError => error
+          failure = nil
+          charged = (debt[:others] || {}).to_h do |key, limit|
+            [key, charge_key(key, limit, cost)]
+          rescue StandardError => error
+            failure ||= heard(query, error)
+            [key, nil]
+          end
+          begin
+            settle(query, debt, cost, charge_key(debt[:key], debt[:limit], cost), charged)
+          rescue StandardError => error
+            failure ||= heard(query, error)
+          end
+          raise failure if failure
+        end
+
+        def charge_key(key, limit, cost)
+          answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
+          Settings.checked(answer, :take, "the Integer milliseconds left").last
+        end
+
+        # What the hook raised for this error, if it did.
+        def heard(query, error)
           @on_store_error.call(error, query)
+          nil
+        rescue StandardError => raised
+          raised
+        end
+
+        # Reads every balance. A refusal charges none, as with one key; otherwise every key owes the whole time. A key whose
+        # store fails at the read still owes it, and the others still decide.
+        def call_several(query, keys)
+          limits = Settings.limits_for(@limit, keys, query)
+          if limits.empty?
+            record(query, key: keys.first, limit: nil, remaining: nil, limited: false, keys: [])
+            return nil
+          end
+
+          budgets = limits.filter_map do |key, limit|
+            answer = begin
+              @store.take(key, cost: 0, limit: limit, window: @window, force: false)
+            rescue StandardError => error
+              @on_store_error.call(error, query)
+              next
+            end
+            { key: key, limit: limit, remaining: Settings.checked(answer, :take, "the Integer milliseconds left").last }
+          end
+          if budgets.empty?
+            query.context[CONTEXT_KEY] = nil
+            first, *rest = limits.to_a
+            owe(query, first[0], first[1], others: rest.to_h)
+            return nil
+          end
+
+          limited = budgets.any? { |budget| budget[:remaining].zero? }
+          binding = budgets.select { |budget| budget[:remaining].zero? }.min_by { |budget| budget[:limit] } || budgets.min_by { |budget| budget[:remaining] }
+          info = record(query, key: binding[:key], limit: binding[:limit], remaining: binding[:remaining], limited: limited, keys: budgets)
+          extension = announce(query, info) if @extensions
+          return refusal(binding[:limit]) if limited && !@soft
+
+          owe(query, binding[:key], binding[:limit], info, extension, others: limits.reject { |key, _limit| key == binding[:key] })
+          nil
         end
 
         # What the client has left once the charge is in, in the record and in the extensions announced earlier.
-        def settle(query, debt, cost, remaining)
+        def settle(query, debt, cost, remaining, others = {})
           info = (debt[:info] || base_record(key: debt[:key], limit: debt[:limit], limited: false)).merge(remaining: remaining, elapsed: cost)
+          if info[:keys]
+            current = others.compact.merge(debt[:key] => remaining)
+            info[:keys] = info[:keys].map { |budget| budget.merge(remaining: current.fetch(budget[:key], budget[:remaining])) }
+            # Keys with different limits refill at different rates during the run, so the binding one may have changed.
+            info = info.merge(info[:keys].min_by { |budget| budget[:remaining] })
+            remaining = info[:remaining]
+          end
           query.context.namespace(NAMESPACE)[:time] = info
           query.context[CONTEXT_KEY] = info
-          debt[:extension]&.merge!("remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
+          debt[:extension]&.merge!("limit" => info[:limit], "remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
         end
 
         # Per query and per limiter, not in the context hash: queries of a multiplex may share one hash, and a
         # schema may use several limiters.
-        def owe(query, key, limit, info = nil, extension = nil)
+        def owe(query, key, limit, info = nil, extension = nil, others: {})
           charges = (query.context.namespace(NAMESPACE)[:time_charges] ||= {})
-          charges[self] = { key: key, limit: limit, info: info, extension: extension }
+          charges[self] = { key: key, limit: limit, info: info, extension: extension, others: others }
         end
 
         def record(query, **info)
@@ -165,8 +232,8 @@ module GraphQL
         end
 
         # `elapsed` is nil until the operation ends and is charged; it stays nil for a refused one.
-        def base_record(key:, limit:, limited:, remaining: nil)
-          { key: key, limit: limit, remaining: remaining, elapsed: nil, window: @window, soft: @soft, limited: limited }
+        def base_record(key:, limit:, limited:, remaining: nil, keys: nil)
+          { key: key, limit: limit, remaining: remaining, elapsed: nil, window: @window, soft: @soft, limited: limited, **(keys ? { keys: keys } : {}) }
         end
 
         # The budget before the run; the charge completes the same hash, which the response already holds.
