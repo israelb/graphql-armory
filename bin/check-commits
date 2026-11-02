@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Refuses commits that break the repository's commit rules: a conventional subject, the noreply author, no AI attribution.
+# Usage: bin/check-commits <range>            every non-merge commit of a range (CI)
+#        bin/check-commits --message <file>   a commit about to be made (.githooks/commit-msg)
+set -uo pipefail
+
+status=0
+
+fail() {
+  echo "FAIL $1"
+  status=1
+}
+
+check() {
+  local label=$1 email=$2 message=$3 subject
+  subject=$(printf '%s\n' "$message" | head -n 1)
+
+  case "$email" in
+    *@users.noreply.github.com) ;;
+    *) fail "$label: the author is not the noreply address" ;;
+  esac
+  if printf '%s\n' "$message" | grep -qEi '^(co-authored-by:|claude-session:)|generated with \[?claude'; then
+    fail "$label: AI attribution in the message"
+  fi
+  if ! printf '%s\n' "$subject" | grep -qE '^(Merge |Revert )|^(feat|fix|docs|chore|test|refactor|ci|build|perf|style|revert|merge)(\(.+\))?!?: '; then
+    fail "$label: not a conventional commit: $subject"
+  fi
+}
+
+if [ "${1:-}" = "--message" ]; then
+  file=${2:?usage: bin/check-commits --message <file>}
+  ident=$(git var GIT_AUTHOR_IDENT)
+  email=${ident#*<}
+  check "this commit" "${email%%>*}" "$(sed '/^# -* >8 -*$/,$d' "$file" | grep -v '^#')"
+else
+  range=${1:?usage: bin/check-commits <range>}
+  commits=$(git rev-list --no-merges "$range") || exit 2
+  for commit in $commits; do
+    check "${commit:0:7}" "$(git log -1 --format=%ae "$commit")" "$(git log -1 --format=%B "$commit")"
+  done
+fi
+
+exit $status
