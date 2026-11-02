@@ -124,6 +124,7 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 
 **What the audit does not see.**
 
+- `authorize: false` on a field with a resolver that has no `Base`: the audit says ok, and at runtime the field raises `NoMethodError` and serves nothing. Use `authorize: :none, reason: "..."`.
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
 - A type no definition leads to. The audit follows the schema's roots, `orphan_types` and what each definition references (fields, arguments, interfaces, union members, a connection's node), not filtering by `visible?`, so types hidden with no request and every definition of a duplicated name are audited. A type that only your own `resolve_type` returns, listed nowhere, is not seen.
 - A resolver with no `Base` in a shared payload type is reported even when every mutation returning it has a rule that refuses first. The audit reads the type and not who returns it. Declare `authorize: :none, reason: "..."` on the field. A resolver with its own refusing `authorized?` is reported too: the audit cannot read that method.
@@ -263,6 +264,7 @@ expect(AppSchema).to be_fully_authorized(baseline: "config/graphql_armory_baseli
 | An accepted problem that grew: a field or a `loads:` added to that type, or a type added under that base class or interface | Fails as new, naming what it now reaches |
 | An accepted problem that now appears more times | The extra ones fail as new |
 | An accepted problem that is gone | Fails until it leaves the file, so it cannot come back unseen |
+| Another resolver put at a path whose problem is accepted | Passes: an entry names the path and the problem, not the code behind them. Review what changes at an accepted path |
 | A file that is missing or invalid | Fails: it never runs as if there were no baseline |
 | A schema without the plugin | Cannot be accepted: install the plugin first |
 | An `:own_check` or a `:hook` problem | Cannot be accepted: whatever uses that method later would pass unseen. Remove it, or declare it in `own_checks:` or `own_denial_hooks:` with a reason, which the audit lists |

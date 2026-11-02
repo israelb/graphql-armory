@@ -1386,6 +1386,17 @@ RSpec.describe "audit against runtime, for a resolver with no Base under a cover
     expect(unprotected(schema)).to contain_exactly("CountedDocs", "Query.docs")
   end
 
+  it "keeps a schema not ok when its baseline accepts another resolver at the same path, which it does pass" do
+    first = plain_resolver
+    second = Class.new(plain_resolver) { def resolve(**) = "other code" }
+    baseline = armory::Audit::Baseline.from(armory::Audit.(schema_with(covering_root { field :notes, resolver: first })))
+
+    report = armory::Audit.(schema_with(covering_root { field :notes, resolver: second }))
+
+    expect(baseline.(report).passes?).to eq(true)
+    expect(report.ok?).to eq(false)
+  end
+
   context "what stays as it was" do
     it "lists a plain resolver whose field declares authorize: :none, by its own path" do
       resolver = plain_resolver
