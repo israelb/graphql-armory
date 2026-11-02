@@ -24,9 +24,10 @@ module GraphQL
         end
 
         # Where a client's milliseconds live in the store: apart from its points, so Points and Time can share a store
-        # and a key. Read a balance with this, not with the client's key.
+        # and a key. Read a balance with this, not with the client's key. In the key's encoding: interpolating a UTF-16
+        # key would raise inside the limiter's rescue, which fails open.
         def self.bucket_key(key)
-          "#{BUCKET_PREFIX}#{key}"
+          BUCKET_PREFIX.encode(key.encoding) + key
         end
 
         # HTTP headers for the budget a result recorded: `RateLimit-Time-Limit` and `RateLimit-Time-Remaining` in

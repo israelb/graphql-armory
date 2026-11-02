@@ -247,7 +247,7 @@ end
 
 - **Atomic.** Each charge, slot taken and slot released is one Lua script, so two requests of the same client never both spend the last points.
 - **One clock.** The time comes from Redis (`TIME`), not from each server, so servers whose clocks drift still agree on when a bucket refills.
-- **Small.** A client costs up to three keys, `graphql-armory:rate-limits:points:<key>`, `...:points:time:<key>` for `Time`, and `...:slots:<key>`; both expire once they no longer matter (a window, or `stale_after`, after the last use). Pass `prefix:` to share one Redis with other apps.
+- **Small.** A client costs up to three keys, `graphql-armory:rate-limits:points:<key>`, `...:points:time:<key>` for `Time`, and `...:slots:<key>`; all expire once they no longer matter (a window, or `stale_after`, after the last use). Pass `prefix:` to share one Redis with other apps.
 - **Fails open.** When Redis is down or slow, the client raises, the query runs, and `on_store_error` is called: make that hook alert. With `sinks:`, the failure is also recorded as `:rate_limit_store_failed`. Set the client's timeouts (for example `Redis.new(url: ..., timeout: 0.2)`) so a slow Redis cannot slow every request.
 
 The gem does not depend on the redis gem: add it to your Gemfile. A single `Redis` client is safe to share between threads.
