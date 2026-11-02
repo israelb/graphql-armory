@@ -87,7 +87,7 @@ module GraphQL
             (rule == :covered || Integration.allowed?(object, Integration.with_owner_model(rule, owner), context)) && super
           end
 
-          # True when this field declares no rule of its own and the class that declared it does not cover it. It asks that class
+          # Asked of a field with no resolver. True when it declares no rule of its own and the class that declared it does not cover it. It asks that class
           # and not the type being served: a field a payload inherits keeps the parent mutation as its owner.
           def armory_denied_by_owner?
             return false unless [nil, true].include?(@armory_declared) && owner.respond_to?(:armory_rule)

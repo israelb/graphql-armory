@@ -5,58 +5,88 @@ module GraphQL
     module Authorization
       class Audit
         # A payload's fields are covered by the mutation's rule, so they check nothing themselves. A field that returns the
-        # payload without being that mutation serves them with no rule run: a user the mutation refuses gets the data.
+        # payload without being a mutation with a rule serves them with none run: a user the mutation refuses gets the data.
+        # It reads the definitions and not the schema's lookups, which filter by visibility and may need a profile.
         class PayloadReuse
-          def self.call(schema, definitions, findings)
-            new(findings).(schema, definitions)
+          def self.call(definitions, findings)
+            new(findings).(definitions)
           end
 
           def initialize(findings = Findings.new)
             @findings = findings
           end
 
-          def call(schema, definitions)
+          def call(definitions)
             objects = definitions.select { |type| type.kind.object? }
-            payloads = objects.select { |type| Definitions.fields_at_every_level(type).any? { |field| covered_by_mutation?(field) } }
+            fields = objects.flat_map { |type| Definitions.fields_at_every_level(type).map { |field| [type, field] } }
+            guarded = fields.filter_map { |_type, field| field.resolver.payload_type if ruled_resolver?(field.resolver) }.uniq
+            payloads = objects.select do |type|
+              next false if own_rule?(type)
+
+              guarded.any? { |payload| type <= payload } || generated_by_ruled_mutation?(type) || holds_field_of_ruled_mutation?(type)
+            end
             return if payloads.empty?
 
-            objects.each do |type|
-              Definitions.fields_at_every_level(type).each { |field| note(schema, type, field, payloads) }
-            end
+            named = definitions.to_h { |type| [type.graphql_name, type] }
+            fields.each { |type, field| note(type, field, objects, payloads, named) }
           end
 
           private
 
-          def covered_by_mutation?(field)
-            return false unless field.respond_to?(:armory_declared) && field.armory_declared.nil?
+          # graphql-ruby marks the payload it generates with its mutation, which the schema may not hold at all.
+          def generated_by_ruled_mutation?(type)
+            type.ancestors.any? { |ancestor| ancestor.respond_to?(:mutation) && ruled_resolver?(ancestor.mutation) }
+          end
 
-            owner = field.owner
-            return false unless owner.is_a?(Class) && owner <= GraphQL::Schema::Resolver && owner.respond_to?(:armory_rule)
+          # A field keeps the mutation that defined it as its owner, wherever it ends up.
+          def holds_field_of_ruled_mutation?(type)
+            Definitions.fields_at_every_level(type).any? do |field|
+              field.respond_to?(:armory_declared) && field.armory_declared.nil? && ruled_resolver?(field.owner)
+            end
+          end
 
-            rule = owner.armory_rule
+          def ruled_resolver?(resolver)
+            return false unless resolver.respond_to?(:payload_type) && resolver.respond_to?(:armory_rule)
+
+            rule = resolver.armory_rule
             !rule.nil? && !rule.none?
           end
 
-          def note(schema, type, field, payloads)
-            target = returned_type(schema, field) or return
-            reused = (target.kind.union? || target.kind.interface? ? schema.possible_types(target) : [target]) & payloads
+          # A type with a rule of its own checks itself wherever it is returned: `payload_type Types::Invoice`.
+          def own_rule?(type)
+            return false unless type.respond_to?(:armory_rule)
+
+            rule = type.armory_rule
+            !rule.nil? && !rule.none?
+          end
+
+          def note(type, field, objects, payloads, named)
+            target = returned_type(field, named) or return
+            reused = members(target, objects) & payloads
             return if reused.empty? || own_payload?(field, target)
 
             @findings.problem(:payload_outside_mutation, "#{type.graphql_name}.#{field.original_name}",
-                              "returns #{reused.map(&:graphql_name).join(", ")}, a mutation's payload, whose fields are covered by that mutation's rule: " \
+                              "returns #{reused.map(&:graphql_name).sort.join(", ")}, a mutation's payload, whose fields are covered by that mutation's rule: " \
                               "here no such rule runs, so they are served with no check. Return a type of its own")
           end
 
           # A shadowed definition may name a type that never resolved; it cannot serve anything.
-          def returned_type(schema, field)
+          def returned_type(field, named)
             type = field.type.unwrap
-            type.is_a?(GraphQL::Schema::LateBoundType) ? schema.get_type(type.graphql_name) : type
-          rescue NameError, GraphQL::RequiredImplementationMissingError
+            type.is_a?(GraphQL::Schema::LateBoundType) ? named[type.graphql_name] : type
+          rescue NameError, GraphQL::Error
             nil
           end
 
+          def members(target, objects)
+            return target.all_possible_types if target.kind.union?
+            return objects.select { |type| type <= target } if target.kind.interface?
+
+            [target]
+          end
+
           def own_payload?(field, target)
-            field.resolver.respond_to?(:payload_type) && field.resolver.payload_type == target
+            ruled_resolver?(field.resolver) && field.resolver.payload_type == target
           end
         end
       end

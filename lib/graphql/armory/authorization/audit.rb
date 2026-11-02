@@ -74,7 +74,7 @@ module GraphQL
           EdgeRules.(definitions, findings)
           InterfaceRules.(definitions, findings)
           InputLoads.(definitions, findings)
-          PayloadReuse.(schema, definitions, findings)
+          PayloadReuse.(definitions, findings)
           ObservedRules.(schema, definitions, findings)
           VisibilityModels.(schema, definitions, findings)
           IntrospectionFields.(schema, findings)
