@@ -19,6 +19,7 @@ module GraphQL
         def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false)
           points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions)
           schema.query_analyzer(Class.new(Analyzer) { define_method(:points) { points } })
+          schema.trace_with(KeptRefusal)
         end
 
         # HTTP headers for the budget a result recorded: `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`
@@ -161,11 +162,22 @@ module GraphQL
           )
         end
 
+        # graphql-ruby drops what every analyzer answered when a later one raises an ExecutionError, and runs the query. A
+        # refusal already given survives that. An analyzer that raises before this one runs is still not covered.
+        module KeptRefusal
+          def analyze_query(query:)
+            super
+          rescue GraphQL::ExecutionError, GraphQL::UnauthorizedError
+            refusal = query.context.namespace(NAMESPACE)[:refusal]
+            refusal ? [refusal] : raise
+          end
+        end
+
         # graphql-ruby's own complexity analysis, then the charge.
         class Analyzer < GraphQL::Analysis::QueryComplexity
           # graphql-ruby's words when a connection has no `first:`, `last:` or page size. A client can send that, so it answers
           # an error for the client and not a server error. Nothing is charged, and any other error while scoring still raises.
-          UNSIZED_CONNECTION = "Can't calculate complexity"
+          UNSIZED_CONNECTION = "Can't calculate complexity for "
 
           def result
             cost = begin
@@ -173,14 +185,22 @@ module GraphQL
             rescue GraphQL::Error => error
               raise unless error.instance_of?(GraphQL::Error) && error.message.start_with?(UNSIZED_CONNECTION)
 
-              return GraphQL::AnalysisError.new("This connection needs first: or last:", extensions: { "code" => "PAGE_SIZE_REQUIRED" })
+              query.context[CONTEXT_KEY] = nil
+              return refused(GraphQL::AnalysisError.new("This connection needs first: or last:", extensions: { "code" => "PAGE_SIZE_REQUIRED" }))
             end
             unless cost.is_a?(Numeric) && cost.finite? && !cost.negative?
               raise ConfigurationError, "the query complexity is #{cost.inspect}: field complexities must be numbers of zero or more"
             end
 
             # Fractional complexities (`complexity: 0.5`) are charged whole points, rounded up.
-            points.(query, cost.ceil)
+            refused(points.(query, cost.ceil))
+          end
+
+          private
+
+          def refused(refusal)
+            query.context.namespace(NAMESPACE)[:refusal] = refusal if refusal
+            refusal
           end
         end
       end

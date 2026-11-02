@@ -67,6 +67,43 @@ RSpec.describe "Rate limits: a connection with no page size" do
     expect { run(limited, "{ items { nodes } }") }.to raise_error(GraphQL::Error, /calculate complexity/)
   end
 
+  context "with a later analyzer that raises an ExecutionError" do
+    let(:raising) { Class.new(GraphQL::Analysis::Analyzer) { def result = raise(GraphQL::ExecutionError, "no") } }
+
+    it "keeps the refusal of an unsized connection" do
+      schema = schema_with(store: store, limit: 100, soft: false)
+      schema.query_analyzer(raising)
+
+      response = run(schema, "{ items { nodes } }").to_h
+      expect(response["errors"].map { |error| error["message"] }).to eq(["This connection needs first: or last:"])
+      expect(resolved).to be_empty
+    end
+
+    it "keeps a rate limit refusal" do
+      schema = schema_with(store: store, limit: 1, soft: false)
+      schema.query_analyzer(raising)
+
+      response = run(schema, "{ items(first: 5) { nodes } }").to_h
+      expect(response["errors"].first["extensions"]["code"]).to eq("RATE_LIMITED")
+      expect(resolved).to be_empty
+    end
+
+    it "leaves a query that nothing refused as graphql-ruby leaves it" do
+      schema = schema_with(store: store, limit: 100, soft: false)
+      schema.query_analyzer(raising)
+
+      expect(run(schema, "{ items(first: 1) { nodes } }").to_h.dig("data", "items", "nodes")).to eq(["a"])
+    end
+  end
+
+  it "does not reuse the record of an earlier query on the same context hash" do
+    schema = schema_with(store: store, limit: 100, soft: false)
+    shared = { rate_limit_key: "user:1" }
+    execute_query(schema, "{ items(first: 1) { nodes } }", root_value: root, context: shared)
+
+    expect(execute_query(schema, "{ items { nodes } }", root_value: root, context: shared).context[:rate_limit_points]).to be_nil
+  end
+
   it "does not hide any other error while scoring" do
     query_type = Class.new(GraphQL::Schema::Object) do
       graphql_name "Query"
