@@ -151,6 +151,20 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
   bare = "{ doc { notes } }"
 
   shapes = {
+    "a mutation's payload returned by a query field" => [bare, :payload_outside_mutation, lambda { |spec|
+      plugin = GraphQL::Armory::Authorization
+      field_class = spec.base_field
+      object_class = spec.base_object
+      payload_base = Class.new(object_class) { authorize :none, reason: "the mutation covers it", covers_fields: true }
+      Class.new(GraphQL::Schema::RelayClassicMutation) do
+        include plugin::Base
+        field_class field_class
+        object_class payload_base
+        graphql_name "ArmoryMatrixAct"
+        authorize :read, model: ArmoryMatrixDoc, policy: ArmoryMatrixStrictPolicy
+        field :notes, GraphQL::Types::String, null: true
+      end.payload_type
+    }],
     "a field rule on the type with the policy" => [bare, :clean, ->(spec) { spec.strict_type(&field_rule) }],
     "an argument rule on the type with the policy" => [raw, :clean, ->(spec) { spec.strict_type(&argument_rule) }],
     "a field rule on a parent with the policy" => [bare, :clean, ->(spec) { spec.strict_type(spec.parent_type(policy: ArmoryMatrixStrictPolicy, &field_rule)) }],
@@ -237,7 +251,12 @@ RSpec.describe "audit against runtime, for a user the type's policy refuses" do
         expect(served == "SECRET" && report.ok?).to eq(false)
       end
 
-      if expected == :clean
+      if expected == :payload_outside_mutation
+        it "serves it, and the audit reports it" do
+          expect(served).to eq("SECRET")
+          expect(report.problems.map(&:kind)).to include(:payload_outside_mutation)
+        end
+      elsif expected == :clean
         it "refuses the user, and the audit has nothing to say about the policy" do
           expect(served).to be_nil
           expect(report.problems.map(&:kind)).not_to include(:foreign_policy)

@@ -153,7 +153,10 @@ module GraphQL
             when :none
               @findings.bypass(path, field.armory_reason)
             when nil, true
-              if bypassed && declared.nil? && served_by_owner?(type, field)
+              if denied_payload_field?(field)
+                @findings.problem(:field_without_rule, path, "declares no rule and #{name_of(field.owner)}, which defines it, has none that covers it, so the mutation runs and this field answers null: " \
+                                                             "a client cannot tell whether it worked. Give the field `authorize: :none, reason: \"...\"`, or use a shared `payload_type`; a public mutation adds `covers_fields: true`")
+              elsif bypassed && declared.nil? && served_by_owner?(type, field)
                 @findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, but it is inherited from #{field.owner.name || field.owner.inspect}: a field runs " \
                                                              "under the class that defines it, and no rule ran on this type, so the field is served with no check. Give it authorize: where it is defined, or remove it")
               elsif bypassed
@@ -162,6 +165,11 @@ module GraphQL
             else
               check(path.split(".").first, model, Rule.new(declared, policy: field.armory_policy), reported) if model
             end
+          end
+
+          def denied_payload_field?(field)
+            owner = field.owner
+            owner.is_a?(Class) && owner <= GraphQL::Schema::Resolver && field.armory_denied_by_owner?
           end
 
           # A field runs under its owner's rule, not the resolved type's. Inherited by a bypassed type from a parent whose

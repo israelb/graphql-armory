@@ -87,6 +87,17 @@ module GraphQL
             (rule == :covered || Integration.allowed?(object, Integration.with_owner_model(rule, owner), context)) && super
           end
 
+          # Asked of a field with no resolver. True when it declares no rule of its own and the class that declared it does not cover it. It asks that class
+          # and not the type being served: a field a payload inherits keeps the parent mutation as its owner.
+          def armory_denied_by_owner?
+            return false unless [nil, true].include?(@armory_declared) && owner.respond_to?(:armory_rule)
+
+            rule = owner.armory_rule
+            return true if rule.nil?
+
+            @armory_declared.nil? ? rule.none? && !rule.covers_fields? : rule.none?
+          end
+
           private
 
           # A resolver or mutation that includes Base enforces its own rule, so the field is covered by it.
@@ -105,7 +116,7 @@ module GraphQL
               return Integration.bypassed_implementer?(type, context.schema) ? nil : :covered if type.respond_to?(:kind) && type.kind.interface?
               return :covered unless type.respond_to?(:armory_rule)
 
-              type_rule && (!type_rule.none? || type_rule.covers_fields?) ? :covered : nil
+              armory_denied_by_owner? ? nil : :covered
             when true
               type_rule unless type_rule&.none?
             when :none
