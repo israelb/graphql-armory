@@ -792,7 +792,7 @@ RSpec.describe "payload audit probes" do
     expect(report.ok?).to eq(false), "denied at runtime, audit ok: #{response.to_json}"
   end
 
-  xit "D19 observation: a mutation with no Base at all and no rule, audit vs run" do
+  it "D19 observation: a mutation with no Base at all and no rule, audit vs run" do
     bf = base_field
     bp = base_payload
     klass = Class.new(GraphQL::Schema::Mutation) do

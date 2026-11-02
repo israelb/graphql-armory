@@ -126,6 +126,7 @@ A declared check is listed as a bypass. Each method is declared on its own, and 
 
 - It looks at the classes when it runs, so a method defined later is seen by the next audit.
 - A type no definition leads to. The audit follows the schema's roots, `orphan_types` and what each definition references (fields, arguments, interfaces, union members, a connection's node), not filtering by `visible?`, so types hidden with no request and every definition of a duplicated name are audited. A type that only your own `resolve_type` returns, listed nowhere, is not seen.
+- A plain field under a type with `covers_fields`, with a method or a `resolver_method:`. The declaration says its fields are public, so the field is served and only the type is listed. A resolver or mutation with no `Base` under that type is reported. A read one that answers a type with a rule is not, because that type refuses.
 - A missing action on an argument of an input object, when a plain field takes that input object. It raises at runtime instead of serving.
 - A Base resolver on a field class with no `Base`, under a type with a rule: its rule's actions and its arguments are not read. It raises at runtime instead of serving.
 - A missing policy action on a field of a bypassed type. The audit does not ask the policy there, so a misspelled action passes it and raises at runtime instead of serving.
@@ -220,7 +221,7 @@ load "tasks/graphql_armory.rake"
 | Kind | What it means | What to do |
 |---|---|---|
 | `:plugin` | The schema never installed the plugin. | Add `use GraphQL::Armory::Authorization, adapter: ...`. |
-| `:unprotected` | A base class, or the field class of an interface's field on a bypassed implementer, does not include `Base`, so nothing checks it. | Include `Base`. |
+| `:unprotected` | A base class, or the field class of an interface's field on a bypassed implementer, does not include `Base`, so nothing checks it. Also a resolver, mutation or subscription with no `Base` under a type with `covers_fields`: the declaration says a rule runs elsewhere, and none does. | Include `Base` and declare `authorize`, or declare `authorize: :none, reason: "..."` on the field, which lists it by its own path. |
 | `:no_rule` | A type, mutation or resolver has no rule, so it is denied to everyone. | Add `authorize` or `default_action`. |
 | `:field_without_rule` | A field of a bypassed type has no rule. The message says what really happens: denied, or served with no check (see [Rules](#rules)). | Give the field `authorize:` where it is defined (on the parent, if inherited), or remove it. A field class without `Base` needs one that includes it. |
 | `:adapter` | The policy a rule needs does not exist, or lacks the method or the `Scope`. | Add what is missing. |
