@@ -172,7 +172,7 @@ module GraphQL
         # Takes the slot during analysis, before anything runs.
         class Analyzer < GraphQL::Analysis::Analyzer
           def result
-            AnalysisGuard.answered(query, concurrency, concurrency.(query))
+            AnalysisGuard.answer(query, concurrency) { concurrency.(query) }
           end
         end
 

@@ -187,20 +187,14 @@ module GraphQL
               raise unless error.instance_of?(GraphQL::Error) && error.message.start_with?(UNSIZED_CONNECTION)
 
               query.context[CONTEXT_KEY] = nil
-              return refused(GraphQL::AnalysisError.new("This connection needs first: or last:", extensions: { "code" => "PAGE_SIZE_REQUIRED" }))
+              return AnalysisGuard.answer(query, points) { GraphQL::AnalysisError.new("This connection needs first: or last:", extensions: { "code" => "PAGE_SIZE_REQUIRED" }) }
             end
             unless cost.is_a?(Numeric) && cost.finite? && !cost.negative?
               raise ConfigurationError, "the query complexity is #{cost.inspect}: field complexities must be numbers of zero or more"
             end
 
             # Fractional complexities (`complexity: 0.5`) are charged whole points, rounded up.
-            refused(points.(query, cost.ceil))
-          end
-
-          private
-
-          def refused(refusal)
-            AnalysisGuard.answered(query, points, refusal)
+            AnalysisGuard.answer(query, points) { points.(query, cost.ceil) }
           end
         end
       end

@@ -250,6 +250,100 @@ RSpec.describe "a raise during analysis, with rate limits" do
     end
   end
 
+  context "outside the analysis of an execution" do
+    it "takes no slot and charges nothing for an analysis the app runs itself" do
+      store = self.store
+      schema = schema_with do
+        use limits::Concurrency, store: store, limit: 3, soft: false
+        use limits::Points, store: store, limit: 100, window: 60, soft: false
+      end
+      query = GraphQL::Query.new(schema, "{ guarded }", context: { rate_limit_key: "user:1" }, root_value: root)
+
+      GraphQL::Analysis.analyze_query(query, [GraphQL::Analysis::QueryComplexity])
+
+      expect(store.held("user:1")).to eq(0)
+      expect(left).to eq(100)
+    end
+
+    it "charges once when an analyzer runs an analysis of its own during an execution" do
+      store = self.store
+      nested = Class.new(GraphQL::Analysis::Analyzer) do
+        define_method(:result) do
+          GraphQL::Analysis.analyze_query(query, [Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { raise error_class, "inner" } }])
+          nil
+        end
+      end
+      schema = schema_with do
+        query_analyzer nested
+        use limits::Points, store: store, limit: 100, window: 60, soft: false
+      end
+
+      run(schema)
+
+      expect(resolved).to eq([:cheap])
+      expect(left).to eq(99)
+    end
+  end
+
+  context "when a hook raises partway through several keys" do
+    let(:failing) do
+      Class.new(limits::MemoryStore) do
+        def take(key, **options) = key == "b" ? raise(IOError, "down") : super
+        def acquire(key, **options) = key == "b" ? raise(IOError, "down") : super
+      end.new
+    end
+    let(:hook) { ->(_error, _query) { raise error_class, "hook says no" } }
+
+    it "does not charge the keys already charged again" do
+      failing = self.failing
+      hook = self.hook
+      schema = schema_with { use limits::Points, store: failing, limit: 100, window: 60, soft: true, on_store_error: hook }
+
+      execute_query(schema, "{ cheap }", context: { rate_limit_key: %w[a b] }, root_value: root)
+
+      expect(failing.take("a", cost: 0, limit: 100, window: 60, force: false).last).to eq(99)
+    end
+
+    it "does not take a second slot for a key that holds one, and refuses" do
+      failing = self.failing
+      hook = self.hook
+      held = []
+      schema = schema_with { use limits::Concurrency, store: failing, limit: 1, soft: false, on_store_error: hook }
+
+      result = execute_query(schema, "{ cheap }", context: { rate_limit_key: %w[a b] }, root_value: root)
+      held << failing.acquire("a", token: "probe", limit: 1, ttl: 60, force: false).first
+
+      expect(codes(result)).to eq(["RATE_LIMIT_NOT_CHARGED"])
+      expect(held).to eq([true])
+    end
+
+    it "calls the hook once" do
+      failing = self.failing
+      calls = []
+      hook = ->(_error, _query) { calls << :called; raise error_class, "hook says no" }
+      schema = schema_with { use limits::Points, store: failing, limit: 100, window: 60, soft: false, on_store_error: hook }
+
+      execute_query(schema, "{ cheap }", context: { rate_limit_key: "b" }, root_value: root)
+
+      expect(calls.size).to eq(1)
+    end
+  end
+
+  it "records that the limiter was not charged when another limiter refuses" do
+    store = self.store
+    full = limits::MemoryStore.new
+    schema = schema_with do
+      use limits::Points, store: store, limit: 100, window: 60, soft: true
+      use limits::Time, store: full, limit: 100, window: 60, soft: false
+    end
+    full.take(limits::Time.bucket_key("user:1"), cost: 100, limit: 100, window: 60, force: true)
+
+    result = run(schema, "{ guarded }")
+
+    expect(codes(result)).to eq(["RATE_LIMITED"])
+    expect(result.context[:rate_limit_points]).to include(charged: false)
+  end
+
   it "refuses when a hook of a hard limiter raises an ExecutionError, instead of serving" do
     hook = ->(_error, _query) { raise error_class, "hook says no" }
     broken = Class.new(limits::MemoryStore) { def take(*, **) = raise(IOError, "down") }.new

@@ -6,43 +6,39 @@ module GraphQL
       # graphql-ruby discards an ExecutionError raised during analysis, drops what every analyzer answered, and runs the query.
       # A client can choose that by field order when a `complexity:` lambda raises. So on such a raise each limiter still
       # decides: a refusal already given stands, a limiter not asked yet is asked on its own, and a limiter that cannot answer
-      # refuses the query in hard mode and records `charged: false` in soft mode. It does not cover a `context[:trace]` not
-      # built from the schema.
+      # refuses the query in hard mode and records `charged: false` in soft mode. Only the analysis of an execution counts: an
+      # analysis the app runs itself takes no slot and charges nothing here. It does not cover a trace that takes no modules
+      # from the schema (`context[:trace]`, or a class given to `trace_mode`).
       module AnalysisGuard
         ANSWERS = :limiter_answers
-        ACTIVE = :limiter_guard_active
+        ASKED = :limiter_asked
+        ARMED = :limiter_guard_armed
         NOT_CHARGED = "This query could not be charged to its rate limit."
 
-        # What a limiter's analyzer answered, kept per query and per limiter, once the limiter has returned.
-        def self.answered(query, limiter, refusal)
-          (query.context.namespace(Points::NAMESPACE)[ANSWERS] ||= {})[limiter] = refusal
-          refusal
+        # Runs a limiter, keeping per query and per limiter that it was asked and what it answered. A limiter that raised partway
+        # may have charged some of its keys, so it is never asked again.
+        def self.answer(query, limiter)
+          state = query.context.namespace(Points::NAMESPACE)
+          (state[ASKED] ||= {})[limiter] = true
+          (state[ANSWERS] ||= {})[limiter] = yield
         end
 
         def self.decide(query, error)
           analyzers = query.analyzers.select { |analyzer| analyzer.respond_to?(:armory_limiter) }
-          answers = (query.context.namespace(Points::NAMESPACE)[ANSWERS] ||= {})
-          analyzers.reject { |analyzer| answers.key?(analyzer.armory_limiter) }.each { |analyzer| ask(query, analyzer) }
-
-          refusals = answers.values.compact
-          return refusals unless refusals.empty?
+          state = query.context.namespace(Points::NAMESPACE)
+          answers = (state[ANSWERS] ||= {})
+          asked = (state[ASKED] ||= {})
+          analyzers.reject { |analyzer| asked.key?(analyzer.armory_limiter) }.each { |analyzer| GraphQL::Analysis.analyze_query(query, [analyzer]) }
 
           silent = analyzers.map(&:armory_limiter).reject { |limiter| answers.key?(limiter) || exempt?(limiter, query) }
           silent.each { |limiter| query.context[limiter.class::CONTEXT_KEY] = { limit: nil, soft: limiter.soft?, limited: !limiter.soft?, charged: false } }
+
+          refusals = answers.values.compact
+          return refusals unless refusals.empty?
           return [] if silent.all?(&:soft?)
 
           [error.is_a?(GraphQL::AnalysisError) ? error : GraphQL::AnalysisError.new(NOT_CHARGED, extensions: { "code" => "RATE_LIMIT_NOT_CHARGED" })]
         end
-
-        # One at a time, so an analyzer that raises leaves the others asked.
-        def self.ask(query, analyzer)
-          state = query.context.namespace(Points::NAMESPACE)
-          state[ACTIVE] = true
-          GraphQL::Analysis.analyze_query(query, [analyzer])
-        ensure
-          state[ACTIVE] = false
-        end
-        private_class_method :ask
 
         # A limit that cannot be asked for does not exempt anyone.
         def self.exempt?(limiter, query)
@@ -52,11 +48,26 @@ module GraphQL
         end
         private_class_method :exempt?
 
-        def analyze_query(query:)
+        def analyze_multiplex(multiplex:)
+          multiplex.queries.each { |query| query.context.namespace(Points::NAMESPACE)[ARMED] = true }
           super
-        rescue GraphQL::ExecutionError, GraphQL::UnauthorizedError => error
-          raise if query.context.namespace(Points::NAMESPACE)[ACTIVE]
+        end
 
+        # The first analysis of each query in an execution. Any other, nested in it or run by the app, passes through, and
+        # each analyzer is asked apart, so one that raises leaves the others asked.
+        def analyze_query(query:)
+          return super unless query.context.namespace(Points::NAMESPACE).delete(ARMED)
+
+          begin
+            super
+          rescue GraphQL::ExecutionError, GraphQL::UnauthorizedError => error
+            decided(query, error)
+          end
+        end
+
+        private
+
+        def decided(query, error)
           refusals = AnalysisGuard.decide(query, error)
           raise error if refusals.empty?
 

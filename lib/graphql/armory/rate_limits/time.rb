@@ -288,7 +288,7 @@ module GraphQL
         # Asks for the balance during analysis, before anything runs.
         class Analyzer < GraphQL::Analysis::Analyzer
           def result
-            AnalysisGuard.answered(query, time, time.(query))
+            AnalysisGuard.answer(query, time) { time.(query) }
           end
         end
       end
