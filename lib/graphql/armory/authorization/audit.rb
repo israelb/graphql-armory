@@ -15,6 +15,7 @@ require "graphql/armory/authorization/audit/type_rules"
 require "graphql/armory/authorization/audit/observed_rules"
 require "graphql/armory/authorization/audit/edge_rules"
 require "graphql/armory/authorization/audit/interface_rules"
+require "graphql/armory/authorization/audit/payload_reuse"
 require "graphql/armory/authorization/audit/input_loads"
 require "graphql/armory/authorization/audit/visibility_models"
 require "graphql/armory/authorization/audit/introspection_fields"
@@ -73,6 +74,7 @@ module GraphQL
           EdgeRules.(definitions, findings)
           InterfaceRules.(definitions, findings)
           InputLoads.(definitions, findings)
+          PayloadReuse.(schema, definitions, findings)
           ObservedRules.(schema, definitions, findings)
           VisibilityModels.(schema, definitions, findings)
           IntrospectionFields.(schema, findings)

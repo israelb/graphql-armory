@@ -218,6 +218,7 @@ load "tasks/graphql_armory.rake"
 | `:model` | The model a rule needs cannot be worked out. | Pass `model:`. |
 | `:unscoped_load` | A `loads:` goes through `object_from_id` instead of the user's scope. | Let the load use the scope. |
 | `:unscoped_list` | A list or connection of records skips the user's scope, with `scope: false`, `connection: false` on a connection type, or a list type graphql-ruby does not detect such as `X.to_list_type`. A rule on each record hides its fields, not how many there are. | Remove the option, or write the type as `[Type]`. |
+| `:payload_outside_mutation` | A field returns a mutation's payload without being that mutation. Its fields are covered by the mutation's rule, so here they are served with no check. | Return a type of its own. |
 | `:hook` | The schema's own `unauthorized_field` or `unauthorized_object` wins over the plugin's. | Remove it, or declare it in `own_denial_hooks:`. |
 | `:own_check` | Your own method can skip the rule: `authorized?`, `wrap`, `visible?` and others, or `reauthorize_scoped_objects` turned off. | Remove it, or declare it in `own_checks:`. |
 | `:ignored_rule` | A rule that does not run, or a field or argument defined more than once. | See [Redefined fields and arguments](#redefined-fields-and-arguments) and [Lists, connections and lookups](#lists-connections-and-lookups). |
@@ -392,6 +393,7 @@ end
 - **`ready?` runs before authorization** (and, on the interpreter, before a failing `loads:`). Keep it free of side effects.
 - **`loads:` inside an input object** goes through the scope only when your base input object includes `Base` (`class Types::BaseInputObject < GraphQL::Schema::InputObject; include GraphQL::Armory::Authorization::Base; end`); otherwise the audit reports it as `:unscoped_load`.
 - **Do not put `authorize:` on a mutation field or on payload fields**; the mutation's own rule is the one that counts. A subclass that redeclares `authorize :none` is open to everyone, on purpose.
+- **Fields on a parent mutation.** A payload field asks the class that defined it, so a field on a parent with no rule, or on a mutation with `authorize :none` and no `covers_fields`, is denied: the mutation runs and the field answers null. The audit reports it as `:field_without_rule`. Give that field `authorize: :none, reason: "..."`, or use a shared `payload_type`. Moving `authorize` to the parent also works, but every new child then inherits that rule instead of being denied, and the audit does not report it.
 
 ## Interfaces and unions
 
