@@ -163,7 +163,8 @@ module GraphQL
         end
 
         # graphql-ruby drops what every analyzer answered when a later one raises an ExecutionError, and runs the query. A
-        # refusal already given survives that. An analyzer that raises before this one runs is still not covered.
+        # refusal already given survives that. It does not cover a raise before `Points` answers (an earlier analyzer, a raise
+        # during the visit, a `complexity:` lambda), or a `context[:trace]` not built from the schema.
         module KeptRefusal
           def analyze_query(query:)
             super
