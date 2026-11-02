@@ -6,7 +6,8 @@ module GraphQL
       class Audit
         # An object type's rule, and what its fields, resolvers and arguments declare under it.
         class TypeRules
-          def initialize(adapter = Adapters::Null.new, findings = Findings.new, foreign_policies = ForeignPolicies.new(adapter, findings))
+          def initialize(adapter = Adapters::Null.new, findings = Findings.new, foreign_policies = ForeignPolicies.new(adapter, findings), write_roots = [])
+            @write_roots = write_roots
             @adapter = adapter
             @findings = findings
             @foreign_policies = foreign_policies
@@ -103,7 +104,7 @@ module GraphQL
 
           # Asked of the type that serves it and of the class that defines it, as runtime does: a parent that does not cover it denies it.
           def served_with_no_rule?(type, field)
-            return false unless PlainResolvers.covering?(type.armory_rule) && !interface_field?(field) && PlainResolvers.open?(field)
+            return false unless PlainResolvers.covering?(type.armory_rule) && !interface_field?(field) && PlainResolvers.open?(field, write_root: @write_roots.include?(type))
 
             !(field.respond_to?(:armory_denied_by_owner?) && field.armory_denied_by_owner?)
           end

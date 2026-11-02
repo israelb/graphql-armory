@@ -1281,6 +1281,111 @@ RSpec.describe "audit against runtime, for a resolver with no Base under a cover
     expect(unprotected(schema)).to eq(["Thing.secret"])
   end
 
+  it "reports an interface brought in by another interface with include, which makes no type membership" do
+    holder = base_field
+    resolver = plain_resolver
+    inner = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Inner"
+      field_class holder
+      field :secret, resolver: resolver
+    end
+    outer = Module.new do
+      include GraphQL::Schema::Interface
+      graphql_name "Outer"
+      field_class holder
+      include inner
+    end
+    open = Class.new(base_object) do
+      graphql_name "Open"
+      authorize :none, reason: "x", covers_fields: true
+      implements outer
+    end
+    schema = schema_with(covering_root { field :open, open, null: true, authorize: :none, reason: "x" })
+
+    expect(unprotected(schema)).to eq(["Inner.secret"])
+  end
+
+  it "reports a plain resolver in the payload of a mutation with on_denied: :errors, whose refusal answers a live payload" do
+    holder = base_field
+    payload = payload_class
+    resolver = plain_resolver
+    plugin = armory
+    mutation = Class.new(GraphQL::Schema::Mutation) do
+      include plugin::Base
+      graphql_name "RuledWrite"
+      field_class holder
+      object_class payload
+      authorize :manage, policy: ArmoryMatrixStrictPolicy, model: ArmoryMatrixDoc, on_denied: :errors
+      field :secret, resolver: resolver
+    end
+    schema = schema_with(query_root, covering_root("Mutation") { field :ruled, mutation: mutation })
+
+    expect(unprotected(schema)).to contain_exactly(a_string_ending_with(".secret"))
+  end
+
+  it "reports a plain resolver on the mutation root that answers a type with a rule: it has already run" do
+    answer = ruled_type
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainCreate"
+      type answer, null: true
+      def resolve = nil
+    end
+    schema = schema_with(query_root, covering_root("Mutation") { field :create, resolver: resolver })
+
+    expect(unprotected(schema)).to eq(["Mutation.create"])
+  end
+
+  it "reports a plain resolver on a generated name of a connection" do
+    plugin = armory
+    holder = base_field
+    node = ruled_type
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainNodes"
+      type [String], null: true
+      def resolve = ["SECRET"]
+    end
+    connection = Class.new(GraphQL::Types::Relay::BaseConnection) do
+      include plugin::Base
+      graphql_name "DocConnection"
+      authorize :none, reason: "x", covers_fields: true
+      field_class holder
+      edge_type node.edge_type, nodes_field: false
+      field :nodes, resolver: resolver
+    end
+    schema = schema_with(covering_root { field :docs, connection, null: true, authorize: :none, reason: "x" })
+
+    expect(unprotected(schema)).to include("DocConnection.nodes")
+  end
+
+  it "says nothing of a plain resolver that answers a generated connection of a type with a rule" do
+    answer = ruled_type
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainDocs"
+      type answer.connection_type, null: true
+      def resolve = []
+    end
+    schema = schema_with(covering_root { field :docs, resolver: resolver })
+
+    expect(unprotected(schema)).to eq([])
+  end
+
+  it "reports a plain resolver that answers a connection with a field of its own" do
+    answer = ruled_type
+    connection = Class.new(answer.connection_type) do
+      graphql_name "CountedDocs"
+      field :total, String, null: true
+    end
+    resolver = Class.new(GraphQL::Schema::Resolver) do
+      graphql_name "PlainDocs"
+      type connection, null: true
+      def resolve = []
+    end
+    schema = schema_with(covering_root { field :docs, resolver: resolver })
+
+    expect(unprotected(schema)).to contain_exactly("CountedDocs", "Query.docs")
+  end
+
   context "what stays as it was" do
     it "lists a plain resolver whose field declares authorize: :none, by its own path" do
       resolver = plain_resolver
