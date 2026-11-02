@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Breaking.** Security: on a schema with a rate limiter, a `max_depth` or `max_complexity` refusal, or one another analyzer returned, was lost when an analyzer or a `complexity:` lambda raised `ExecutionError`, and a client could choose that by asking for that field. It now stands. A `max_complexity` that cannot be computed because a lambda raises refuses the query with `QUERY_LIMIT_UNKNOWN`, in soft mode too: if a lambda raises on honest queries, move that check to the field. Limit: a schema with no rate limiter keeps graphql-ruby's behaviour. [Rate limiting](docs/rate-limiting.md#guarantees-and-limits).
+
 ## 0.1.0.pre9 (2026-11-02)
 
 This release is about adopting the gem on a real schema, and about limits that hold when a client tries to get around them. An existing app can now [observe a new rule](docs/authorization.md) before enforcing it and keep the audit green on known problems with a baseline; persisted queries can be published without a server deploy and from several manifests ([persisted queries](docs/persisted-queries.md)); and [rate limits](docs/rate-limiting.md) take several keys per query, against clients that rotate one identity. Anyone running the audit or rate limits in hard mode should read Breaking and Security before upgrading.
