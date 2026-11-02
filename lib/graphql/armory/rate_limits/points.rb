@@ -163,8 +163,18 @@ module GraphQL
 
         # graphql-ruby's own complexity analysis, then the charge.
         class Analyzer < GraphQL::Analysis::QueryComplexity
+          # graphql-ruby's words when a connection has no `first:`, `last:` or page size. A client can send that, so it answers
+          # an error for the client and not a server error. Nothing is charged, and any other error while scoring still raises.
+          UNSIZED_CONNECTION = "Can't calculate complexity"
+
           def result
-            cost = super
+            cost = begin
+              super
+            rescue GraphQL::Error => error
+              raise unless error.instance_of?(GraphQL::Error) && error.message.start_with?(UNSIZED_CONNECTION)
+
+              return GraphQL::AnalysisError.new("This connection needs first: or last:", extensions: { "code" => "PAGE_SIZE_REQUIRED" })
+            end
             unless cost.is_a?(Numeric) && cost.finite? && !cost.negative?
               raise ConfigurationError, "the query complexity is #{cost.inspect}: field complexities must be numbers of zero or more"
             end
