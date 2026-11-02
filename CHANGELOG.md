@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Breaking.** Security: on a schema with a rate limiter, a `max_depth` or `max_complexity` refusal, or one another analyzer returned, was lost when an analyzer or a `complexity:` lambda raised `ExecutionError`, and a client could choose that by asking for that field. It now stands. A `max_complexity` that cannot be computed because a lambda raises refuses the query with `QUERY_LIMIT_UNKNOWN`, in soft mode too: if a lambda raises on honest queries, move that check to the field. Limit: a schema with no rate limiter keeps graphql-ruby's behaviour. [Rate limiting](docs/rate-limiting.md#guarantees-and-limits).
+- **Breaking.** Security: on a schema with a rate limiter, a `max_depth` or `max_complexity` refusal, or one another analyzer returned, was lost when an analyzer or a `complexity:` lambda raised `ExecutionError`, and a client could choose that by asking for that field. It now stands. A `max_complexity` that cannot be computed because a lambda raises refuses the query with `QUERY_LIMIT_UNKNOWN`, in soft mode too: if a lambda raises on honest queries, move that check to the field. Limit: a schema with no rate limiter keeps graphql-ruby's behaviour. [Rate limiting](docs/rate-limiting.md#guarantees-and-limits). (#49)
 
 ## 0.1.0.pre9 (2026-11-02)
 

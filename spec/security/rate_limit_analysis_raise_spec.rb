@@ -444,6 +444,27 @@ RSpec.describe "a raise during analysis, with rate limits" do
       expect(resolved).to eq([:cheap])
     end
 
+    it "stops at a timeout on the second pass, and answers it once" do
+      calls = []
+      flaky = Class.new(GraphQL::Analysis::Analyzer) do
+        define_method(:result) do
+          calls << :flaky
+          raise(calls.size == 1 ? error_class.new("first") : GraphQL::Analysis::TimeoutError.new)
+        end
+      end
+      counting = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { calls << :counted; nil } }
+      schema = deep_schema do
+        query_analyzer flaky
+        query_analyzer counting
+      end
+
+      result = run(schema)
+
+      expect(result.to_h["errors"].size).to eq(1)
+      expect(result.to_h).not_to have_key("data")
+      expect(calls).to eq(%i[flaky flaky])
+    end
+
     it "does not analyze the document again after a timeout" do
       runs = []
       counting = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { runs << :counted; nil } }

@@ -28,7 +28,7 @@ module GraphQL
         def self.decide(query, error)
           refusals = limiter_refusals(query, error)
           # Each new visit gets a whole timeout of its own, and the timeout already refuses the query.
-          return refusals if defined?(GraphQL::Analysis::TimeoutError) && error.is_a?(GraphQL::Analysis::TimeoutError)
+          return refusals if timeout?(error)
 
           kept, unknown = other_answers(query)
           refusals += kept
@@ -58,17 +58,27 @@ module GraphQL
         # answers an empty list for a raise, and `[nil]` for an analyzer with nothing to refuse.
         def self.other_answers(query)
           unknown = false
-          kept = query.analyzers.reject { |analyzer| analyzer.respond_to?(:armory_limiter) }.flat_map do |analyzer|
+          kept = []
+          query.analyzers.reject { |analyzer| analyzer.respond_to?(:armory_limiter) }.each do |analyzer|
             results = GraphQL::Analysis.analyze_query(query, [analyzer])
             unknown ||= results.empty? && maximum?(analyzer) && analyzes?(analyzer, query)
-            results.flatten.grep(GraphQL::AnalysisError)
+            answers = results.flatten.grep(GraphQL::AnalysisError)
+            late = answers.find { |answer| timeout?(answer) }
+            return [[late], false] if late
+
+            kept.concat(answers)
           end
           [kept, unknown]
         end
         private_class_method :other_answers
 
+        def self.timeout?(error)
+          defined?(GraphQL::Analysis::TimeoutError) && error.is_a?(GraphQL::Analysis::TimeoutError)
+        end
+        private_class_method :timeout?
+
         def self.maximum?(analyzer)
-          analyzer <= GraphQL::Analysis::MaxQueryDepth || analyzer <= GraphQL::Analysis::MaxQueryComplexity
+          analyzer.is_a?(Class) && (analyzer <= GraphQL::Analysis::MaxQueryDepth || analyzer <= GraphQL::Analysis::MaxQueryComplexity)
         end
         private_class_method :maximum?
 
