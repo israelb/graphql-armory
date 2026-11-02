@@ -110,6 +110,20 @@ RSpec.describe "bin/check-commits" do
     expect(status).to be_success
   end
 
+  it "ignores the diff git commit -v leaves below the scissors line" do
+    diff = "# ------------------------ >8 ------------------------\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+Generated with [Claude Code](https://x)\n"
+
+    _output, status = check_message("chore: guard\n\n#{diff}")
+
+    expect(status).to be_success
+  end
+
+  it "accepts the lowercase merge subject the history already holds" do
+    _output, status = check_message("merge: main into work\n")
+
+    expect(status).to be_success
+  end
+
   it "accepts a merge subject with --message" do
     _output, status = check_message("Merge branch 'main' into work\n")
 

@@ -22,7 +22,7 @@ check() {
   if printf '%s\n' "$message" | grep -qEi '^(co-authored-by:|claude-session:)|generated with \[?claude'; then
     fail "$label: AI attribution in the message"
   fi
-  if ! printf '%s\n' "$subject" | grep -qE '^(Merge |Revert )|^(feat|fix|docs|chore|test|refactor|ci|build|perf|style|revert)(\(.+\))?!?: '; then
+  if ! printf '%s\n' "$subject" | grep -qE '^(Merge |Revert )|^(feat|fix|docs|chore|test|refactor|ci|build|perf|style|revert|merge)(\(.+\))?!?: '; then
     fail "$label: not a conventional commit: $subject"
   fi
 }
@@ -31,7 +31,7 @@ if [ "${1:-}" = "--message" ]; then
   file=${2:?usage: bin/check-commits --message <file>}
   ident=$(git var GIT_AUTHOR_IDENT)
   email=${ident#*<}
-  check "this commit" "${email%%>*}" "$(grep -v '^#' "$file")"
+  check "this commit" "${email%%>*}" "$(sed '/^# -* >8 -*$/,$d' "$file" | grep -v '^#')"
 else
   range=${1:?usage: bin/check-commits <range>}
   commits=$(git rev-list --no-merges "$range") || exit 2
