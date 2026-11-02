@@ -46,6 +46,15 @@ class AppSchema < GraphQL::Schema
 end
 ```
 
+With graphql-ruby's install template, which includes `ConnectionBehaviors` and `EdgeBehaviors` in classes that inherit from your base object, also declare this in `BaseConnection` and `BaseEdge`, or the audit reports them as `:ignored_rule` ([why](#lists-connections-and-lookups)):
+
+```ruby
+class Types::BaseConnection < Types::BaseObject
+  authorize :none, reason: "the field that returns it holds the rule; each node has its own", covers_fields: true
+  include GraphQL::Types::Relay::ConnectionBehaviors
+end
+```
+
 The actor is `context[:current_user]`; for another key, pass `adapter: GraphQL::Armory::Authorization::Adapters::Pundit.new(user_key: :viewer)`. A complete, tested version lives in [`examples/invoices.rb`](../examples/invoices.rb).
 
 ## Rules
