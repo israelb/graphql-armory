@@ -18,8 +18,11 @@ module GraphQL
 
         def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false)
           points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions)
-          schema.query_analyzer(Class.new(Analyzer) { define_method(:points) { points } })
-          schema.trace_with(KeptRefusal)
+          schema.query_analyzer(Class.new(Analyzer) do
+            define_method(:points) { points }
+            define_singleton_method(:armory_limiter) { points }
+          end)
+          schema.trace_with(AnalysisGuard)
         end
 
         # HTTP headers for the budget a result recorded: `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`
@@ -55,6 +58,15 @@ module GraphQL
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error, limiter: :points, sinks: sinks)
           @extensions = extensions
+        end
+
+        def soft?
+          @soft
+        end
+
+        # Whether this query's client has no limit to charge.
+        def exempt?(query)
+          Settings.exempt?(@key, @limit, query)
         end
 
         # The refusal for a query that costs `cost`, or nil to let it run.
@@ -162,18 +174,6 @@ module GraphQL
           )
         end
 
-        # graphql-ruby drops what every analyzer answered when a later one raises an ExecutionError, and runs the query. A
-        # refusal already given survives that. It does not cover a raise before `Points` answers (an earlier analyzer, a raise
-        # during the visit, a `complexity:` lambda), or a `context[:trace]` not built from the schema.
-        module KeptRefusal
-          def analyze_query(query:)
-            super
-          rescue GraphQL::ExecutionError, GraphQL::UnauthorizedError
-            refusal = query.context.namespace(NAMESPACE)[:refusal]
-            refusal ? [refusal] : raise
-          end
-        end
-
         # graphql-ruby's own complexity analysis, then the charge.
         class Analyzer < GraphQL::Analysis::QueryComplexity
           # graphql-ruby's words when a connection has no `first:`, `last:` or page size. A client can send that, so it answers
@@ -200,8 +200,7 @@ module GraphQL
           private
 
           def refused(refusal)
-            query.context.namespace(NAMESPACE)[:refusal] = refusal if refusal
-            refusal
+            AnalysisGuard.answered(query, points, refusal)
           end
         end
       end

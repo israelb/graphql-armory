@@ -20,8 +20,12 @@ module GraphQL
 
         def self.use(schema, store:, limit:, stale_after: 60, soft: true, key: nil, on_store_error: nil, sinks: [])
           concurrency = build(store: store, limit: limit, stale_after: stale_after, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks)
-          schema.query_analyzer(Class.new(Analyzer) { define_method(:concurrency) { concurrency } })
+          schema.query_analyzer(Class.new(Analyzer) do
+            define_method(:concurrency) { concurrency }
+            define_singleton_method(:armory_limiter) { concurrency }
+          end)
           schema.trace_with(Release)
+          schema.trace_with(AnalysisGuard)
         end
 
         # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
@@ -42,6 +46,15 @@ module GraphQL
           @soft = Settings.wired_soft(soft, store)
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error, limiter: :concurrency, sinks: sinks)
+        end
+
+        def soft?
+          @soft
+        end
+
+        # Whether this query's client has no limit to charge.
+        def exempt?(query)
+          Settings.exempt?(@key, @limit, query)
         end
 
         # Takes a slot for the query: the refusal when none is free, or nil to let it run.
@@ -159,7 +172,7 @@ module GraphQL
         # Takes the slot during analysis, before anything runs.
         class Analyzer < GraphQL::Analysis::Analyzer
           def result
-            concurrency.(query)
+            AnalysisGuard.answered(query, concurrency, concurrency.(query))
           end
         end
 
