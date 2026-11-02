@@ -20,6 +20,10 @@ RSpec.describe "Rate limits: several keys per query" do
     execute_query(schema, document, root_value: root, context: { rate_limit_key: key })
   end
 
+  def bucket(key)
+    GraphQL::Armory::RateLimits::Time.bucket_key(key)
+  end
+
   def balance(key, limit, window: 60)
     store.take(key, cost: 0, limit: limit, window: window, force: false).last
   end
@@ -185,8 +189,8 @@ RSpec.describe "Rate limits: several keys per query" do
 
     it "keeps a refusal from another key, on Time" do
       clock = limits::Clock::Substitute.new
-      spend("user:1", 1_000, 1_000)
-      failing_on("ip:dead")
+      spend(bucket("user:1"), 1_000, 1_000)
+      failing_on(bucket("ip:dead"))
       schema = schema_with(limits::Time, store: store, limit: 1_000, soft: false, clock: clock, on_store_error: ->(_error, _query) {})
 
       expect(run(schema, key: ["ip:dead", "user:1"])["errors"]).not_to be_nil
@@ -212,7 +216,7 @@ RSpec.describe "Rate limits: several keys per query" do
       time_root = limits::Controls::Time.example(clock, resolved, seconds: 0.25)
       original = store.method(:take)
       store.define_singleton_method(:take) do |key, cost:, limit:, window:, force: false|
-        raise IOError, "down" if key == "ip:dead" && cost.positive?
+        raise IOError, "down" if key == GraphQL::Armory::RateLimits::Time.bucket_key("ip:dead") && cost.positive?
 
         original.call(key, cost: cost, limit: limit, window: window, force: force)
       end
@@ -227,8 +231,8 @@ RSpec.describe "Rate limits: several keys per query" do
         execute_query(schema, "{ report }", root_value: time_root, context: { rate_limit_key: ["user:1", "ip:dead", "ip:2"] })
       end.to raise_error(RuntimeError, "hook")
       expect(heard).to eq([IOError])
-      expect(original.call("user:1", cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
-      expect(original.call("ip:2", cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
+      expect(original.call(bucket("user:1"), cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
+      expect(original.call(bucket("ip:2"), cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
     end
   end
 
@@ -321,6 +325,14 @@ RSpec.describe "Rate limits: several keys per query" do
   end
 
   describe "Time" do
+    def balance(key, limit, window: 60)
+      super(bucket(key), limit, window: window)
+    end
+
+    def spend(key, cost, limit, window: 60)
+      super(bucket(key), cost, limit, window: window)
+    end
+
     let(:clock) { limits::Clock::Substitute.new }
     let(:root) { limits::Controls::Time.example(clock, resolved, seconds: 0.25) }
     let(:schema) { schema_with(limits::Time, store: store, limit: 1_000, soft: false, clock: clock) }
@@ -346,14 +358,14 @@ RSpec.describe "Rate limits: several keys per query" do
       failing = schema_with(limits::Time, store: store, limit: 1_000, soft: false, clock: clock, on_store_error: ->(error, _query) { failures << error.class })
       original_take = store.method(:take)
       store.define_singleton_method(:take) do |key, cost:, limit:, window:, force: false|
-        raise IOError, "down" if key == "user:1" && cost.positive?
+        raise IOError, "down" if key == GraphQL::Armory::RateLimits::Time.bucket_key("user:1") && cost.positive?
 
         original_take.call(key, cost: cost, limit: limit, window: window, force: force)
       end
 
       expect(run(failing).dig("data", "report")).to eq("big")
       expect(failures).to eq([IOError])
-      expect(original_take.call("ip:1", cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
+      expect(original_take.call(bucket("ip:1"), cost: 0, limit: 1_000, window: 60, force: false).last).to eq(750)
     end
 
     it "records each key after the charge, and a single key as before" do

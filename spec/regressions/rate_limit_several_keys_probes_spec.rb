@@ -75,6 +75,10 @@ RSpec.describe "Probes: several keys per query" do
   let(:clock) { l::Clock::Substitute.new }
   let(:timed_root) { l::Controls::Time.example(clock, resolved, seconds: 0.25) }
 
+  def tb(key)
+    l::Time.bucket_key(key)
+  end
+
   def schema_with(*limiters, type: l::Controls::Query.example)
     Class.new(ArmoryEngine.base_schema) do
       query type
@@ -157,9 +161,9 @@ RSpec.describe "Probes: several keys per query" do
       end.new
       schema = schema_with(time)
       run(schema, "{ cheap }", key: keys, root_value: mutating)
-      expect(store.called(:take, "a").size).to eq(2)
-      expect(store.called(:take, "b").size).to eq(2)
-      expect(store.called(:take, "a-changed")).to be_empty
+      expect(store.called(:take, tb("a")).size).to eq(2)
+      expect(store.called(:take, tb("b")).size).to eq(2)
+      expect(store.called(:take, tb("a-changed"))).to be_empty
     end
 
     it "L2 [S] mutating a member in a resolver does not leak the Concurrency slot" do
@@ -587,55 +591,55 @@ RSpec.describe "Probes: several keys per query" do
     end
 
     it "T3 [S] the store fails at the read: handler once, every key still charged at the end" do
-      store.on(:take, "a") { |args| args[:cost].zero? ? raise(IOError, "down") : :pass }
+      store.on(:take, tb("a")) { |args| args[:cost].zero? ? raise(IOError, "down") : :pass }
       result = cheap(schema_with(time))
       expect(resolved).to eq([:cheap])
       expect(hook).to eq([IOError])
-      expect(store.balance("a", 1000)).to eq(750)
-      expect(store.balance("b", 1000)).to eq(750)
+      expect(store.balance(tb("a"), 1000)).to eq(750)
+      expect(store.balance(tb("b"), 1000)).to eq(750)
       expect(result.context[:rate_limit_time]).to include(elapsed: 250)
     end
 
     it "T4 [S] key 1 empty and the store raises at the read of key 2: must not run (R1)" do
-      store.spend("a", 1000, 1000)
-      store.on(:take, "b") { |args| args[:cost].zero? ? raise(IOError, "down") : :pass }
+      store.spend(tb("a"), 1000, 1000)
+      store.on(:take, tb("b")) { |args| args[:cost].zero? ? raise(IOError, "down") : :pass }
       result = cheap(schema_with(time))
       expect(resolved).to be_empty
       expect(refused?(result)).to be_truthy
     end
 
     it "T6 [S] a charge fails on one key and the hook raises: the other keys are still charged, hook once" do
-      store.spend("a", 100, 1000)
-      store.on(:take, "b") { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
+      store.spend(tb("a"), 100, 1000)
+      store.on(:take, tb("b")) { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
       expect { cheap(schema_with(time(on_store_error: loud)), key: %w[a b c]) }.to raise_error(/hook/)
-      expect(store.balance("c", 1000)).to eq(750)
-      expect(store.balance("a", 1000)).to eq(650)
+      expect(store.balance(tb("c"), 1000)).to eq(750)
+      expect(store.balance(tb("a"), 1000)).to eq(650)
       expect(hook).to eq([IOError])
     end
 
     it "T7 [S] the charge fails on the binding key: the others charged, hook once" do
-      store.spend("a", 100, 1000)
-      store.on(:take, "a") { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
+      store.spend(tb("a"), 100, 1000)
+      store.on(:take, tb("a")) { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
       cheap(schema_with(time))
-      expect(store.balance("b", 1000)).to eq(750)
+      expect(store.balance(tb("b"), 1000)).to eq(750)
       expect(hook).to eq([IOError])
     end
 
     it "T8 [S] soft: an empty key runs, every key charged, limited true" do
-      store.spend("a", 1000, 1000)
+      store.spend(tb("a"), 1000, 1000)
       result = cheap(schema_with(time(soft: true, extensions: true)))
       expect(resolved).to eq([:cheap])
-      expect(store.balance("a", 1000)).to eq(0)
-      expect(store.balance("b", 1000)).to eq(750)
+      expect(store.balance(tb("a"), 1000)).to eq(0)
+      expect(store.balance(tb("b"), 1000)).to eq(750)
       expect(result.context[:rate_limit_time]).to include(key: "a", remaining: 0, elapsed: 250, limited: true)
       expect(result.to_h["extensions"]["rateLimitTime"]).to include("remaining" => 0, "elapsed" => 250, "resetIn" => 60)
     end
 
     it "T9 [S] extensions, headers and the record match the store after the charge" do
-      store.spend("b", 100, 2000)
+      store.spend(tb("b"), 100, 2000)
       result = cheap(schema_with(time(limit: ->(key, _q) { key == "a" ? 500 : 2000 }, extensions: true)))
-      expect(store.balance("a", 500)).to eq(250)
-      expect(store.balance("b", 2000)).to eq(1650)
+      expect(store.balance(tb("a"), 500)).to eq(250)
+      expect(store.balance(tb("b"), 2000)).to eq(1650)
       expect(result.context[:rate_limit_time]).to include(key: "a", limit: 500, remaining: 250, elapsed: 250)
       expect(result.context[:rate_limit_time][:keys]).to eq([{ key: "a", limit: 500, remaining: 250 }, { key: "b", limit: 2000, remaining: 1650 }])
       expect(result.to_h["extensions"]["rateLimitTime"]).to eq("limit" => 500, "remaining" => 250, "elapsed" => 250, "resetIn" => 30)
@@ -644,8 +648,8 @@ RSpec.describe "Probes: several keys per query" do
 
     it "T10 [S] limit nil for some: not charged; for all: no store call, runs, no headers" do
       cheap(schema_with(time(limit: ->(key, _q) { key == "a" ? 1000 : nil })))
-      expect(store.called(:take, "b")).to be_empty
-      expect(store.balance("a", 1000)).to eq(750)
+      expect(store.called(:take, tb("b"))).to be_empty
+      expect(store.balance(tb("a"), 1000)).to eq(750)
       calls = store.calls.size
       result = cheap(schema_with(time(limit: ->(_k, _q) {}, extensions: true)))
       expect(store.calls.size).to eq(calls)
@@ -655,12 +659,12 @@ RSpec.describe "Probes: several keys per query" do
 
     it "T11 [S] zero duration charges 0 and answers a complete record" do
       result = run(schema_with(time), "{ cheap }")
-      expect(store.balance("a", 1000)).to eq(1000)
+      expect(store.balance(tb("a"), 1000)).to eq(1000)
       expect(result.context[:rate_limit_time]).to include(elapsed: 0, remaining: 1000)
     end
 
     it "T12 [S] a multiplex splits the time, excludes a refused query, and shared keys pay each query's share" do
-      store.spend("d", 1000, 1000)
+      store.spend(tb("d"), 1000, 1000)
       schema = schema_with(time(key: by_operation("Q1" => %w[a b], "Q2" => %w[b c], "Q3" => %w[e d])))
       results = mux(schema, [
         { query: "query Q1 { cheap }", root_value: timed_root },
@@ -668,15 +672,15 @@ RSpec.describe "Probes: several keys per query" do
         { query: "query Q3 { cheap }", root_value: timed_root }
       ])
       expect(refused?(results[2])).to be_truthy
-      expect(store.balance("a", 1000)).to eq(750)
-      expect(store.balance("b", 1000)).to eq(500)
-      expect(store.balance("c", 1000)).to eq(750)
-      expect(store.balance("e", 1000)).to eq(1000)
+      expect(store.balance(tb("a"), 1000)).to eq(750)
+      expect(store.balance(tb("b"), 1000)).to eq(500)
+      expect(store.balance(tb("c"), 1000)).to eq(750)
+      expect(store.balance(tb("e"), 1000)).to eq(1000)
     end
 
     it "T13 [S] the headers name the lowest balance after the run, when refill reordered the keys" do
-      store.spend("a", 50, 100)
-      store.spend("b", 99_960, 100_000)
+      store.spend(tb("a"), 50, 100)
+      store.spend(tb("b"), 99_960, 100_000)
       this_store = store
       this_clock = clock
       slow = Class.new do
@@ -688,13 +692,13 @@ RSpec.describe "Probes: several keys per query" do
       end.new
       schema = schema_with(time(limit: ->(key, _q) { key == "a" ? 100 : 100_000 }))
       result = run(schema, "{ cheap }", root_value: slow)
-      lowest = [store.balance("a", 100), store.balance("b", 100_000)].min
+      lowest = [store.balance(tb("a"), 100), store.balance(tb("b"), 100_000)].min
       expect(l::Time.headers(result)["RateLimit-Time-Remaining"]).to eq(lowest.to_s)
     end
 
     it "T14 [S] retryAfter is honest: refused before it, allowed after" do
-      store.spend("a", 60, 60)
-      store.spend("b", 6, 6)
+      store.spend(tb("a"), 60, 60)
+      store.spend(tb("b"), 6, 6)
       schema = schema_with(time(limit: ->(key, _q) { key == "a" ? 60 : 6 }))
       wait = cheap(schema)["errors"][0]["extensions"]["retryAfter"]
       expect(wait).to eq(10)
@@ -705,49 +709,49 @@ RSpec.describe "Probes: several keys per query" do
     end
 
     it "T15 [S] nonsense at the read raises with no debt" do
-      store.on(:take, "b") { [0, 0] }
+      store.on(:take, tb("b")) { [0, 0] }
       expect { cheap(schema_with(time)) }.to raise_error(l::ConfigurationError, /answered/)
       expect(resolved).to be_empty
-      expect(store.balance("a", 1000)).to eq(1000)
+      expect(store.balance(tb("a"), 1000)).to eq(1000)
     end
 
     it "T15b [S] nonsense at the charge of one key goes to the hook and the others are charged" do
-      store.on(:take, "b") { |args| args[:cost].positive? ? [0, 0] : :pass }
-      store.spend("a", 10, 1000)
+      store.on(:take, tb("b")) { |args| args[:cost].positive? ? [0, 0] : :pass }
+      store.spend(tb("a"), 10, 1000)
       cheap(schema_with(time), key: %w[a b c])
       expect(hook).to eq([l::ConfigurationError])
-      expect(store.balance("a", 1000)).to eq(740)
-      expect(store.balance("c", 1000)).to eq(750)
+      expect(store.balance(tb("a"), 1000)).to eq(740)
+      expect(store.balance(tb("c"), 1000)).to eq(750)
     end
 
     it "T16 [S] two Time limiters, String and list, charge only their own" do
       other = SeveralKeysProbes::Scripted.new
       schema = schema_with(time(key: ->(_q) { "u" }), time(store: other, key: ->(_q) { %w[a b] }))
       cheap(schema, key: nil)
-      expect(store.balance("u", 1000)).to eq(750)
-      expect(other.balance("a", 1000)).to eq(750)
-      expect(other.balance("b", 1000)).to eq(750)
-      expect(store.called(:take, "a")).to be_empty
+      expect(store.balance(tb("u"), 1000)).to eq(750)
+      expect(other.balance(tb("a"), 1000)).to eq(750)
+      expect(other.balance(tb("b"), 1000)).to eq(750)
+      expect(store.called(:take, tb("a"))).to be_empty
     end
 
     it "T17 [S] RedisStore: each key charged the share, refused charges none, the record matches" do
       skip "no redis" if ENV["REDIS_URL"].to_s.empty?
       now = [1000.0]
       redis_store = l::RedisStore.new(redis: Redis.new(url: ENV.fetch("REDIS_URL")), prefix: "probe-#{SecureRandom.hex(6)}:", clock: -> { now[0] })
-      balance = ->(key) { redis_store.take(key, cost: 0, limit: 1000, window: 60, force: false).last }
+      balance = ->(key) { redis_store.take(tb(key), cost: 0, limit: 1000, window: 60, force: false).last }
       schema = schema_with(time(store: redis_store))
       result = cheap(schema)
       expect([balance["a"], balance["b"]]).to eq([750, 750])
       expect(result.context[:rate_limit_time][:keys].map { |budget| budget[:remaining] }).to eq([750, 750])
-      redis_store.take("b", cost: 1000, limit: 1000, window: 60, force: true)
+      redis_store.take(tb("b"), cost: 1000, limit: 1000, window: 60, force: true)
       expect(refused?(cheap(schema))).to be_truthy
       expect(balance["a"]).to eq(750)
     end
 
     it "T18 [S] a resolver raising: every key charged" do
       expect { run(schema_with(time), "{ broken }", root_value: timed_root) }.to raise_error(IOError)
-      expect(store.balance("a", 1000)).to eq(750)
-      expect(store.balance("b", 1000)).to eq(750)
+      expect(store.balance(tb("a"), 1000)).to eq(750)
+      expect(store.balance(tb("b"), 1000)).to eq(750)
     end
 
     it "T19 [S] a list with its own trace raises" do
@@ -756,7 +760,7 @@ RSpec.describe "Probes: several keys per query" do
     end
 
     it "T20 [S] no key in the response JSON, allowed and refused" do
-      store.spend("SECRET-b", 1000, 1000)
+      store.spend(tb("SECRET-b"), 1000, 1000)
       schema = schema_with(time(extensions: true))
       refused = cheap(schema, key: %w[SECRET-a SECRET-b])
       allowed = cheap(schema, key: %w[SECRET-c SECRET-d])
@@ -804,29 +808,29 @@ RSpec.describe "Probes: several keys per query" do
     end
 
     it "T3b [S] on_store_error raising at the read: nothing runs, nothing owed" do
-      store.on(:take, "b") { raise IOError, "down" }
+      store.on(:take, tb("b")) { raise IOError, "down" }
       expect { run(schema_with(time(on_store_error: loud)), "{ cheap }", root_value: timed_root) }.to raise_error(/hook/)
       expect(resolved).to be_empty
-      expect(store.called(:take, "a").map { |call| call[2][:cost] }).to eq([0])
+      expect(store.called(:take, tb("a")).map { |call| call[2][:cost] }).to eq([0])
     end
 
     it "T6b [S] a raising hook on one query's charge still charges the next query of the multiplex" do
-      store.on(:take, "b") { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
+      store.on(:take, tb("b")) { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
       schema = schema_with(time(on_store_error: loud, key: by_operation("Q1" => %w[a b], "Q2" => %w[c d])))
       queries = %w[Q1 Q2].map { |name| { query: "query #{name} { cheap }", root_value: timed_root } }
       expect { mux(schema, queries) }.to raise_error(/hook/)
-      expect(store.balance("c", 1000)).to eq(500 + 250)
-      expect(store.balance("d", 1000)).to eq(500 + 250)
+      expect(store.balance(tb("c"), 1000)).to eq(500 + 250)
+      expect(store.balance(tb("d"), 1000)).to eq(500 + 250)
     end
 
     it "T6c [S] a raising hook on one key's charge hears that failure once" do
-      store.on(:take, "b") { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
+      store.on(:take, tb("b")) { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
       expect { run(schema_with(time(on_store_error: loud)), "{ cheap }", root_value: timed_root) }.to raise_error(/hook/)
       expect(hook).to eq([IOError])
     end
 
     it "T6d [K] with one String a raising hook on the charge hears it once (the single-key stance)" do
-      store.on(:take, "a") { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
+      store.on(:take, tb("a")) { |args| args[:cost].positive? ? raise(IOError, "down") : :pass }
       expect { run(schema_with(time(on_store_error: loud)), "{ cheap }", key: "a", root_value: timed_root) }.to raise_error(/hook/)
       expect(hook).to eq([IOError])
     end
