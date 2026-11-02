@@ -17,9 +17,17 @@ module GraphQL
       class Time
         CONTEXT_KEY = :rate_limit_time
         NAMESPACE = :graphql_armory
+        BUCKET_PREFIX = "time:"
 
         def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], clock: Clock.monotonic, extensions: false)
           build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, clock: clock, extensions: extensions).install(schema)
+        end
+
+        # Where a client's milliseconds live in the store: apart from its points, so Points and Time can share a store
+        # and a key. Read a balance with this, not with the client's key. In the key's encoding: interpolating a UTF-16
+        # key would raise inside the limiter's rescue, which fails open.
+        def self.bucket_key(key)
+          BUCKET_PREFIX.encode(key.encoding) + key
         end
 
         # HTTP headers for the budget a result recorded: `RateLimit-Time-Limit` and `RateLimit-Time-Remaining` in
@@ -83,7 +91,7 @@ module GraphQL
           end
 
           answer = begin
-            @store.take(key, cost: 0, limit: limit, window: @window, force: false)
+            @store.take(self.class.bucket_key(key), cost: 0, limit: limit, window: @window, force: false)
           rescue StandardError => error
             # Fail open, and still measure: the charge may find the store back.
             query.context[CONTEXT_KEY] = nil
@@ -156,7 +164,7 @@ module GraphQL
         end
 
         def charge_key(key, limit, cost)
-          answer = @store.take(key, cost: cost, limit: limit, window: @window, force: true)
+          answer = @store.take(self.class.bucket_key(key), cost: cost, limit: limit, window: @window, force: true)
           Settings.checked(answer, :take, "the Integer milliseconds left").last
         end
 
@@ -179,7 +187,7 @@ module GraphQL
 
           budgets = limits.filter_map do |key, limit|
             answer = begin
-              @store.take(key, cost: 0, limit: limit, window: @window, force: false)
+              @store.take(self.class.bucket_key(key), cost: 0, limit: limit, window: @window, force: false)
             rescue StandardError => error
               @on_store_error.call(error, query)
               next

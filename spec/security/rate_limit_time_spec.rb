@@ -33,15 +33,15 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
 
   # The milliseconds the client has left, read without charging anything.
   def balance(key = "user:1", limit: 1_000)
-    store.take(key, cost: 0, limit: limit, window: 60).last
+    store.take(GraphQL::Armory::RateLimits::Time.bucket_key(key), cost: 0, limit: limit, window: 60).last
   end
 
   def drain(key = "user:1", limit: 1_000)
-    store.take(key, cost: limit, limit: limit, window: 60, force: true)
+    store.take(GraphQL::Armory::RateLimits::Time.bucket_key(key), cost: limit, limit: limit, window: 60, force: true)
   end
 
   def charges
-    store.calls.select { |method, _key, arguments| method == :take && arguments[:force] }.map { |_method, key, arguments| [key, arguments[:cost]] }
+    store.calls.select { |method, _key, arguments| method == :take && arguments[:force] }.map { |_method, key, arguments| [key.delete_prefix("time:"), arguments[:cost]] }
   end
 
   it "runs an operation under the limit and charges the milliseconds it took" do
@@ -73,7 +73,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
   it "asks for the balance before running with a take of zero that charges nothing" do
     run(schema_for)
 
-    expect(store.calls.first).to eq([:take, "user:1", { cost: 0, limit: 1_000, window: 60, force: false }])
+    expect(store.calls.first).to eq([:take, "time:user:1", { cost: 0, limit: 1_000, window: 60, force: false }])
   end
 
   it "charges the milliseconds of an operation that raises" do
@@ -198,7 +198,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
       # The refused runs reach the first limiter too (graphql-ruby runs every analyzer) and cost it 0 ms.
       expect(charges).to eq([["user:1", 250], ["user:1", 0], ["user:1", 0]])
       expect(other.calls.select { |_method, _key, arguments| arguments[:force] }.map { |_method, key, arguments| [key, arguments[:cost]] })
-        .to eq([["ip:1", 250]])
+        .to eq([["time:ip:1", 250]])
     end
   end
 
@@ -216,7 +216,7 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Time" do
     expect(responses.map { |response| response.key?("errors") }).to eq([false, true])
     expect(charges.first).to eq(["user:1", 250])
     expect(other.calls.select { |_method, _key, arguments| arguments[:force] }.map { |_method, key, arguments| [key, arguments[:cost]] })
-      .to eq([["ip:1", 250]])
+      .to eq([["time:ip:1", 250]])
   end
 
   describe "a clock that does not answer a finite number" do

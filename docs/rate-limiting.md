@@ -247,7 +247,7 @@ end
 
 - **Atomic.** Each charge, slot taken and slot released is one Lua script, so two requests of the same client never both spend the last points.
 - **One clock.** The time comes from Redis (`TIME`), not from each server, so servers whose clocks drift still agree on when a bucket refills.
-- **Small.** A client costs two keys, `graphql-armory:rate-limits:points:<key>` and `...:slots:<key>`; both expire once they no longer matter (a window, or `stale_after`, after the last use). Pass `prefix:` to share one Redis with other apps.
+- **Small.** A client costs up to three keys, `graphql-armory:rate-limits:points:<key>`, `...:points:time:<key>` for `Time`, and `...:slots:<key>`; all expire once they no longer matter (a window, or `stale_after`, after the last use). Pass `prefix:` to share one Redis with other apps.
 - **Fails open.** When Redis is down or slow, the client raises, the query runs, and `on_store_error` is called: make that hook alert. With `sinks:`, the failure is also recorded as `:rate_limit_store_failed`. Set the client's timeouts (for example `Redis.new(url: ..., timeout: 0.2)`) so a slow Redis cannot slow every request.
 
 The gem does not depend on the redis gem: add it to your Gemfile. A single `Redis` client is safe to share between threads.
@@ -318,6 +318,8 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - `Concurrency` takes one slot per query of a multiplex, and releases them all when the multiplex ends, even when the queries share one context hash. If a release fails, that slot expires after `stale_after`; the others are still released.
 - A query run with its own trace (`context: { trace: ... }`) cannot be released by `Concurrency`, so it raises `ConfigurationError` instead of taking a slot.
 - A resolver that runs another query for the same client (a nested `execute`) takes a second slot while the first is held.
+- `Points` and `Time` keep separate budgets on one store and key: `Time` stores its milliseconds under `time:<key>` (`Time.bucket_key(key)`; a custom store sees that key). So do not give `Points` a key starting with `time:` that matches a `Time` key.
+- Two limiters of the same class on one store and key share one bucket: both charge it, and each caps and refills it with its own limit. Give each `use Points` or `use Time` its own store (`RedisStore.new(redis:, prefix:)`) or its own keys.
 - A subscription holds a slot only while its first result runs, not while it stays subscribed.
 - When queries of a multiplex share one context hash, `context[:rate_limit_points]`, `context[:rate_limit_concurrency]` and `context[:rate_limit_time]` hold the last query's record: give each query its own context hash to read every record.
 - The cost is graphql-ruby's estimate before running, not the time a query really takes: a field that is slow but scored 1 costs 1. Score expensive fields, and add `Time` to charge what queries really take.
@@ -330,7 +332,7 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - A running operation is never interrupted: the one that exhausts the budget finishes, and only the next one is refused. Operations that start while a long one is still running all see the balance before it is charged, so together they can spend more than the client has; the balance then stops at zero (there is no debt).
 - `retryAfter` is the time the client needs to regain one millisecond (`window / limit` seconds, at least 1). It lets the client in again, not necessarily for an operation that takes long.
 - A multiplex has one measured time, split equally among the queries this limiter charges, rounded up to whole milliseconds: fields of different queries interleave, so their time cannot be told apart. A query refused by `Time`, and one whose key has no limit (`nil`), are not part of the split, so the time of a query with no limit is carried by the limited ones.
-- A schema may `use Time` more than once (for example per user and per IP, with different stores and keys): each limiter charges only its own. `context[:rate_limit_time]`, the response extension and `Time.headers` then hold the record of the last one.
+- A schema may `use Time` more than once, with different stores or keys (for example per user and per IP): each limiter charges only its own. `context[:rate_limit_time]`, the response extension and `Time.headers` then hold the record of the last one.
 - The clock must answer a finite number of seconds: one that does not is refused at boot, and one that breaks later raises instead of letting operations run uncharged. A clock that stands still or goes backwards charges 0.
 - Time spent before analysis finishes (parsing, validation) is charged to no one, and inside a multiplex it ends up on the queries that did run. A query that never reaches analysis (a syntax error) costs the client nothing.
 - The time is wall-clock, so it grows when the server is loaded: the same query costs a client more on a busy server. Choose `limit` with that in mind, and start in soft mode.

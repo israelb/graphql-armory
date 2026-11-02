@@ -222,7 +222,7 @@ RSpec.describe "unsized connection refusal probes" do
         use L::Points, store: L::MemoryStore.new, limit: 50, window: 3600, soft: false
       end
       root = Class.new { define_method(:cheap) { clock.advance(1); slow_log << :cheap; "ok" } }.new
-      left = -> { time_store.take("c", cost: 0, limit: 10_000, window: 3600, force: false).last }
+      left = -> { time_store.take(L::Time.bucket_key("c"), cost: 0, limit: 10_000, window: 3600, force: false).last }
 
       results = mux(schema, [{ query: "{ cheap }", root_value: nil }, { query: "{ items { nodes { name } } }" }])
       expect(code_of(results[1].to_h)).to eq([CODE])
@@ -252,7 +252,7 @@ RSpec.describe "unsized connection refusal probes" do
         use L::Time, store: time_store, limit: 10_000, window: 3600, soft: false, clock: clock
         use L::Points, store: L::MemoryStore.new, limit: 30, window: 3600, soft: false
       end
-      left = -> { time_store.take("c", cost: 0, limit: 10_000, window: 3600, force: false).last }
+      left = -> { time_store.take(L::Time.bucket_key("c"), cost: 0, limit: 10_000, window: 3600, force: false).last }
       results = mux(schema, [{ query: "{ slow }" }, { query: "{ items { nodes { name } } }" }])
       unsized_left = left.call
       results2 = mux(schema, [{ query: "{ slow }" }, { query: "{ big }" }])
