@@ -26,7 +26,7 @@ Fixes are coordinated with the reporter in a private GitHub Security Advisory. T
 
 ## How changes are reviewed
 
-The project has one maintainer today, and no second human reviewer. To make up for part of that, every change to a security rule goes through an independent verification before it is merged: a separate AI agent writes its own attacks against the change before reading the author's tests, runs them on both graphql-ruby engines and an older graphql version, and compares each with `main`. Whatever it finds is fixed or documented as a limit before the merge, and the attacks that matter stay in the test suite. The process is in [.github/VERIFICATION.md](.github/VERIFICATION.md).
+The project has one maintainer today, and no second human reviewer. To make up for part of that, every change to a security rule goes through an independent verification before it is merged: a separate AI agent writes its own attacks against the change before reading the author's tests, runs them on both graphql-ruby engines and an older graphql version, and compares each with `main`. Whatever it finds is fixed, documented as a limit, or tracked with its reproduction before the merge, and the attacks that matter stay in the test suite. The process is in [.github/VERIFICATION.md](.github/VERIFICATION.md).
 
 This is not the same as a second human reviewer. If you can review security changes regularly, say so in an issue.
 
