@@ -15,9 +15,13 @@ module GraphQL
             super
           end
 
+          # A partial runs on its own type, not the operation's root, and is left to that type's check. An invalid query
+          # keeps its validation errors (and what a rate limiter charges for them).
           def self.call(query)
+            return if defined?(GraphQL::Query::Partial) && query.is_a?(GraphQL::Query::Partial)
+
             operation = query.selected_operation
-            return unless operation
+            return unless operation && query.valid?
 
             # Query#root_type is graphql 2.5+; the schema answers the same on 2.4.
             type = query.schema.root_type_for_operation(operation.operation_type || "query")

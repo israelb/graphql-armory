@@ -134,7 +134,8 @@ module GraphQL
         def self.refuse_unobservable(type, rule, context)
           known = context.namespace(:armory)[:observable] ||= {}.compare_by_identity
           field = known.fetch(type) do
-            known[type] = live_fields(type, context).find { |each| each.resolver && (rule.observed? || observed_reason(each)) }
+            unobservable = ->(each) { each.resolver && (rule.observed? || observed_reason(each)) }
+            known[type] = live_fields(type, context, unobservable).find(&unobservable)
           end
           return unless field
 
@@ -148,18 +149,28 @@ module GraphQL
                                     "observed rule of #{owner} (#{observed_reason(field)}). Remove observe: from #{owner}, or give the field a rule of its own"
         end
 
-        # The fields merged by name, plus, for each name that has a resolver on some level below the merged one, the
-        # definition graphql-ruby serves this user: the legacy Warden skips a hidden override and serves the parent's.
-        # Only those names are asked, so a plain schema pays nothing; field blocks are not loaded.
-        def self.live_fields(type, context)
+        # The fields merged by name, plus, for each name whose shadowed definition would be refused, the definition the
+        # legacy Warden serves this user: it skips a hidden override and serves the parent's. Only those names are asked,
+        # so a type that is not observed, or has nothing shadowed to refuse, asks no policy and loads no field block.
+        # A Visibility profile never falls back.
+        def self.live_fields(type, context, unobservable)
           fields = type.all_field_definitions
+          return fields if visibility_profile?(context)
+
           levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
-          shadowed = levels.flat_map { |ancestor| ancestor.own_fields.values.flatten }.select(&:resolver) - fields
+          shadowed = levels.flat_map { |ancestor| ancestor.own_fields.values.flatten }.select(&unobservable) - fields
           return fields if shadowed.empty?
 
-          fields + shadowed.map(&:graphql_name).uniq.filter_map { |name| type.get_field(name, context) }
+          served = shadowed.map(&:graphql_name).uniq.flat_map { |name| Array(type.get_field(name, context)) }
+          fields + served
         end
         private_class_method :live_fields
+
+        def self.visibility_profile?(context)
+          defined?(GraphQL::Schema::Visibility::Profile) && context.respond_to?(:types) &&
+            context.types.is_a?(GraphQL::Schema::Visibility::Profile)
+        end
+        private_class_method :visibility_profile?
 
         # Why a field is observed: its own observe:, or `authorize: true` on an owner whose rule is observed. Nil when it is
         # not. The audit asks the same question.
