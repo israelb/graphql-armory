@@ -779,11 +779,11 @@ RSpec.describe "PR49 probes" do
     expect(store.calls).to be_empty
   end
 
-  it "preservation G5 invalid query not charged, no guard" do
+  it "preservation G5 invalid query charged once by the trace, no guard" do
     schema = build_schema(max_depth: 1, analyzers: [raiser(:on_enter_field)])
     res = run(schema, "{ nope }")
     expect(res.to_h["data"]).to be_nil
-    expect(store.calls).to be_empty
+    expect(store.calls.size).to eq(1)
   end
 
   [:before, :after].each do |where|

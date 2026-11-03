@@ -1082,11 +1082,11 @@ RSpec.describe "analysis guard probes" do
       execute_query(schema, doc, context: { rate_limit_key: "user:1", **ctx }, root_value: pq::Controls::Root.example(pq_resolved))
     end
 
-    it "security F1 raw query refused, not run, not charged" do
+    it "security F1 raw query refused, not run, charged as an invalid query" do
       result = pq_run(pq_schema, "{ secret }")
       expect(pq_resolved).to eq([])
       expect(codes(result)).to eq(["RAW_QUERY_REFUSED"])
-      expect(store.calls).to eq([])
+      expect(left).to eq(99)
     end
 
     it "security F1b known id with a raising analyzer: runs and is charged; exhausted: refused" do
@@ -1101,11 +1101,11 @@ RSpec.describe "analysis guard probes" do
       expect(codes(result)).to eq(["RATE_LIMITED"])
     end
 
-    it "security F1c unknown id refused, not charged" do
+    it "security F1c unknown id refused, charged as an invalid query" do
       result = pq_run(pq_schema, nil, operation_id: "nope")
       expect(pq_resolved).to eq([])
       expect(codes(result)).to eq(["UNKNOWN_OPERATION"])
-      expect(store.calls).to eq([])
+      expect(left).to eq(99)
     end
   end
 
@@ -1138,17 +1138,17 @@ RSpec.describe "analysis guard probes" do
     expect_not_run(result)
   end
 
-  it "preservation F5 invalid query: no store call" do
+  it "preservation F5 invalid query: the trace charges it once" do
     result = run(limiter_schema(:points, before: [GuardProbe.raiser(:result)]), "{ nope }")
     expect(codes(result).size).to eq(1)
-    expect(store.calls).to eq([])
+    expect(store.calls.size).to eq(1)
   end
 
-  it "preservation F5b invalid variables: no run, no store call" do
+  it "preservation F5b invalid variables: no run, the trace charges it once" do
     holder[:fn] = ->(_c, _a, _ch) { raise err, "no" }
     result = run(limiter_schema(:points), "query($x: Int!) { boom(x: $x) }")
     expect_not_run(result)
-    expect(store.calls).to eq([])
+    expect(store.calls.size).to eq(1)
   end
 
   it "preservation F6 a resolver's ExecutionError unchanged" do
