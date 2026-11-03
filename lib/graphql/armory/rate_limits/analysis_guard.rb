@@ -24,13 +24,14 @@ module GraphQL
         NOT_CHARGED = "This query could not be charged to its rate limit."
         LIMIT_UNKNOWN = "The limits of this query could not be computed."
 
-        # For the limiters' analyzers: records that a visit of the query reached its end. The visitor's root is the selected
-        # operation, so leaving it is the visit's last hook, and every analyzer of the visit (the multiplex ones too) has seen
-        # the whole query by then. A `complexity:` lambda raises later, in `result`.
+        # Prepended to the limiters' analyzers: records that a visit of the query reached its end. graphql-ruby calls `result`
+        # only after the whole visit, every hook of every analyzer (the multiplex ones too) included; a leave hook is not
+        # enough, since the query analyzers leave before the multiplex ones. Marked before computing anything, because a
+        # `complexity:` lambda raises inside Points' `result`.
         module Visited
-          def on_leave_operation_definition(node, parent, visitor)
-            super
+          def result
             query.context.namespace(Points::NAMESPACE)[VISITED] = true
+            super
           end
         end
 
@@ -53,7 +54,8 @@ module GraphQL
 
           kept, unknown = other_answers(query)
           unknown ||= !visited && state[MULTIPLEXED]
-          refusals += kept
+          # A lambda's AnalysisError can come back from a limiter and from a maximum alike: show it once.
+          refusals = (refusals + kept).uniq { |refusal| [refusal.message, refusal.extensions] }
           refusals.empty? && unknown ? [GraphQL::AnalysisError.new(LIMIT_UNKNOWN, extensions: { "code" => "QUERY_LIMIT_UNKNOWN" })] : refusals
         end
 

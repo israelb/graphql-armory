@@ -315,7 +315,7 @@ module GraphQL
 
         # Asks for the balance during analysis, before anything runs.
         class Analyzer < GraphQL::Analysis::Analyzer
-          include AnalysisGuard::Visited
+          prepend AnalysisGuard::Visited
 
           def result
             AnalysisGuard.answer(query, time) { time.(query) }

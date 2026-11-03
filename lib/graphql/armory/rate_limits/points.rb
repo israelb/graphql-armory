@@ -211,7 +211,7 @@ module GraphQL
 
         # graphql-ruby's own complexity analysis, then the charge.
         class Analyzer < GraphQL::Analysis::QueryComplexity
-          include AnalysisGuard::Visited
+          prepend AnalysisGuard::Visited
 
           # graphql-ruby's words when a connection has no `first:`, `last:` or page size. A client can send that, so it answers
           # an error for the client and not a server error. Nothing is charged, and any other error while scoring still raises.
