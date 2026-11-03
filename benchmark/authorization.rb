@@ -7,7 +7,8 @@
 #
 # Profile mode (no ips, no memory runs): where does the time go?
 #
-#   PROFILE=1 PROFILE_SETUP=array|relation [PROFILE_RUNS=200] [PROFILE_MODE=cpu|object] #     docker compose run --rm test bundle exec ruby benchmark/authorization.rb
+#   PROFILE=1 PROFILE_SETUP=array|relation [PROFILE_RUNS=200] [PROFILE_MODE=cpu|object] \
+#     docker compose run --rm test bundle exec ruby benchmark/authorization.rb
 #
 # Three setups answer the same query with the same 1000 invoices:
 #   plain      no authorization at all
