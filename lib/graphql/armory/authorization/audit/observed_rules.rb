@@ -13,7 +13,7 @@ module GraphQL
               next unless type.respond_to?(:fields)
 
               Definitions.fields_at_every_level(type).each do |field|
-                reason = observed_reason(field)
+                reason = Integration.observed_reason(field)
                 report(findings, "#{type.graphql_name}.#{field.graphql_name}", reason, field.resolver ? field : nil, at: field) if reason
               end
             end
@@ -29,20 +29,10 @@ module GraphQL
             findings.problem(:observed, path, "observe: #{effect}", at: at)
           end
 
-          # Its own observe:, or `authorize: true` on an owner whose rule is observed: if that owner is only a parent, no
-          # type reports its rule.
-          def self.observed_reason(field)
-            return field.armory_observe if field.respond_to?(:armory_observe) && field.armory_observe
-            return unless field.respond_to?(:armory_declared) && field.armory_declared == true
-
-            rule = field.owner.armory_rule if field.owner.respond_to?(:armory_rule)
-            rule.observe if rule&.observed?
-          end
-
           def self.unobservable(type)
             type.all_field_definitions.find(&:resolver)
           end
-          private_class_method :observed_reason, :unobservable
+          private_class_method :unobservable
 
           # Definitions holds what these fields return, not the classes that own them.
           def self.custom_introspection(schema)
