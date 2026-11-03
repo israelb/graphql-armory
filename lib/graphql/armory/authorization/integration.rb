@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "graphql/armory/authorization/integration/schema"
+require "graphql/armory/authorization/integration/root_check"
 require "graphql/armory/authorization/integration/object"
 require "graphql/armory/authorization/integration/find_by"
 require "graphql/armory/authorization/integration/field"
@@ -128,11 +129,12 @@ module GraphQL
         # resolver or a mutation can write, and a write cannot be undone, so a type holding one cannot be observed. Nor can
         # a resolver field take an observed rule from the class that declared it (`authorize: true`). Both are refused
         # here, at the type, because graphql-ruby prepares a field's arguments before the field's own check. Only what can
-        # run is read: a field a subclass overrides is not.
+        # run is read: a field a subclass overrides is not, unless the override is hidden from this user and the legacy
+        # Warden falls back to it.
         def self.refuse_unobservable(type, rule, context)
           known = context.namespace(:armory)[:observable] ||= {}.compare_by_identity
           field = known.fetch(type) do
-            known[type] = type.all_field_definitions.find { |each| each.resolver && (rule.observed? || observed_reason(each)) }
+            known[type] = live_fields(type, context).find { |each| each.resolver && (rule.observed? || observed_reason(each)) }
           end
           return unless field
 
@@ -145,6 +147,19 @@ module GraphQL
           raise ConfigurationError, "#{type.graphql_name}.#{field.graphql_name} has a resolver or a mutation, which can write, so it cannot take the " \
                                     "observed rule of #{owner} (#{observed_reason(field)}). Remove observe: from #{owner}, or give the field a rule of its own"
         end
+
+        # The fields merged by name, plus, for each name that has a resolver on some level below the merged one, the
+        # definition graphql-ruby serves this user: the legacy Warden skips a hidden override and serves the parent's.
+        # Only those names are asked, so a plain schema pays nothing; field blocks are not loaded.
+        def self.live_fields(type, context)
+          fields = type.all_field_definitions
+          levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
+          shadowed = levels.flat_map { |ancestor| ancestor.own_fields.values.flatten }.select(&:resolver) - fields
+          return fields if shadowed.empty?
+
+          fields + shadowed.map(&:graphql_name).uniq.filter_map { |name| type.get_field(name, context) }
+        end
+        private_class_method :live_fields
 
         # Why a field is observed: its own observe:, or `authorize: true` on an owner whose rule is observed. Nil when it is
         # not. The audit asks the same question.

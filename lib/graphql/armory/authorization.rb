@@ -43,6 +43,7 @@ module GraphQL
       def self.use(schema_defn, **options)
         schema_defn.extend(Integration::Schema)
         schema_defn.armory_configuration = Configuration.new(**options)
+        schema_defn.trace_with(Integration::RootCheck)
       end
     end
   end

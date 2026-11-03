@@ -525,7 +525,7 @@ RSpec.describe "PR56 verification probes" do
   end
 
   describe "documented limits, characterised only" do
-    it "[preservation] S18 an override hidden by visible? false, legacy lookup" do
+    it "[security] S18 an override hidden by visible? false, legacy lookup: refused at the type, nothing prepared" do
       tr = touch_resolver
       parent = observed_parent { field :touch, resolver: tr, authorize: true }
       hidden_field = Class.new(base_field) { def visible?(_ctx) = false }
@@ -536,6 +536,9 @@ RSpec.describe "PR56 verification probes" do
       end
       result = run(schema_for(root_of(doc: doc)), '{ doc { touch(input: "x") } }')
       emit("S18", [ran, result])
+
+      expect(ran).to eq([])
+      expect(result.to_s).to include("Doc.touch")
     end
   end
 
