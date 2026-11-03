@@ -5,14 +5,23 @@
 #   docker compose run --rm test bundle exec ruby benchmark/authorization.rb
 #   GRAPHQL_ARMORY_ENGINE=next docker compose run --rm test bundle exec ruby benchmark/authorization.rb
 #
+# Profile mode (no ips, no memory runs): where does the time go?
+#
+#   PROFILE=1 PROFILE_SETUP=array|relation [PROFILE_RUNS=200] [PROFILE_MODE=cpu|object] #     docker compose run --rm test bundle exec ruby benchmark/authorization.rb
+#
 # Three setups answer the same query with the same 1000 invoices:
 #   plain      no authorization at all
 #   array      armory, the resolver returns an Array: the scope authorizes each item, then each item is authorized
 #   relation   armory, the resolver returns a relation of 2000 invoices: SQL narrows it to 1000, then each item is authorized
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 
-require "benchmark/ips"
-require "memory_profiler"
+profiling = ENV["PROFILE"] == "1"
+if profiling
+  require "stackprof"
+else
+  require "benchmark/ips"
+  require "memory_profiler"
+end
 require "active_record"
 require "pundit"
 require "graphql/armory"
@@ -73,6 +82,19 @@ plain_root = Struct.new(:invoices)
 setups["plain"][1] = plain_root.new(own)
 
 puts "graphql #{GraphQL::VERSION}, engine #{ArmoryEngine.current}, Ruby #{RUBY_VERSION}, #{ITEMS} invoices"
+
+if profiling
+  name = "armory, #{ENV.fetch("PROFILE_SETUP", "array")}"
+  schema, root = setups.fetch(name) { abort "PROFILE_SETUP must be array or relation" }
+  query = queries.values.first
+  runs = Integer(ENV.fetch("PROFILE_RUNS", "200"))
+  mode = ENV.fetch("PROFILE_MODE", "cpu").to_sym
+  5.times { run(schema, query, root) }
+  result = StackProf.run(mode: mode, raw: true, interval: 200) { runs.times { run(schema, query, root) } }
+  puts "profile: #{name}, mode #{mode}, #{runs} runs x #{ITEMS} items"
+  StackProf::Report.new(result).print_text(false, 25)
+  exit
+end
 
 queries.each do |label, query|
   puts "\n== #{label}"

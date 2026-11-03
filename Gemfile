@@ -20,3 +20,7 @@ group :benchmark do
   gem "benchmark-ips"
   gem "memory_profiler"
 end
+
+group :development do
+  gem "stackprof"
+end
