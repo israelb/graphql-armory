@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Breaking.** `Audit::Report::Problem` and `Bypass` have one more member, `location`, so `to_a`, `to_h` and `==` against a `Problem.new(kind, path, message)` built by hand change. To upgrade: compare `kind`, `path` and `message` (or `to_s`), not the whole struct.
 - Added: the audit says the file and line of each problem and bypass. `Problem#location` and `Bypass#location` hold it as `"path:line"`, and the printed report and the baseline result add `(at path:line)` to each line. A field or an argument gives the line that declared it (with `Base`), a type, a mutation or a resolver the line of its `authorize`, an own check or a denial hook its method. The baseline ignores it, so moving code does not make an accepted problem new. Limits: `nil` for a schema built from SDL; a field declared by a helper gives the helper's line. [The audit](docs/authorization.md#the-audit).
 
 ## 0.1.0.pre10 (2026-11-03)

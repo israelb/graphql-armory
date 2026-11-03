@@ -47,6 +47,35 @@ module AuditLocations
     end
   end
 
+  # graphql-ruby's guides show a field class with its own initialize, which calls super into the plugin's.
+  class InitArgument < GraphQL::Schema::Argument
+    include Plugin::Base
+    def initialize(*args, note: nil, **kwargs, &block)
+      @note = note
+      super(*args, **kwargs, &block)
+    end
+  end
+
+  class InitField < GraphQL::Schema::Field
+    include Plugin::Base
+    argument_class InitArgument
+    def initialize(*args, permission: nil, **kwargs, &block)
+      @permission = permission
+      super(*args, **kwargs, &block)
+    end
+  end
+
+  class InitBypassed < BaseObject
+    field_class InitField
+    authorize :none, reason: "public"
+    FIELD_LINE = __LINE__ + 1
+    field :secret, String, null: true, permission: :x
+    field :find, String, null: true, authorize: :none, reason: "public", load_through_scope: false do
+      ARGUMENT_LINE = __LINE__ + 1
+      argument :thing_id, GraphQL::Types::ID, loads: NoRule, note: "x"
+    end
+  end
+
   class Query < BaseObject
     graphql_name "Query"
     authorize :none, reason: "root", covers_fields: true
@@ -57,6 +86,7 @@ module AuditLocations
     field :plain_fields, PlainFields, null: true
     field :checked, Checked, null: true
     field :loading, Loading, null: true
+    field :init_bypassed, InitBypassed, null: true
   end
 
   class Schema < GraphQL::Schema
@@ -92,8 +122,15 @@ RSpec.describe "the audit's file and line for each problem" do
   end
 
   it "gives an argument the line that declared it" do
-    problem = report.problems.find { |each| each.kind == :unscoped_load }
+    problem = report.problems.find { |each| each.kind == :unscoped_load && each.path.start_with?("Loading") }
     expect(problem.location).to eq("#{file}:#{AuditLocations::Loading::LOAD_LINE}")
+  end
+
+  it "gives a field and an argument the line that declared them when their class has its own initialize" do
+    argument = report.problems.find { |each| each.kind == :unscoped_load && each.path.start_with?("InitBypassed") }
+
+    expect(location_of(:field_without_rule, "InitBypassed.secret")).to eq("#{file}:#{AuditLocations::InitBypassed::FIELD_LINE}")
+    expect(argument.location).to eq("#{file}:#{AuditLocations::InitBypassed::ARGUMENT_LINE}")
   end
 
   it "gives a declared bypass the line that declared it" do
