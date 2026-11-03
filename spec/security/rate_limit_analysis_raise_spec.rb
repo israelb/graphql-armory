@@ -344,6 +344,143 @@ RSpec.describe "a raise during analysis, with rate limits" do
     expect(result.context[:rate_limit_points]).to include(charged: false)
   end
 
+  context "with other refusals in the same analysis" do
+    let(:nested_query_type) do
+      inner = Class.new(GraphQL::Schema::Object) do
+        graphql_name "Inner"
+        field :cheap, String, null: false
+      end
+      Class.new(query_type) { field :deep, inner, null: false, method: :itself }
+    end
+
+    define_method(:deep_schema) do |**options, &setup|
+      query = nested_query_type
+      store = self.store
+      Class.new(ArmoryEngine.base_schema) do
+        query query
+        use limits::Points, store: store, limit: 100, window: 60, soft: options.fetch(:soft, true)
+        class_exec(&setup)
+      end
+    end
+
+    let(:deep_document) { "{ guarded deep { cheap } }" }
+
+    it "keeps a max_depth refusal when a lambda the client picks raises, in soft mode" do
+      schema = deep_schema { max_depth 1 }
+
+      result = run(schema, deep_document)
+
+      expect(result.to_h["errors"].map { |error| error["message"] }.join).to include("exceeds max depth of 1")
+      expect(result.to_h).not_to have_key("data")
+      expect(resolved).to eq([])
+    end
+
+    it "keeps a max_depth refusal when another analyzer raises" do
+      other = raiser
+      schema = deep_schema do
+        max_depth 1
+        query_analyzer other
+      end
+
+      result = run(schema, "{ deep { cheap } }")
+
+      expect(result.to_h["errors"].map { |error| error["message"] }.join).to include("exceeds max depth of 1")
+      expect(resolved).to eq([])
+    end
+
+    it "keeps a max_complexity refusal when another analyzer raises" do
+      other = raiser
+      schema = deep_schema do
+        max_complexity 5
+        query_analyzer other
+      end
+
+      result = run(schema, "{ report }")
+
+      expect(result.to_h["errors"].map { |error| error["message"] }.join).to include("exceeds max complexity of 5")
+      expect(resolved).to eq([])
+    end
+
+    it "refuses when max_complexity cannot be computed, in soft mode and without showing the lambda's words" do
+      schema = deep_schema { max_complexity 500 }
+
+      result = run(schema, "{ guarded }")
+
+      expect(codes(result)).to eq(["QUERY_LIMIT_UNKNOWN"])
+      expect(result.to_h.to_s).not_to include("lambda says no")
+      expect(resolved).to eq([])
+    end
+
+    it "shows one error when a hard limiter and max_complexity both cannot answer" do
+      schema = deep_schema(soft: false) { max_complexity 500 }
+
+      expect(codes(run(schema, "{ guarded }"))).to eq(["RATE_LIMIT_NOT_CHARGED"])
+    end
+
+    it "keeps a refusal an app's analyzer returned" do
+      other = raiser
+      refusing = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { GraphQL::AnalysisError.new("app says no") } }
+      schema = deep_schema do
+        query_analyzer other
+        query_analyzer refusing
+      end
+
+      result = run(schema)
+
+      expect(result.to_h["errors"].map { |error| error["message"] }).to eq(["app says no"])
+      expect(resolved).to eq([])
+    end
+
+    it "runs a query under its maximums when another analyzer raises" do
+      other = raiser
+      schema = deep_schema do
+        max_depth 5
+        max_complexity 500
+        query_analyzer other
+      end
+
+      run(schema)
+
+      expect(resolved).to eq([:cheap])
+    end
+
+    it "stops at a timeout on the second pass, and answers it once" do
+      calls = []
+      flaky = Class.new(GraphQL::Analysis::Analyzer) do
+        define_method(:result) do
+          calls << :flaky
+          raise(calls.size == 1 ? error_class.new("first") : GraphQL::Analysis::TimeoutError.new)
+        end
+      end
+      counting = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { calls << :counted; nil } }
+      schema = deep_schema do
+        query_analyzer flaky
+        query_analyzer counting
+      end
+
+      result = run(schema)
+
+      expect(result.to_h["errors"].size).to eq(1)
+      expect(result.to_h).not_to have_key("data")
+      expect(calls).to eq(%i[flaky flaky])
+    end
+
+    it "does not analyze the document again after a timeout" do
+      runs = []
+      counting = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { runs << :counted; nil } }
+      late = raiser(GraphQL::Analysis::TimeoutError)
+      schema = deep_schema do
+        query_analyzer counting
+        query_analyzer late
+      end
+
+      result = run(schema)
+
+      expect(result.to_h).not_to have_key("data")
+      expect(runs.size).to eq(1)
+    end
+  end
+
   it "refuses when a hook of a hard limiter raises an ExecutionError, instead of serving" do
     hook = ->(_error, _query) { raise error_class, "hook says no" }
     broken = Class.new(limits::MemoryStore) { def take(*, **) = raise(IOError, "down") }.new

@@ -1123,14 +1123,14 @@ RSpec.describe "analysis guard probes" do
     expect(left).to eq(60)
   end
 
-  xit "security F4 max_depth refusal + other analyzer raising: max_depth stands" do
+  it "security F4 max_depth refusal + other analyzer raising: max_depth stands" do
     schema = limiter_schema(:points, before: [GuardProbe.raiser(:result)]).tap { |s| s.max_depth(1) }
     result = run(schema, "{ deep { cheap } }")
     warn "F4 #{result.to_h}"
     expect_not_run(result)
   end
 
-  xit "security F4b max_depth refusal + soft Points with a raising lambda the client picks: max_depth stands" do
+  it "security F4b max_depth refusal + soft Points with a raising lambda the client picks: max_depth stands" do
     holder[:fn] = ->(_c, _a, _ch) { raise err, "no" }
     schema = limiter_schema(:points, soft: true).tap { |s| s.max_depth(1) }
     result = run(schema, "{ boom deep { cheap } }")
