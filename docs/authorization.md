@@ -297,7 +297,7 @@ puts result.new_problems
 exit(result.passes? ? 0 : 1)
 ```
 
-`Class.new(AppSchema)` leaves `AppSchema` without the plugin, but `include(z::Base)` changes your base classes for the whole process, so its queries no longer behave as in production. That is why the script runs alone. Name your own classes and your user key (`z::Adapters::Pundit.new(user_key: :viewer)` if it is not `current_user`). A simulation measures; it protects nothing until the plugin is really installed.
+`Class.new(AppSchema)` leaves `AppSchema` without the plugin, but `include(z::Base)` changes your base classes for the whole process, so its queries no longer behave as in production. That is why the script runs alone. Name your own classes and your user key (`z::Adapters::Pundit.new(user_key: :viewer)` if it is not `current_user`). The first run stops with an error if an undeclared own check or hook remains: declare it or remove it, then run it again. A simulation measures; it protects nothing until the plugin is really installed.
 
 What to do first with a long list:
 
