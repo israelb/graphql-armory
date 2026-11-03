@@ -22,6 +22,8 @@ RSpec.describe "runtime store probes" do
   doc_path = File.expand_path("../../docs/persisted-queries.md", __dir__)
   doc_path = "#{Dir.pwd}/docs/persisted-queries.md" unless File.exist?(doc_path)
 
+  before { skip "REDIS_URL is not set (docker compose and CI set it)" if ENV["REDIS_URL"].to_s.empty? && ENV["CI"].to_s.empty? }
+
   let(:errors) { [] }
   let(:signals) { [] }
   let(:ran) { [] }

@@ -271,6 +271,41 @@ expect(AppSchema).to be_fully_authorized(baseline: "config/graphql_armory_baseli
 
 Run `audit_baseline` again after fixing problems: on a file that exists it only removes what is gone, and it never adds. To accept a new problem, edit the file by hand, so it shows in the pull request: add its kind, path and message as the output prints them; `count` and `covers` may be left out, and then the entry accepts one problem that reaches nothing, so run `audit_baseline` afterwards to fill them in. The file holds each problem's kind, path, message and count, and the names it reaches (`covers`), and no data of the app. Removing what a problem reaches is fine: running `audit_baseline` narrows the entry.
 
+### Measuring before you adopt
+
+With no plugin, the audit reports little more than `:plugin` and each base class without `Base`. To see the real list, audit the schema as if it had adopted the plugin, without touching what runs in production:
+
+```ruby
+# script/armory_audit.rb. Run it on its own, never in the process of your app or of your other specs.
+require_relative "../config/environment"
+Rails.application.eager_load!
+
+z = GraphQL::Armory::Authorization
+[Types::BaseObject, Types::BaseField, Types::BaseArgument, Types::BaseInputObject, Mutations::BaseMutation].each { |base| base.include(z::Base) }
+Types::BaseObject.default_action(:read)
+
+simulated = Class.new(AppSchema) do
+  use z, adapter: :pundit,
+         own_checks: { Types::BaseField => { authorized?: "adds the status check, then calls super" } }
+end
+
+path = "config/graphql_armory_baseline.json"
+report = z::Audit.(simulated)
+z::Audit::Baseline.write(report, path) unless File.exist?(path) # once; commit the file
+result = z::Audit::Baseline.load(path).(report)
+puts result.new_problems
+exit(result.passes? ? 0 : 1)
+```
+
+`Class.new(AppSchema)` leaves `AppSchema` without the plugin, but `include(z::Base)` changes your base classes for the whole process, so its queries no longer behave as in production. That is why the script runs alone. Name your own classes and your user key (`z::Adapters::Pundit.new(user_key: :viewer)` if it is not `current_user`). A simulation measures; it protects nothing until the plugin is really installed.
+
+What to do first with a long list:
+
+1. **`:hook` and `:own_check`.** A baseline refuses them. Remove the method, or declare it with its reason. A declaration is your word: the audit does not read whether your check runs.
+2. **`:unscoped_list` and `:unscoped_load`.** These reach data of other users once a rule is in place.
+3. **`:no_rule` on mutations, with `:field_without_rule` on their payloads.** Without a rule, the field of a payload is denied: when the mutation is public and writes, the client gets `null` and cannot tell whether it worked. A rule on the mutation covers its payload, and a public one declares `authorize :none, reason: "...", covers_fields: true`.
+4. **`:model`.** Usually the longest part of the list, and the slowest: each type needs a model and a policy.
+
 ### Redefined fields and arguments
 
 When a field is hidden from a user, by `visible?` or anything else, and the request carries no visibility profile, graphql-ruby does not answer "no such field": it looks for another definition of that name and serves it. So this rule does not run for a user the child's field is hidden from:

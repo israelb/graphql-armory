@@ -407,8 +407,9 @@ RSpec.describe "Adoption fixes probes" do
     Dir.mktmpdir do |dir|
       path = File.join(dir, "script.rb")
       File.write(path, script)
-      output, = Open3.capture2e("bundle", "exec", "ruby", "-I", File.join(root_dir, "lib"), path, chdir: dir)
-      output
+      # stdout only: a Bundler warning on stderr must not change what the probe reads. Stderr is kept for a crash.
+      output, errors, status = Open3.capture3("bundle", "exec", "ruby", "-I", File.join(root_dir, "lib"), path, chdir: dir)
+      status.success? ? output : output + errors
     end
   end
 
