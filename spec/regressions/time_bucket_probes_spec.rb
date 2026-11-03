@@ -19,7 +19,10 @@ RSpec.describe "Time's own bucket: probes" do
   let(:limiter_clock) { l::Clock::Substitute.new }
   let(:store_now) { [1_000.0] }
   let(:memory) { l::MemoryStore.new(clock: -> { store_now[0] }) }
-  let(:redis) { Redis.new(url: ENV.fetch("REDIS_URL")) }
+  let(:redis) do
+    skip "REDIS_URL is not set (docker compose and CI set it)" if ENV["REDIS_URL"].to_s.empty? && ENV["CI"].to_s.empty?
+    Redis.new(url: ENV.fetch("REDIS_URL"))
+  end
   let(:prefix) { "armory-probe:#{SecureRandom.hex(8)}:" }
   let(:redis_store) { l::RedisStore.new(redis: redis, prefix: prefix, clock: -> { store_now[0] }) }
   let(:resolved) { [] }

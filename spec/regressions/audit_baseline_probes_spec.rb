@@ -315,8 +315,9 @@ RSpec.describe "Audit baseline probes" do
     define_method(:script) do |body|
       file = File.join(@dir, "s#{rand(10**8)}.rb")
       File.write(file, "require 'graphql/armory'\nZ = GraphQL::Armory::Authorization\n#{body}")
-      out, status = Open3.capture2e("bundle", "exec", "ruby", "-I", File.join(root_dir, "lib"), file, chdir: root_dir)
-      [out, status.exitstatus]
+      # stdout only: a Bundler warning on stderr must not change what the probe reads. Stderr is kept for a crash.
+      out, errors, status = Open3.capture3("bundle", "exec", "ruby", "-I", File.join(root_dir, "lib"), file, chdir: root_dir)
+      [status.success? ? out : out + errors, status.exitstatus]
     end
 
     named = <<~'RB'
