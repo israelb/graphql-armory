@@ -84,9 +84,26 @@ module GraphQL
 
       attr_reader :columns
 
-      # Checks the relation and its ordering; resolvers go through here.
-      def self.build(relation, plain_cursors: false)
+      # Checks the encoder when the schema loads, and keeps checking any encoder set later on it or on a subclass. Put it
+      # below `cursor_encoder`: graphql-ruby runs `use` at once, with no hook for the end of the class body.
+      def self.use(schema, plain_cursors: false)
         raise ConfigurationError, "plain_cursors: must be true or false, got #{plain_cursors.inspect}" unless [true, false].include?(plain_cursors)
+
+        unless plain_cursors
+          if schema.cursor_encoder == GraphQL::Schema::Base64Encoder
+            raise ConfigurationError, "no cursor_encoder is set on this schema: put cursor_encoder above `use GraphQL::Armory::Keyset`, or pass plain_cursors: true"
+          end
+
+          EncoderCheck.(schema.cursor_encoder)
+        end
+        schema.extend(SchemaChecks)
+        schema.armory_keyset_plain_cursors = plain_cursors
+      end
+
+      # Checks the relation and its ordering; resolvers go through here. With no `plain_cursors:`, the schema's setting
+      # decides when the page loads.
+      def self.build(relation, plain_cursors: nil)
+        raise ConfigurationError, "plain_cursors: must be true, false or nil, got #{plain_cursors.inspect}" unless [true, false, nil].include?(plain_cursors)
         raise ConfigurationError, "a keyset connection needs an ActiveRecord relation, got #{relation.class}" unless relation.respond_to?(:order_values)
 
         new(relation, columns: Ordering.(relation), plain_cursors: plain_cursors)
@@ -181,9 +198,11 @@ module GraphQL
       end
 
       def refuse_plain_cursors
+        schema = context&.schema
+        return if @plain_cursors.nil? && schema.respond_to?(:armory_keyset_plain_cursors) && schema.armory_keyset_plain_cursors
         return if @plain_cursors
 
-        encoder = context&.schema&.cursor_encoder
+        encoder = schema&.cursor_encoder
         return unless encoder.nil? || encoder == GraphQL::Schema::Base64Encoder
 
         raise ConfigurationError,
@@ -277,3 +296,4 @@ module GraphQL
 end
 
 require "graphql/armory/keyset/controls"
+require "graphql/armory/keyset/encoder_check"
