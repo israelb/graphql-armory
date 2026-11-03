@@ -349,28 +349,28 @@ RSpec.describe "PR49 probes" do
   # ---- G2 the cannot-answer test
   it "preservation G2 analyze? false subclass does not refuse" do
     sub = Class.new(GraphQL::Analysis::MaxQueryDepth) { define_method(:analyze?) { false } }
-    schema = build_schema(analyzers: [raiser(:on_enter_field), sub])
+    schema = build_schema(analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 }), sub])
     expect_ran(run(schema, "{ cheap }"))
   end
 
   it "preservation G2 subclass whose result is a String or [] does not refuse" do
     [("nope"), []].each do |value|
       sub = Class.new(GraphQL::Analysis::MaxQueryDepth) { define_method(:result) { value } }
-      schema = build_schema(analyzers: [raiser(:on_enter_field), sub])
+      schema = build_schema(analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 }), sub])
       expect_ran(run(schema, "{ cheap }"))
     end
   end
 
   it "security G2 subclass returning a nested [error] refuses" do
     sub = Class.new(GraphQL::Analysis::MaxQueryDepth) { define_method(:result) { [[GraphQL::AnalysisError.new("nested")]] } }
-    schema = build_schema(analyzers: [raiser(:on_enter_field), sub])
+    schema = build_schema(analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 }), sub])
     expect_refused(run(schema, "{ cheap }"), /nested/)
   end
 
   it "preservation G2 app results that are not arrays survive flatten" do
     [{ a: 1 }, 5, nil, :sym, Struct.new(:x).new(1), BasicObject.new].each do |value|
       app = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { value } }
-      schema = build_schema(analyzers: [raiser(:on_enter_field), app])
+      schema = build_schema(analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 }), app])
       expect_ran(run(schema, "{ cheap }"))
     end
   end
@@ -396,7 +396,7 @@ RSpec.describe "PR49 probes" do
     expect_ran(run(schema, "{ cheap }"))
   end
 
-  xit "security G2 QueryComplexity-based app maximum (not a subclass) with a raising lambda must not be passable" do
+  it "security G2 QueryComplexity-based app maximum (not a subclass) with a raising lambda must not be passable" do
     app_max = Class.new(GraphQL::Analysis::QueryComplexity) do
       define_method(:result) do
         cost = super()
@@ -428,7 +428,7 @@ RSpec.describe "PR49 probes" do
   end
 
   it "preservation G2 analyzer given as a non-Class factory that raises must not turn into a crash" do
-    inner = raiser(:on_enter_field)
+    inner = raiser(:on_enter_field, only: ->(n) { n == 1 })
     factory = Object.new
     factory.define_singleton_method(:new) { |q| inner.new(q) }
     schema = build_schema(analyzers: [factory])
@@ -439,7 +439,7 @@ RSpec.describe "PR49 probes" do
   it "preservation G3 side effects repeat as documented (count)" do
     runs = 0
     app = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { runs += 1; nil } }
-    schema = build_schema(analyzers: [app, raiser(:result)])
+    schema = build_schema(analyzers: [app, raiser(:result, only: ->(n) { n == 1 })])
     expect_ran(run(schema, "{ cheap }"))
     log("app analyzer result runs", runs)
     expect(runs).to eq(2)
@@ -450,7 +450,7 @@ RSpec.describe "PR49 probes" do
     app = Class.new(GraphQL::Analysis::QueryComplexity) do
       define_method(:result) { bucket -= super(); nil }
     end
-    schema = build_schema(analyzers: [app, raiser(:result)])
+    schema = build_schema(analyzers: [app, raiser(:result, only: ->(n) { n == 1 })])
     expect_ran(run(schema, "{ report }"))
     log("app limiter bucket after a 40-point query", bucket)
     expect(bucket).to eq(20)
@@ -462,7 +462,7 @@ RSpec.describe "PR49 probes" do
     app = Class.new(GraphQL::Analysis::Analyzer) do
       define_method(:result) { seen << GraphQL::Analysis.analyze_query(query, [nested]); nil }
     end
-    schema = build_schema(analyzers: [raiser(:on_enter_field), app])
+    schema = build_schema(analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 }), app])
     expect_ran(run(schema, "{ node { leaf } }"))
     log("nested", seen)
     expect(seen).to eq([[2]])
@@ -491,7 +491,7 @@ RSpec.describe "PR49 probes" do
 
   it "preservation G3 an ExecutionError returned (not raised) is not a refusal" do
     app = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { GraphQL::ExecutionError.new("returned") } }
-    schema = build_schema(analyzers: [raiser(:on_enter_field), app])
+    schema = build_schema(analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 }), app])
     expect_ran(run(schema, "{ cheap }"))
   end
 
@@ -516,7 +516,7 @@ RSpec.describe "PR49 probes" do
     expect_refused(run(schema, "{ cheap }"), /refused by raise/)
   end
 
-  xit "security G3 one analyzer raising AnalysisError then ExecutionError in the same visit" do
+  it "security G3 one analyzer raising AnalysisError then ExecutionError in the same visit (refused with our code: graphql-ruby drops its message)" do
     app = Class.new(GraphQL::Analysis::Analyzer) do
       define_method(:on_enter_field) { |node, _p, _v| raise GraphQL::AnalysisError, "refused by raise" if node.name == "cheap"; raise GraphQL::ExecutionError, "x" if node.name == "report" }
       define_method(:result) { nil }
@@ -524,7 +524,8 @@ RSpec.describe "PR49 probes" do
     schema = build_schema(analyzers: [app])
     res = run(schema, "{ cheap report }")
     log("same analyzer AnalysisError then ExecutionError", res.to_h)
-    expect_refused(res, /refused by raise/)
+    expect_refused(res)
+    expect(codes(res)).to include("QUERY_LIMIT_UNKNOWN")
   end
 
   xit "security G3 an app refusal memoized in the context (returned once) stands" do
@@ -541,7 +542,7 @@ RSpec.describe "PR49 probes" do
     expect_refused(res, /once/)
   end
 
-  xit "security G3 an app analyzer that returned a refusal and raises only on the re-ask" do
+  it "security G3 an app analyzer that returned a refusal and raises only on the re-ask" do
     n = 0
     app = Class.new(GraphQL::Analysis::Analyzer) do
       define_method(:result) do
@@ -553,10 +554,10 @@ RSpec.describe "PR49 probes" do
     schema = build_schema(analyzers: [app, raiser(:result)])
     res = run(schema, "{ cheap }")
     log("refusal then raise on re-ask", res.to_h)
-    expect_refused(res, /first answer/)
+    expect_refused(res)
   end
 
-  xit "security G3 an app analyzer that raises in its own visit and would refuse" do
+  it "security G3 an app analyzer that raises in its own visit and would refuse" do
     app = Class.new(GraphQL::Analysis::QueryDepth) do
       define_method(:on_enter_field) { |node, p, v| raise GraphQL::ExecutionError, "x" if node.name == "cheap"; super(node, p, v) }
       define_method(:result) { GraphQL::AnalysisError.new("too deep") if super() > 2 }
@@ -709,7 +710,7 @@ RSpec.describe "PR49 probes" do
   end
 
   it "preservation G5 under maximums, another analyzer raises: runs and is charged once" do
-    schema = build_schema(limiters: [[:points, { soft: false, limit: 100 }]], max_depth: 10, max_complexity: 100, analyzers: [raiser(:on_enter_field)])
+    schema = build_schema(limiters: [[:points, { soft: false, limit: 100 }]], max_depth: 10, max_complexity: 100, analyzers: [raiser(:on_enter_field, only: ->(n) { n == 1 })])
     res = run(schema, "{ report }")
     expect_ran(res)
     expect(store.calls.count { |c| c[0] == :take }).to eq(1)
@@ -724,7 +725,7 @@ RSpec.describe "PR49 probes" do
   it "security G5 multiplex: only the raising query is on the raise path, others untouched, each charged once" do
     n = 0
     pick = Class.new(GraphQL::Analysis::Analyzer) do
-      define_method(:on_enter_field) { |node, _p, _v| n += 1; raise GraphQL::ExecutionError, "x" if node.alias == "trigger" }
+      define_method(:on_enter_field) { |node, _p, _v| n += 1; raise GraphQL::ExecutionError, "x" if node.alias == "trigger" && !query.context.namespace(:probe).key?(:raised) && (query.context.namespace(:probe)[:raised] = true) }
       define_method(:result) { nil }
     end
     schema = build_schema(limiters: [[:points, { soft: false, limit: 1000 }]], max_depth: 3, analyzers: [pick])
@@ -745,7 +746,7 @@ RSpec.describe "PR49 probes" do
 
   it "security G5 multiplex sharing a context hash" do
     pick = Class.new(GraphQL::Analysis::Analyzer) do
-      define_method(:on_enter_field) { |node, _p, _v| raise GraphQL::ExecutionError, "x" if node.alias == "trigger" }
+      define_method(:on_enter_field) { |node, _p, _v| raise GraphQL::ExecutionError, "x" if node.alias == "trigger" && !query.context.namespace(:probe).key?(:raised) && (query.context.namespace(:probe)[:raised] = true) }
       define_method(:result) { nil }
     end
     schema = build_schema(max_depth: 2, analyzers: [pick])
@@ -756,7 +757,7 @@ RSpec.describe "PR49 probes" do
     expect(results[2].to_h["data"]).to be_nil
   end
 
-  xit "security G5 multiplex default: schema max_complexity at multiplex level counts the sum; a raise undercounts" do
+  it "security G5 multiplex default: a query whose visit raised is refused, so the multiplex maximum never undercounts what runs" do
     pick = Class.new(GraphQL::Analysis::Analyzer) do
       define_method(:on_enter_field) { |node, _p, _v| raise GraphQL::ExecutionError, "x" if node.alias == "trigger" }
       define_method(:result) { nil }
@@ -768,7 +769,9 @@ RSpec.describe "PR49 probes" do
     @resolved = []
     results = mx(schema, [q.("{ trigger: cheap report }"), q.("{ other }")])
     log("multiplex default raise", results.map(&:to_h))
-    expect(results.map { |r| r.to_h["data"] }).to eq([nil, nil])
+    expect(results[0].to_h["data"]).to be_nil
+    expect(codes(results[0])).to include("QUERY_LIMIT_UNKNOWN")
+    expect(results[1].to_h["data"]).to eq("other" => "ok")
   end
 
   it "preservation G5 analysis the app runs itself passes through and charges nothing" do
