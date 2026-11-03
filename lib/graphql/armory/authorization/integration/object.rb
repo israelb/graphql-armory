@@ -64,7 +64,7 @@ module GraphQL
             rule = armory_rule
             return false if rule.nil?
 
-            Integration.refuse_unobservable(self, context) if rule.observed?
+            Integration.refuse_unobservable(self, rule, context)
             Integration.allowed?(object, Integration.with_owner_model(rule, self), context) && super
           rescue GraphQL::UnauthorizedError
             raise

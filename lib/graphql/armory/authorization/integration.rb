@@ -125,14 +125,35 @@ module GraphQL
         private_class_method :declared_model
 
         # Observing a type opens the only check that stands before everything inside it, whatever class its fields are. A
-        # resolver or a mutation can write, and a write cannot be undone, so a type holding one cannot be observed.
-        def self.refuse_unobservable(type, context)
+        # resolver or a mutation can write, and a write cannot be undone, so a type holding one cannot be observed. Nor can
+        # a resolver field take an observed rule from the class that declared it (`authorize: true`). Both are refused
+        # here, at the type, because graphql-ruby prepares a field's arguments before the field's own check. Only what can
+        # run is read: a field a subclass overrides is not.
+        def self.refuse_unobservable(type, rule, context)
           known = context.namespace(:armory)[:observable] ||= {}.compare_by_identity
-          field = known.fetch(type) { known[type] = type.all_field_definitions.find(&:resolver) }
+          field = known.fetch(type) do
+            known[type] = type.all_field_definitions.find { |each| each.resolver && (rule.observed? || observed_reason(each)) }
+          end
           return unless field
 
-          raise ConfigurationError, "#{type.graphql_name} cannot be observed: its field #{field.graphql_name} has a resolver or a mutation, which can write. " \
-                                    "Remove observe:, or put it on its plain fields"
+          if rule.observed?
+            raise ConfigurationError, "#{type.graphql_name} cannot be observed: its field #{field.graphql_name} has a resolver or a mutation, which can write. " \
+                                      "Remove observe:, or put it on its plain fields"
+          end
+
+          owner = field.owner.graphql_name
+          raise ConfigurationError, "#{type.graphql_name}.#{field.graphql_name} has a resolver or a mutation, which can write, so it cannot take the " \
+                                    "observed rule of #{owner} (#{observed_reason(field)}). Remove observe: from #{owner}, or give the field a rule of its own"
+        end
+
+        # Why a field is observed: its own observe:, or `authorize: true` on an owner whose rule is observed. Nil when it is
+        # not. The audit asks the same question.
+        def self.observed_reason(field)
+          return field.armory_observe if field.respond_to?(:armory_observe) && field.armory_observe
+          return unless field.respond_to?(:armory_declared) && field.armory_declared == true
+
+          rule = field.owner.armory_rule if field.owner.respond_to?(:armory_rule)
+          rule.observe if rule&.observed?
         end
 
         # One Authorize per query: building it (and its memo and telemetry) once per object is pure overhead.
