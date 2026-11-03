@@ -49,7 +49,7 @@ class AppSchema < GraphQL::Schema
 end
 ```
 
-It probes the encoder, and refuses one that does not give back what it encoded, leaves the text readable (plain, Base64 or hex, also behind a prefix, ROT13, reversed), changes only part of its output when the input changes (a fixed key, or a real cipher with a fixed nonce), or decodes forged text. Any encoder set later on that schema or on a subclass goes through the same check.
+It probes the encoder, and refuses one that does not give back what it encoded, leaves the text readable (plain, Base64 or hex, also behind a prefix, ROT13, reversed), changes only part of its output when the input changes (a fixed key, or a real cipher with a fixed nonce or IV), or decodes forged text. Any encoder set later on that schema or on a subclass goes through the same check.
 
 `use GraphQL::Armory::Keyset, plain_cursors: true` turns the check off and makes readable cursors the schema's default. Then `Keyset.build(relation)` needs no option of its own, and an explicit `plain_cursors:` on `build` still wins.
 
@@ -106,7 +106,8 @@ Errors:
 - With no `use`, the encoder check runs on the first page and only knows the default Base64 encoder: a custom encoder that does not encrypt passes unnoticed.
 - With `use`, the check runs when the schema class loads, which is not boot if your app autoloads it lazily, and it cannot prove encryption: a keyed cipher that fails none of the probes passes, sound or not. A keyset cursor is only as private as your `cursor_encoder`.
 - The check calls your encoder when the schema loads, so an encoder whose key is not there yet (during `assets:precompile`, or set in a later initializer) is refused. Fix the load order, or leave out `use` for that step: the check on the first page stays.
-- `Encoder.versioned(New, Encoder::Legacy)` is refused, because `Legacy` decodes forged Base64. During such a migration a client can make its own cursors, so state it with `plain_cursors: true`.
+- Every member of an `Encoder.versioned` chain is checked on its own, because each one decodes what a client sends. `Encoder.versioned(New, Encoder::Legacy)` is refused: during such a migration a client can read and make its own cursors, so state it with `plain_cursors: true`.
+- `use` checks the encoders set after it. A subclass that already set its own encoder before `use` ran on its parent is not checked: put `use` in the base schema, before any subclass is defined.
 - A `Keyset` subclass that overrides `encode` or `decode` is not checked. Setting the encoder through `instance_variable_set` is not checked.
 - With `plain_cursors: true` a client can read the ordering values and forge a cursor. It stays inside the scope and its values are bound, never interpolated, but it can probe those columns.
 - A forged value on a plain cursor must have the form the column's own cursors have (an Integer, a plain decimal, an ISO 8601 date or time) or it is an invalid cursor. A forged value of the right form is honoured: it pages from there.

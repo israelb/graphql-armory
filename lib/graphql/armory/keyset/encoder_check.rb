@@ -12,22 +12,30 @@ module GraphQL
         NEEDLE = "graphql-armory-probe"
         # Shaped like a real cursor, because an encoder may parse what it is given. They differ in their first value.
         PROBE = JSON.generate({ "v" => 1, "o" => "0" * 32, "k" => ["#{NEEDLE}-values"] }).freeze
-        OTHER = PROBE.sub('"v":1', '"v":2').freeze
+        # Differ from PROBE near the start and at the end: a chained mode with a fixed IV changes every block after a change
+        # near the start, and only the last block after a change at the end.
+        OTHERS = [PROBE.sub('"v":1', '"v":2'), PROBE.sub('-values"', '-valuez"')].map(&:freeze).freeze
 
         def self.call(encoder)
           new.(encoder)
         end
 
         def call(encoder)
+          # Every member of a chain decodes what a client sends, so each one is checked on its own.
+          encoder.encoders.each { |member| call(member) } if encoder.is_a?(Encoder::Versioned)
           first = encoded(encoder, PROBE)
           refuse("does not give back what it encoded") unless decoded(encoder, first) == PROBE
           refuse("leaves the cursor readable: it holds the ordering values") if readable?(first)
-          refuse("changes only part of its output when the input changes, as a fixed key or a fixed nonce does") if local?(first, encoded(encoder, OTHER))
+          if OTHERS.any? { |other| local?(first, encoded(encoder, other)) }
+            refuse("changes only part of its output when the input changes, as a fixed key or a fixed nonce does")
+          end
           refuse("decodes forged text, so a client can make its own cursors") if forged?(encoder)
           nil
-        rescue ConfigurationError
-          raise
-        rescue StandardError => error
+        rescue ConfigurationError => error
+          raise if error.equal?(@refusal)
+
+          refuse("could not be probed: #{error.class}")
+        rescue StandardError, NotImplementedError => error
           # The class only: an encoder's message may hold a key.
           refuse("could not be probed: #{error.class}")
         end
@@ -51,10 +59,12 @@ module GraphQL
           end
         end
 
-        # Each long run of Base64 or hex inside the output, so a prefix does not hide it.
+        # Each long run of Base64 or hex inside the output, decoded from every offset, so a prefix of any length does not hide it.
         def unpacked(form)
-          base64 = form.scan(%r{[A-Za-z0-9+/_-]{16,}}).map { |run| run.tr("-_", "+/").unpack1("m").b }
-          hex = form.scan(/\h{16,}/).map { |run| [run].pack("H*").b }
+          base64 = form.scan(%r{[A-Za-z0-9+/_-]{16,}}).flat_map do |run|
+            (0..3).map { |offset| run[offset..].tr("-_", "+/").unpack1("m").b }
+          end
+          hex = form.scan(/\h{16,}/).flat_map { |run| (0..1).map { |offset| [run[offset..]].pack("H*").b } }
           base64 + hex
         end
 
@@ -73,10 +83,13 @@ module GraphQL
           end
         end
 
+        # Remembers its own refusal, so an encoder that raises a ConfigurationError of its own is named by class, like any other.
         def refuse(what)
-          raise ConfigurationError,
-                "this cursor_encoder #{what}. A keyset cursor holds the row's ordering values: use a GraphQL::Armory::Encoder " \
-                "subclass, or `use GraphQL::Armory::Keyset, plain_cursors: true` if those values are not secret"
+          @refusal = ConfigurationError.new(
+            "this cursor_encoder #{what}. A keyset cursor holds the row's ordering values: use a GraphQL::Armory::Encoder " \
+            "subclass, or `use GraphQL::Armory::Keyset, plain_cursors: true` if those values are not secret"
+          )
+          raise @refusal
         end
       end
 

@@ -85,10 +85,10 @@ RSpec.describe "checking the cursor encoder when the schema loads" do
     }
   end
 
-  it "refuses a chain that decodes forged Base64" do
+  it "refuses a chain with Legacy, which every client can read and forge" do
     chain = GraphQL::Armory::Encoder.versioned(armory_encoder, GraphQL::Armory::Encoder::Legacy)
 
-    expect { schema_with(chain) }.to raise_error(keyset::ConfigurationError, /forged/)
+    expect { schema_with(chain) }.to raise_error(keyset::ConfigurationError, /cursor_encoder/)
     expect { schema_with(chain, plain_cursors: true) }.not_to raise_error
   end
 
