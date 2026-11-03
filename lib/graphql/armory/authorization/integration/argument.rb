@@ -34,10 +34,13 @@ module GraphQL
             @armory_model = model
             @armory_visible_when = visible_when&.to_sym
             @armory_override_reason = override_reason
+            @armory_location = Location.declared
             Rule.none(reason: reason) if authorize == :none
             super(*args, **kwargs, &block)
           end
 
+          # Where the app declared this argument, for the audit.
+          attr_reader :armory_location
           attr_reader :armory_declared, :armory_reason, :armory_visible_when, :armory_override_reason
 
           def armory_model

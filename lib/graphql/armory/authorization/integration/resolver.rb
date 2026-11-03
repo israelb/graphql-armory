@@ -24,8 +24,12 @@ module GraphQL
             raise ArgumentError, "observe: does not apply to a mutation or a resolver: what it runs cannot be undone" if options.key?(:observe)
 
             @armory_on_denied = on_denied
+            @armory_rule_location = Location.declared
             @armory_rule = Rule.new(action, reason: reason, **options)
           end
+
+          # Where this class declared its own rule, for the audit; nil when it has none of its own.
+          attr_reader :armory_rule_location
 
           def armory_rule
             @armory_rule || (superclass.armory_rule if superclass.respond_to?(:armory_rule))

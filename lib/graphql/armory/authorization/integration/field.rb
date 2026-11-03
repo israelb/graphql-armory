@@ -35,11 +35,15 @@ module GraphQL
             @armory_reason = reason
             @armory_visible_when = visible_when&.to_sym
             @armory_load_through_scope = load_through_scope
+            # Before `super`, which runs the block that declares the field's arguments.
+            @armory_location = Location.declared
             Rule.none(reason: reason) if authorize == :none
             super(*args, **kwargs, &block)
             extension(Integration::FindBy, key: find_by) if find_by
           end
 
+          # Where the app declared this field, for the audit.
+          attr_reader :armory_location
           attr_reader :armory_declared, :armory_reason, :armory_observe, :armory_visible_when, :armory_override_reason
 
           def armory_load_through_scope?

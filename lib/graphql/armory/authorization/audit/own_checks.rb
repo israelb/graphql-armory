@@ -71,7 +71,7 @@ module GraphQL
             readers.each { |reader| note_class_check(reader, :reauthorize_scoped_objects) }
 
             setter = reauthorization_setter(type)
-            @found[[setter, :reauthorize_scoped_objects]] = "#{setter.name || setter.inspect}.reauthorize_scoped_objects" if setter&.instance_variable_get(:@reauthorize_scoped_objects) == false
+            @found[[setter, :reauthorize_scoped_objects]] = ["#{setter.name || setter.inspect}.reauthorize_scoped_objects", setter] if setter&.instance_variable_get(:@reauthorize_scoped_objects) == false
           end
 
           # The nearest that set the value, read from the classes so no method of the app runs: graphql-ruby's reader follows
@@ -105,23 +105,23 @@ module GraphQL
           def note_own_check(klass, method, name, separator)
             while method
               holder = LibraryMethods.holder_of(klass, method)
-              @found[[holder, name]] = "#{holder.name || holder.inspect}#{separator}#{name}" unless LibraryMethods.library_method?(method, holder, GRAPHQL_RUBY_PATH, ARMORY_PATH)
+              @found[[holder, name]] = ["#{holder.name || holder.inspect}#{separator}#{name}", method] unless LibraryMethods.library_method?(method, holder, GRAPHQL_RUBY_PATH, ARMORY_PATH)
               method = method.super_method
             end
           end
 
           def report(declared)
-            @found.each do |(holder, name), path|
+            @found.each do |(holder, name), (path, method)|
               reason = declared.fetch(holder, {})[name]
-              next @findings.bypass(path, reason) if reason
+              next @findings.bypass(path, reason, at: method) if reason
 
-              @findings.problem(:own_check, path, "#{risk(name)}. Remove it, or declare it in own_checks: with a reason")
+              @findings.problem(:own_check, path, "#{risk(name)}. Remove it, or declare it in own_checks: with a reason", at: method)
             end
             declared.each do |holder, methods|
               methods.each_key do |name|
                 next if @found.key?([holder, name])
 
-                @findings.problem(:own_check, "#{holder.name || holder.inspect} #{name}", "named in own_checks: but no check of the schema is defined there: remove it from the option")
+                @findings.problem(:own_check, "#{holder.name || holder.inspect} #{name}", "named in own_checks: but no check of the schema is defined there: remove it from the option", at: holder)
               end
             end
           end

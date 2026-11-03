@@ -11,16 +11,17 @@ module GraphQL
             @bypasses = []
           end
 
-          def problem(kind, path, message)
-            @problems << Report::Problem.new(kind, path, message)
+          # `at:` is what the problem is about (a type, a field, an argument or a method), for its file and line.
+          def problem(kind, path, message, at: nil)
+            @problems << Report::Problem.new(kind, path, message, Location.of(at))
           end
 
           def problem?(kind, path = nil)
             @problems.any? { |problem| problem.kind == kind && (path.nil? || problem.path == path) }
           end
 
-          def bypass(path, reason)
-            @bypasses << Report::Bypass.new(path, reason)
+          def bypass(path, reason, at: nil)
+            @bypasses << Report::Bypass.new(path, reason, Location.of(at))
           end
 
           def report(reach = nil)

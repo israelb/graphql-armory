@@ -220,6 +220,13 @@ load "tasks/graphql_armory.rake"
 
 **What it reports.** Each problem has a `kind`, a `path` and a `message`. Every declared bypass is listed apart, with its reason.
 
+**Where it is.** Each problem and bypass also has a `location`, the file and line it is about, relative to the directory the app started in when it is inside it, and the printed report adds it: `Invoice (no_rule): has no rule and no default_action, so it is denied (at app/graphql/types/invoice_type.rb:3)`.
+- A field or an argument gives the line that declared it, when its class includes `Base`; otherwise the line of its type.
+- A type, a mutation or a resolver gives the line of its own `authorize`, or else of its class.
+- An own check or a denial hook gives the line of its method.
+
+`location` is `nil` when there is no Ruby line to give: a schema built from SDL, or a class with no name and no `authorize` of its own. A field declared by a helper method gives the helper's line, and a class reopened in several files gives the first one. The location is not part of a problem for the [baseline](#adopting-it-on-a-schema-with-many-problems): moving code never turns an accepted problem into a new one.
+
 | Kind | What it means | What to do |
 |---|---|---|
 | `:plugin` | The schema never installed the plugin. | Add `use GraphQL::Armory::Authorization, adapter: ...`. |

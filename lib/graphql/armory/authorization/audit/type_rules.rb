@@ -16,28 +16,28 @@ module GraphQL
           def call(type)
             path = type.graphql_name
             unless type.respond_to?(:armory_rule)
-              @findings.problem(:unprotected, path, "its base class does not include GraphQL::Armory::Authorization::Base, so it is open")
+              @findings.problem(:unprotected, path, "its base class does not include GraphQL::Armory::Authorization::Base, so it is open", at: type)
               return
             end
 
             rule = type.armory_rule
             if rule.nil?
-              @findings.problem(:no_rule, path, "has no rule and no default_action, so it is denied")
+              @findings.problem(:no_rule, path, "has no rule and no default_action, so it is denied", at: type)
             elsif rule.visible_when && (answer = graphql_ruby_answer(type, :visible?))
-              @findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers visible? here, so visible_when: never runs: remove it")
+              @findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers visible? here, so visible_when: never runs: remove it", at: type)
             elsif rule.none?
-              @findings.bypass(path, rule.reason)
+              @findings.bypass(path, rule.reason, at: type)
               audit_fields(type, model: nil, bypassed: !rule.covers_fields?, reported: Set.new)
               @foreign_policies.(type, rule.policy) if rule.policy
             elsif (answer = graphql_ruby_answer(type, :authorized?))
               @findings.problem(:ignored_rule, path, "graphql-ruby's #{answer} answers authorized? here, so this rule never runs: " \
                                                      "put the rule on the field that returns it (on a root field, on a resolver: a field rule asks " \
-                                                     "the parent's policy), and declare `authorize :none, reason: \"...\", covers_fields: true` on this class")
+                                                     "the parent's policy), and declare `authorize :none, reason: \"...\", covers_fields: true` on this class", at: type)
             else
               model = model_of(type, path)
               reported = Set.new
-              check(path, model, rule, reported) if model
-              check(path, model, Rule.new(rule.visible_when, policy: rule.policy), reported) if model && rule.visible_when
+              check(path, model, rule, reported, type) if model
+              check(path, model, Rule.new(rule.visible_when, policy: rule.policy), reported, type) if model && rule.visible_when
               @foreign_policies.(type, rule.policy) if rule.policy
               audit_fields(type, model: model, bypassed: false, reported: reported)
             end
@@ -64,14 +64,15 @@ module GraphQL
           def model_of(type, path)
             type.armory_model
           rescue ConfigurationError => error
-            @findings.problem(:model, path, error.message)
+            @findings.problem(:model, path, error.message, at: type)
             nil
           end
 
-          # An adapter problem shows once per type, however many fields declare an action of their own.
-          def check(path, model, rule, reported)
+          # An adapter problem shows once per type, however many fields declare an action of their own. `at` is what declared
+          # the action: the type, a field, an argument or a resolver.
+          def check(path, model, rule, reported, at)
             @adapter.check(model, rule).each do |message|
-              @findings.problem(:adapter, path, message) if reported.add?(message)
+              @findings.problem(:adapter, path, message, at: at) if reported.add?(message)
             end
           end
 
@@ -91,7 +92,7 @@ module GraphQL
             PlainResolvers.report(@findings, path, field) if served_with_no_rule?(type, field)
             if bypassed && !inherited && !field.respond_to?(:armory_declared)
               return @findings.problem(:field_without_rule, path, "its field class does not include Base, so no rule runs on it: its type is bypassed and graphql-ruby's own " \
-                                                                  "authorized? answers true, so the field is served with no check. Use a field class that includes Base")
+                                                                  "authorized? answers true, so the field is served with no check. Use a field class that includes Base", at: field)
             end
             return unless field.respond_to?(:armory_declared)
             return audit_resolver(field, path) if field.resolver.respond_to?(:armory_rule)
@@ -116,7 +117,7 @@ module GraphQL
             return if field.owner.respond_to?(:armory_model) && owner_model(field.owner).equal?(model)
 
             @findings.problem(:foreign_model, path, "its rule is defined on #{name_of(field.owner)}, so it never asks the policy of #{model}, the model of this type: a record of another class " \
-                                                    "or a laxer subclass gets past it. Redefine the field on this type with its `authorize:` and an `override_reason:`, or name the same model on #{name_of(field.owner)}")
+                                                    "or a laxer subclass gets past it. Redefine the field on this type with its `authorize:` and an `override_reason:`, or name the same model on #{name_of(field.owner)}", at: field)
           end
 
           def owner_model(owner)
@@ -138,41 +139,41 @@ module GraphQL
             # A RelayClassicMutation's field holds only the generated `input`: its arguments are on the resolver.
             arguments = (field.all_argument_definitions + resolver.all_argument_definitions).uniq
             @foreign_policies.arguments(arguments, path, rule.policy, Set.new) if rule&.policy
-            return @findings.problem(:no_rule, path, "its mutation or resolver declares no `authorize`, so it is denied") if rule.nil?
+            return @findings.problem(:no_rule, path, "its mutation or resolver declares no `authorize`, so it is denied", at: resolver) if rule.nil?
             audit_arguments(arguments, path, reported: Set.new)
-            return @findings.bypass(path, rule.reason) if rule.none?
+            return @findings.bypass(path, rule.reason, at: resolver) if rule.none?
 
             model = begin
               resolver.armory_model
             rescue ConfigurationError => error
-              return @findings.problem(:model, path, error.message)
+              return @findings.problem(:model, path, error.message, at: resolver)
             end
-            check(path, model, rule, Set.new)
+            check(path, model, rule, Set.new, resolver)
           end
 
           # The action a field is hidden with is asked of the policy like any other, so it must exist.
           def audit_visibility(field, path, model:, reported:)
             return unless model && field.armory_visible_when
 
-            check(path.split(".").first, model, Rule.new(field.armory_visible_when, policy: field.armory_policy, attribute: field.original_name), reported)
+            check(path.split(".").first, model, Rule.new(field.armory_visible_when, policy: field.armory_policy, attribute: field.original_name), reported, field)
           end
 
           def audit_declaration(type, field, path, model:, bypassed:, reported:)
             case (declared = field.armory_declared)
             when :none
-              @findings.bypass(path, field.armory_reason)
+              @findings.bypass(path, field.armory_reason, at: field)
             when nil, true
               if denied_payload_field?(field)
                 @findings.problem(:field_without_rule, path, "declares no rule and #{name_of(field.owner)}, which defines it, has none that covers it, so the mutation runs and this field answers null: " \
-                                                             "a client cannot tell whether it worked. Give the field `authorize: :none, reason: \"...\"`, or use a shared `payload_type`; a public mutation adds `covers_fields: true`")
+                                                             "a client cannot tell whether it worked. Give the field `authorize: :none, reason: \"...\"`, or use a shared `payload_type`; a public mutation adds `covers_fields: true`", at: field)
               elsif bypassed && declared.nil? && served_by_owner?(type, field)
                 @findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, but it is inherited from #{field.owner.name || field.owner.inspect}: a field runs " \
-                                                             "under the class that defines it, and no rule ran on this type, so the field is served with no check. Give it authorize: where it is defined, or remove it")
+                                                             "under the class that defines it, and no rule ran on this type, so the field is served with no check. Give it authorize: where it is defined, or remove it", at: field)
               elsif bypassed
-                @findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, so it is denied")
+                @findings.problem(:field_without_rule, path, "declares no rule and its type is bypassed, so it is denied", at: field)
               end
             else
-              check(path.split(".").first, model, Rule.new(declared, policy: field.armory_policy), reported) if model
+              check(path.split(".").first, model, Rule.new(declared, policy: field.armory_policy), reported, field) if model
             end
           end
 
@@ -199,7 +200,7 @@ module GraphQL
 
               apath = "#{path}(#{argument.keyword})"
               declared = argument.armory_declared
-              @findings.bypass(apath, argument.armory_reason) if declared == :none
+              @findings.bypass(apath, argument.armory_reason, at: argument) if declared == :none
               [declared, argument.armory_visible_when].compact.reject { |action| action == :none }.each do |action|
                 audit_argument_action(argument, apath, action, reported)
               end
@@ -207,9 +208,9 @@ module GraphQL
           end
 
           def audit_argument_action(argument, path, action, reported)
-            check(path.split(".").first, argument.armory_model, Rule.new(action, policy: argument.armory_policy, attribute: argument.keyword), reported)
+            check(path.split(".").first, argument.armory_model, Rule.new(action, policy: argument.armory_policy, attribute: argument.keyword), reported, argument)
           rescue ConfigurationError => error
-            @findings.problem(:model, path, error.message)
+            @findings.problem(:model, path, error.message, at: argument)
           end
 
           # A list that skips the scope hands over every record: a rule on each one hides its fields, not how many there are.
@@ -217,7 +218,7 @@ module GraphQL
             return if field.scoped? || generated_list?(type, field) || !list_of_records?(field)
 
             @findings.problem(:unscoped_list, path, "skips the user's scope, with scope: false or a list type graphql-ruby does not detect, so a refused user sees how many records it holds: " \
-                                                    "remove the option, or write the type as [Type]")
+                                                    "remove the option, or write the type as [Type]", at: field)
           end
 
           # A connection applies the scope on the field that returns it, and graphql-ruby generates these two with scope: false.
@@ -253,8 +254,8 @@ module GraphQL
               argument.owner.equal?(field) ? scoped_field?(field) : field.resolver.respond_to?(:armory_rule)
             end
 
-            opted_out_loads(arguments, Set.new).each do |name|
-              @findings.problem(:unscoped_load, "#{path}(#{name})", "loads through the app's object_from_id, not through the user's scope")
+            opted_out_loads(arguments, Set.new).each do |name, argument|
+              @findings.problem(:unscoped_load, "#{path}(#{name})", "loads through the app's object_from_id, not through the user's scope", at: argument)
             end
           end
 
@@ -263,11 +264,11 @@ module GraphQL
           end
 
           # Execution::Next loads `loads:` nested in input objects with the field's loader, so a field's opt-out
-          # reaches them too: list them as `filter.invoice_id`. `seen` stops recursive input types.
+          # reaches them too: list them as `filter.invoice_id`. `seen` stops recursive input types. Answers [name, argument].
           def opted_out_loads(arguments, seen, prefix = nil)
             arguments.flat_map do |argument|
               name = [prefix, GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)].compact.join(".")
-              next [name] if argument.loads
+              next [[name, argument]] if argument.loads
 
               input = argument.type.unwrap
               next [] unless input.respond_to?(:kind) && input.kind.input_object? && seen.add?(input)

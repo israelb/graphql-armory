@@ -14,8 +14,12 @@ module GraphQL
           end
 
           def authorize(action, reason: nil, **options)
+            @armory_rule_location = Location.declared
             @armory_rule = Rule.new(action, reason: reason, **options)
           end
+
+          # Where this class declared its own rule, for the audit; nil when it has none of its own.
+          attr_reader :armory_rule_location
 
           # Own rule, then an inherited one, then the default action. Nil means: nothing covers this type.
           def armory_rule
