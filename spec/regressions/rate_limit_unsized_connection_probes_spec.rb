@@ -722,8 +722,8 @@ RSpec.describe "unsized connection refusal probes" do
     it "E7 [P] who answers: result is Points::Analyzer's on the class the schema holds" do
       schema = schema_for
       klass = schema.query_analyzers.find { |analyzer| analyzer < L::Points::Analyzer }
-      expect(klass.instance_method(:result).owner).to eq(L::Points::Analyzer)
-      expect(klass.instance_method(:result).super_method.owner).to eq(GraphQL::Analysis::QueryComplexity)
+      owners = [klass.instance_method(:result)].tap { |chain| 2.times { chain << chain.last.super_method } }.map(&:owner)
+      expect(owners).to eq([L::AnalysisGuard::Visited, L::Points::Analyzer, GraphQL::Analysis::QueryComplexity])
     end
   end
 

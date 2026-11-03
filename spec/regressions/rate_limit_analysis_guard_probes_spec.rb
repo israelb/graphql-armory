@@ -50,10 +50,19 @@ module GuardProbe
     end
   end
 
-  def self.raiser(hook, error_class: GraphQL::ExecutionError, message: "analyzer says no", only: nil)
+  # `once: true` raises only the first time per query, so the guard's own ask of this analyzer answers.
+  def self.raiser(hook, error_class: GraphQL::ExecutionError, message: "analyzer says no", only: nil, once: false)
     Class.new(GraphQL::Analysis::Analyzer) do
       fire = lambda do |query|
-        raise error_class, message if only.nil? || only.call(query)
+        next unless only.nil? || only.call(query)
+
+        if once
+          fired = query.context.namespace(:guard_probe)
+          next if fired[self]
+
+          fired[self] = true
+        end
+        raise error_class, message
       end
       case hook
       when :initialize
@@ -451,7 +460,7 @@ RSpec.describe "analysis guard probes" do
   %i[on_enter_field on_leave_operation_definition analyze? result].each do |source|
     %i[before after].each do |place|
       it "security B1 Points charged once, raise from #{source} #{place}" do
-        raiser = GuardProbe.raiser(source)
+        raiser = GuardProbe.raiser(source, once: true)
         schema = limiter_schema(:points, **{ place => [raiser] })
         result = run(schema, "{ report }")
         expect(result.to_h["data"]).to eq("report" => "big")
@@ -463,14 +472,14 @@ RSpec.describe "analysis guard probes" do
         seen = []
         s = store
         holder[:during] = -> { seen << s.held("user:1") }
-        schema = limiter_schema(:concurrency, limit: 3, **{ place => [GuardProbe.raiser(source)] })
+        schema = limiter_schema(:concurrency, limit: 3, **{ place => [GuardProbe.raiser(source, once: true)] })
         result = run(schema)
         expect(result.to_h["data"]).to eq("cheap" => "ok")
         expect([seen, acquires, s.held("user:1")]).to eq([[1], 1, 0])
       end
 
       it "security B3 Time charged once, raise from #{source} #{place}" do
-        schema = limiter_schema(:time, **{ place => [GuardProbe.raiser(source)] })
+        schema = limiter_schema(:time, **{ place => [GuardProbe.raiser(source, once: true)] })
         result = run(schema)
         expect(result.to_h["data"]).to eq("cheap" => "ok")
         expect(forced).to eq(1)
@@ -507,7 +516,7 @@ RSpec.describe "analysis guard probes" do
     child = Class.new(parent) do
       use rl::Time, store: t_store, limit: 1000, window: 60, soft: false
       use rl::Concurrency, store: c_store, limit: 5, soft: false
-      query_analyzer GuardProbe.raiser(:result)
+      query_analyzer GuardProbe.raiser(:result, once: true)
     end
     result = run(child)
     expect(result.to_h["data"]).to eq("cheap" => "ok")
@@ -541,7 +550,7 @@ RSpec.describe "analysis guard probes" do
   end
 
   it "security B7 shared context hash: each query of a multiplex is decided alone and exhausts the bucket" do
-    schema = limiter_schema(:points, before: [GuardProbe.raiser(:result)])
+    schema = limiter_schema(:points, before: [GuardProbe.raiser(:result, once: true)])
     shared = { rate_limit_key: "user:1" }
     results = mux(schema, Array.new(3) { { query: "{ report }", context: shared, root_value: root } })
     expect(results.map { |r| r.to_h.key?("data") && !r.to_h["data"].nil? }).to eq([true, true, false])
@@ -566,7 +575,7 @@ RSpec.describe "analysis guard probes" do
     watcher = Class.new(GraphQL::Analysis::Analyzer) do
       define_method(:result) { seen << query.context.namespace(:graphql_armory)[:limiter_guard_active]; nil }
     end
-    schema = limiter_schema(:points, before: [watcher, GuardProbe.raiser(:on_enter_field, only: ->(q) { q.query_string.include?("report") })])
+    schema = limiter_schema(:points, before: [watcher, GuardProbe.raiser(:on_enter_field, only: ->(q) { q.query_string.include?("report") }, once: true)])
     shared = { rate_limit_key: "user:1" }
     results = mux(schema, ["{ report }", "{ cheap }"].map { |q| { query: q, context: shared, root_value: root } })
     expect(results.map { |r| r.to_h["data"] }).to eq([{ "report" => "big" }, { "cheap" => "ok" }])
@@ -1073,7 +1082,7 @@ RSpec.describe "analysis guard probes" do
       Class.new(ArmoryEngine.base_schema) do
         query q
         use GraphQL::Armory::PersistedQueries, store: m, strict: true
-        query_analyzer GuardProbe.raiser(:result)
+        query_analyzer GuardProbe.raiser(:result, once: true)
         use rl::Points, store: s, limit: 100, window: 60, soft: false
       end
     end
@@ -1173,17 +1182,17 @@ RSpec.describe "analysis guard probes" do
     expect(left).to eq(99)
   end
 
-  it "preservation F6d AnalysisError raised from result, client fine: discarded and run, as graphql-ruby does" do
+  it "security F6d AnalysisError raised from result: kept with its message, not run, still charged" do
     schema = limiter_schema(:points, before: [GuardProbe.raiser(:result, error_class: GraphQL::AnalysisError, message: "raised no")])
     result = run(schema)
-    expect(result.to_h["data"]).to eq("cheap" => "ok")
-    expect(messages(result)).to eq([])
+    expect_not_run(result)
+    expect(messages(result)).to eq(["raised no"])
     expect(left).to eq(99)
   end
 
   kinds.each_key do |kind|
-    it "preservation F7 other analyzer raises, client fine, #{kind}: same data, no errors" do
-      result = run(limiter_schema(kind, before: [GuardProbe.raiser(:on_enter_field)]))
+    it "preservation F7 other analyzer raises once, client fine, #{kind}: same data, no errors" do
+      result = run(limiter_schema(kind, before: [GuardProbe.raiser(:on_enter_field, once: true)]))
       expect(result.to_h).to eq("data" => { "cheap" => "ok" })
     end
   end
@@ -1280,14 +1289,15 @@ RSpec.describe "analysis guard probes" do
     expect([enters, results]).to eq([2, 1])
   end
 
-  it "preservation G1b multiplex analyzer raises during the visit, client fine: runs and is charged once" do
+  it "security G1b multiplex analyzer raises during the visit: refused as unknown, charged once" do
     s = store
     schema = build do
       multiplex_analyzer GuardProbe.raiser(:on_enter_field)
       use rl::Points, store: s, limit: 100, window: 60, soft: false
     end
     result = mux(schema, [{ query: "{ report }", context: { rate_limit_key: "user:1" }, root_value: root }]).first
-    expect(result.to_h["data"]).to eq("report" => "big")
+    expect_not_run(result)
+    expect(codes(result)).to eq(["QUERY_LIMIT_UNKNOWN"])
     expect(left).to eq(60)
   end
 

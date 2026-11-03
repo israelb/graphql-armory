@@ -88,11 +88,13 @@ RSpec.describe "Rate limits: a connection with no page size" do
       expect(resolved).to be_empty
     end
 
-    it "leaves a query that nothing refused as graphql-ruby leaves it" do
+    it "refuses a query that nothing else refused while that analyzer keeps raising" do
       schema = schema_with(store: store, limit: 100, soft: false)
       schema.query_analyzer(raising)
 
-      expect(run(schema, "{ items(first: 1) { nodes } }").to_h.dig("data", "items", "nodes")).to eq(["a"])
+      response = run(schema, "{ items(first: 1) { nodes } }").to_h
+      expect(response["errors"].map { |error| error["extensions"]["code"] }).to eq(["QUERY_LIMIT_UNKNOWN"])
+      expect(resolved).to be_empty
     end
   end
 

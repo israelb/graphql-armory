@@ -15,8 +15,16 @@ RSpec.describe "a raise during analysis, with rate limits" do
     end
   end
 
-  define_method(:raiser) do |error = error_class|
-    Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { raise error, "analyzer says no" } }
+  # `once: true` raises only the first time it is asked for each query, so the guard's own ask answers.
+  define_method(:raiser) do |error = error_class, once: false|
+    Class.new(GraphQL::Analysis::Analyzer) do
+      define_method(:result) do
+        asked = query.context.namespace(:raise_spec)
+        raised = asked[self.class]
+        asked[self.class] = true
+        raise error, "analyzer says no" unless once && raised
+      end
+    end
   end
 
   define_method(:schema_with) do |&setup|
@@ -108,7 +116,7 @@ RSpec.describe "a raise during analysis, with rate limits" do
   context "when another analyzer raises" do
     it "still charges Points when it sits before Points" do
       store = self.store
-      other = raiser
+      other = raiser(once: true)
       schema = schema_with do
         query_analyzer other
         use limits::Points, store: store, limit: 100, window: 60, soft: false
@@ -123,7 +131,7 @@ RSpec.describe "a raise during analysis, with rate limits" do
 
     it "charges once when it sits after Points" do
       store = self.store
-      other = raiser
+      other = raiser(once: true)
       schema = schema_with do
         use limits::Points, store: store, limit: 100, window: 60, soft: false
         query_analyzer other
@@ -179,7 +187,7 @@ RSpec.describe "a raise during analysis, with rate limits" do
     it "asks Time when it sits before Time, so the client is charged the time" do
       clock = limits::Clock::Substitute.new
       store = self.store
-      other = raiser
+      other = raiser(once: true)
       schema = schema_with do
         query_analyzer other
         use limits::Time, store: store, limit: 1000, window: 60, soft: false, clock: clock
@@ -207,7 +215,7 @@ RSpec.describe "a raise during analysis, with rate limits" do
 
     it "takes and gives back a Concurrency slot when it sits before Concurrency" do
       store = self.store
-      other = raiser
+      other = raiser(once: true)
       schema = schema_with do
         query_analyzer other
         use limits::Concurrency, store: store, limit: 1, soft: false
@@ -432,7 +440,7 @@ RSpec.describe "a raise during analysis, with rate limits" do
     end
 
     it "runs a query under its maximums when another analyzer raises" do
-      other = raiser
+      other = raiser(once: true)
       schema = deep_schema do
         max_depth 5
         max_complexity 500
@@ -442,6 +450,60 @@ RSpec.describe "a raise during analysis, with rate limits" do
       run(schema)
 
       expect(resolved).to eq([:cheap])
+    end
+
+    it "refuses a query when another analyzer keeps raising, still charging it" do
+      other = raiser
+      schema = deep_schema { query_analyzer other }
+
+      result = run(schema)
+
+      expect(codes(result)).to eq(["QUERY_LIMIT_UNKNOWN"])
+      expect(result.to_h.to_s).not_to include("analyzer says no")
+      expect(resolved).to eq([])
+      expect(left).to eq(99)
+    end
+
+    it "keeps the app's own message when its analyzer raises an AnalysisError" do
+      other = raiser(GraphQL::AnalysisError)
+      schema = deep_schema { query_analyzer other }
+
+      result = run(schema)
+
+      expect(result.to_h["errors"].map { |error| error["message"] }).to eq(["analyzer says no"])
+      expect(resolved).to eq([])
+    end
+
+    it "runs a query whose lambda raised after the multiplex analyzers saw all of it, in soft mode" do
+      counting = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { nil } }
+      schema = deep_schema { multiplex_analyzer counting }
+
+      result = run(schema, "{ guarded }")
+
+      expect(result.to_h).to eq("data" => { "guarded" => "ok" })
+      expect(result.context[:rate_limit_points]).to include(charged: false)
+    end
+
+    it "refuses a query whose visit raised before the multiplex analyzers saw all of it" do
+      counting = Class.new(GraphQL::Analysis::Analyzer) { define_method(:result) { nil } }
+      visiting = Class.new(GraphQL::Analysis::Analyzer) do
+        define_method(:result) { nil }
+        define_method(:on_enter_field) do |_node, _parent, _visitor|
+          asked = query.context.namespace(:raise_spec)
+          raise error_class, "visit says no" unless asked[:visited]
+        ensure
+          asked[:visited] = true
+        end
+      end
+      schema = deep_schema do
+        query_analyzer visiting
+        multiplex_analyzer counting
+      end
+
+      result = run(schema)
+
+      expect(codes(result)).to eq(["QUERY_LIMIT_UNKNOWN"])
+      expect(resolved).to eq([])
     end
 
     it "stops at a timeout on the second pass, and answers it once" do
