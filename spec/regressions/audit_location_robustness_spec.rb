@@ -17,7 +17,8 @@ module AuditLocationRobustness
   RaisingName = Class.new(BaseObject) do
     graphql_name "RaisingName"
     field :total, String, null: true
-    def self.name = raise(ArgumentError, "no name")
+    # Not a StandardError: an abstract `name` often raises this one.
+    def self.name = raise(NotImplementedError, "no name")
   end
 
   IntegerName = Class.new(BaseObject) do

@@ -57,7 +57,7 @@ module GraphQL
           return if !name.is_a?(String) || name.empty? || !Object.const_get(name).equal?(mod)
 
           join(Object.const_source_location(name))
-        rescue StandardError
+        rescue StandardError, NotImplementedError
           nil
         end
         private_class_method :constant
