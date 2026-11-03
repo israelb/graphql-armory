@@ -21,12 +21,13 @@ module GraphQL
           groups
         end
 
-        # Takes `cost` from each key in order and stops at the first that cannot pay, so a client with nothing left cannot keep
+        # Takes `cost` from each key in order. A key that cannot pay all of it is drained to zero and the charge stops there, so
+        # sending more invalid queries than a client has left never costs it less, and a client with nothing left cannot keep
         # draining a bucket it shares. A key whose store fails is left out. Answers `[budgets, every key paid]`.
         def self.charge(store, limits, cost, window, handler, query, bucket: ->(key) { key })
           budgets = []
           limits.each do |key, limit|
-            taken, remaining = Settings.checked(store.take(bucket.call(key), cost: cost, limit: limit, window: window, force: false), :take, "the Integer left")
+            taken, remaining = Settings.checked(store.take(bucket.call(key), cost: cost, limit: limit, window: window, force: true), :take, "the Integer left")
             budgets << { key: key, limit: limit, remaining: remaining }
             return [budgets, false] unless taken
           rescue StandardError => error
@@ -41,10 +42,11 @@ module GraphQL
           warn("graphql-armory: on_store_error raised while charging an invalid query: #{raised.class}: #{raised.message}")
         end
 
-        # `valid?` is also false for a query an analyzer refused. That query was analyzed, so it is not invalid: what the
+        # Only validation decides: `valid?` is also false for a query an analyzer refused, and graphql-ruby copies a multiplex
+        # analyzer's errors into every query, invalid ones included. A query that was analyzed is not invalid: what the
         # limiter decided on it stands.
         def self.invalid?(query, limiter)
-          !query.valid? && query.analysis_errors.empty? && !query.context.namespace(Points::NAMESPACE)[AnalysisGuard::ASKED]&.key?(limiter)
+          !query.validation_pipeline.valid? && !query.context.namespace(Points::NAMESPACE)[AnalysisGuard::ASKED]&.key?(limiter)
         end
         private_class_method :invalid?
       end

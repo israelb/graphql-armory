@@ -169,8 +169,8 @@ module GraphQL
           {}
         end
 
-        # Never raises over the answers, and never with `force`: an invalid query is not refused, so a charge below what a
-        # key holds would let a client with nothing left keep draining a bucket it shares.
+        # Never raises over the answers. A key that cannot pay the whole share is drained to zero and the charge stops there,
+        # so padding a multiplex with invalid queries never lowers what the client pays.
         def charge_invalid(limits, queries, share)
           bucket = self.class.method(:bucket_key)
           budgets, paid = InvalidQueries.charge(@store, limits, share * queries.size, @window, @on_store_error, queries.first, bucket: bucket)
