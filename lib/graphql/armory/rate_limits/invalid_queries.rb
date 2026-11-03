@@ -21,20 +21,40 @@ module GraphQL
           groups
         end
 
-        # Takes `cost` from each key in order. A key that cannot pay all of it is drained to zero and the charge stops there, so
-        # sending more invalid queries than a client has left never costs it less, and a client with nothing left cannot keep
-        # draining a bucket it shares. A key whose store fails is left out. Answers `[budgets, every key paid]`.
+        # Takes `cost` from each key in order, as if the queries had come one at a time. A key that cannot pay all of it pays
+        # what it holds, and the keys after it pay only that much: sending invalid queries together never costs a client less
+        # than sending them apart, and a client with nothing left cannot keep draining a bucket it shares. Never with `force`,
+        # never below zero. A key whose store fails is left out. Answers `[budgets, every key paid in full]`.
         def self.charge(store, limits, cost, window, handler, query, bucket: ->(key) { key })
           budgets = []
+          paid = true
           limits.each do |key, limit|
-            taken, remaining = Settings.checked(store.take(bucket.call(key), cost: cost, limit: limit, window: window, force: true), :take, "the Integer left")
+            break if cost.zero?
+
+            stored = bucket.call(key)
+            taken, remaining = take(store, stored, cost, limit, window)
+            unless taken
+              paid = false
+              # A refused take changes nothing and answers what the key holds. Taking that can still fail when another request
+              # got there first; then the keys after it pay nothing.
+              held = remaining
+              cost = 0
+              if held.positive?
+                again, remaining = take(store, stored, held, limit, window)
+                cost = held if again
+              end
+            end
             budgets << { key: key, limit: limit, remaining: remaining }
-            return [budgets, false] unless taken
           rescue StandardError => error
             report(handler, error, query)
           end
-          [budgets, true]
+          [budgets, paid]
         end
+
+        def self.take(store, key, cost, limit, window)
+          Settings.checked(store.take(key, cost: cost, limit: limit, window: window, force: false), :take, "the Integer left")
+        end
+        private_class_method :take
 
         def self.report(handler, error, query)
           handler.call(error, query)

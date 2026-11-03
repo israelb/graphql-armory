@@ -144,7 +144,9 @@ module GraphQL
             debt = query.context.namespace(NAMESPACE)[:time_charges]&.delete(self)
             [query, debt] if debt
           end
-          invalid = invalid_queries(multiplex)
+          # Invalid queries pay only a multiplex that has nothing else to charge: next to a query that ran, they would lower
+          # its share, and that query pays with `force` while they cannot.
+          invalid = owed.empty? ? invalid_queries(multiplex) : {}
           payers = owed.size + invalid.values.sum(&:size)
           return if payers.zero?
 
@@ -169,8 +171,8 @@ module GraphQL
           {}
         end
 
-        # Never raises over the answers. A key that cannot pay the whole share is drained to zero and the charge stops there,
-        # so padding a multiplex with invalid queries never lowers what the client pays.
+        # Never raises over the answers, and never with `force`: a key that cannot pay all of it pays what it holds, and the
+        # keys after it pay only that much.
         def charge_invalid(limits, queries, share)
           bucket = self.class.method(:bucket_key)
           budgets, paid = InvalidQueries.charge(@store, limits, share * queries.size, @window, @on_store_error, queries.first, bucket: bucket)

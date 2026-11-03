@@ -270,14 +270,14 @@ RSpec.describe "C3 probes: charging invalid queries" do
     store.take(GraphQL::Armory::RateLimits::Time.bucket_key(key), cost: 0, limit: limit, window: 60).last
   end
 
-  it "security: Time charges an invalid query its share of a multiplex" do
+  it "security: Time charges the time of a multiplex with a valid query to that query, not to the invalid one" do
     clock = GraphQL::Armory::RateLimits::Clock::Substitute.new
     schema = time_schema(store, clock)
     slow = GraphQL::Armory::RateLimits::Controls::Time.example(clock, seconds: 1.0)
     run_many(schema, [{ query: "{ cheap }", root_value: slow, context: GraphQL::Armory::RateLimits::Controls::Context.example },
                       { query: "{ cheap", root_value: slow, context: GraphQL::Armory::RateLimits::Controls::Context.example(key: "user:2") }])
-    expect(time_balance(store, "user:1")).to eq(9_500)
-    expect(time_balance(store, "user:2")).to eq(9_500)
+    expect(time_balance(store, "user:1")).to eq(9_000)
+    expect(time_balance(store, "user:2")).to eq(10_000)
   end
 
   it "security: Time charges a refused query no share" do
@@ -288,8 +288,8 @@ RSpec.describe "C3 probes: charging invalid queries" do
     run_many(schema, [{ query: "{ cheap }", root_value: slow, context: GraphQL::Armory::RateLimits::Controls::Context.example },
                       { query: "{ cheap }", root_value: slow, context: GraphQL::Armory::RateLimits::Controls::Context.example(key: "user:3") },
                       { query: "{ cheap", root_value: slow, context: GraphQL::Armory::RateLimits::Controls::Context.example(key: "user:2") }])
-    expect(time_balance(store, "user:1")).to eq(9_500)
-    expect(time_balance(store, "user:2")).to eq(9_500)
+    expect(time_balance(store, "user:1")).to eq(9_000)
+    expect(time_balance(store, "user:2")).to eq(10_000)
   end
 
   it "security: padding a multiplex with invalid queries never lowers what a client pays for its time" do

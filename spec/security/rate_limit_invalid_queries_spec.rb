@@ -286,9 +286,19 @@ RSpec.describe "charging invalid queries" do
       expect(result.context[:rate_limit_time][:remaining]).to eq(time_left)
     end
 
-    it "splits a multiplex equally among valid and invalid queries" do
+    it "charges a multiplex with a query that ran to that query only, so invalid padding never lowers its share" do
       schema = time_schema(seconds: 0.1)
       queries = [["user:1", "{ nothing }"], ["user:2", "{ cheap }"]].map { |key, query| { query: query, context: { rate_limit_key: key }, root_value: root } }
+
+      ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries)
+
+      expect(time_left("user:1")).to eq(1_000)
+      expect(time_left("user:2")).to be < 1_000
+    end
+
+    it "splits a multiplex of invalid queries only equally among them" do
+      schema = time_schema(seconds: 0.1)
+      queries = ["user:1", "user:2"].map { |key| { query: "{ nothing }", context: { rate_limit_key: key }, root_value: root } }
 
       ArmoryEngine.next? ? schema.multiplex_next(queries) : schema.multiplex(queries)
 
@@ -302,8 +312,18 @@ RSpec.describe "charging invalid queries" do
       expect(store.calls).to eq([])
     end
 
-    it "stops at the first key that cannot pay, so an exhausted client cannot drain a shared bucket" do
+    it "charges the keys after one that cannot pay only what that key held" do
       schema = time_schema(limit: ->(key, _query) { key == "user:1" ? 1 : 1_000 })
+
+      run(schema, "{ nothing }", key: ["user:1", "shared"])
+
+      expect(time_left("user:1", limit: 1)).to eq(0)
+      expect(time_left("shared")).to eq(999)
+    end
+
+    it "leaves a shared bucket alone when the first key has nothing left" do
+      schema = time_schema
+      store.take("time:user:1", cost: 1_000, limit: 1_000, window: 60, force: true)
 
       run(schema, "{ nothing }", key: ["user:1", "shared"])
 
