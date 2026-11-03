@@ -84,11 +84,11 @@ RSpec.describe "use GraphQL::Armory::RateLimits::Points" do
     expect(refusals(response)).to eq(["RATE_LIMITED"])
   end
 
-  it "does not charge a query that fails validation" do
+  it "charges a query that fails validation its invalid_cost" do
     schema = schema_for
     run(schema, "{ doesNotExist }")
 
-    expect(run(schema, cheap).last).to include(remaining: 99)
+    expect(run(schema, cheap).last).to include(remaining: 98)
   end
 
   it "charges a fractional complexity in whole points instead of letting it through" do

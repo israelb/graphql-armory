@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Breaking.** Rate limits: invalid queries are now charged. A syntax error, a validation error, no query string or a strict `PersistedQueries` refusal costs `invalid_cost:` points on `Points` (default 1; `nil` turns it off) and its share of the time on `Time`. Its answer does not change: this penalises the next valid query and does not stop a flood. Clients that send many invalid queries spend more, so read `context[:rate_limit_points]` in soft mode first. [Rate limiting](docs/rate-limiting.md#guarantees-and-limits).
+
 - Docs: how to audit a schema before adopting the plugin and what to fix first, in [Authorization](docs/authorization.md#measuring-before-you-adopt); a missing rate limit key raises when the query runs, in [Rate limiting](docs/rate-limiting.md). Specs that need Redis skip without `REDIS_URL`, outside CI, and the specs that run a script no longer read stderr unless it crashes. (#50)
 
 - **Breaking.** Security: on a schema with a rate limiter, a `max_depth` or `max_complexity` refusal, or one another analyzer returned, was lost when an analyzer or a `complexity:` lambda raised `ExecutionError`, and a client could choose that by asking for that field. It now stands. A `max_complexity` that cannot be computed because a lambda raises refuses the query with `QUERY_LIMIT_UNKNOWN`, in soft mode too: if a lambda raises on honest queries, move that check to the field. Limit: a schema with no rate limiter keeps graphql-ruby's behaviour. [Rate limiting](docs/rate-limiting.md#guarantees-and-limits). (#49)

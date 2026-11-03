@@ -11,18 +11,19 @@ module GraphQL
       #
       # A query that costs more than the client has left is refused before any field resolves, and charged
       # nothing. Soft mode (the default) charges and records but refuses nothing. What happened is in
-      # `context[:rate_limit_points]`.
+      # `context[:rate_limit_points]`. An invalid query, which no analyzer sees, costs `invalid_cost:`, charged by a trace.
       class Points
         CONTEXT_KEY = :rate_limit_points
         NAMESPACE = :graphql_armory
 
-        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false)
-          points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions)
+        def self.use(schema, store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false, invalid_cost: 1)
+          points = build(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions, invalid_cost: invalid_cost)
           schema.query_analyzer(Class.new(Analyzer) do
             define_method(:points) { points }
             define_singleton_method(:armory_limiter) { points }
           end)
           schema.trace_with(AnalysisGuard)
+          schema.trace_with(points.invalid_trace)
         end
 
         # HTTP headers for the budget a result recorded: `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`
@@ -39,13 +40,13 @@ module GraphQL
         end
 
         # Wires the app's store with `use`'s defaults (soft mode); `use` goes through here.
-        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false)
-          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions)
+        def self.build(store:, limit:, window: 60, soft: true, key: nil, on_store_error: nil, sinks: [], extensions: false, invalid_cost: 1)
+          new(store: store, limit: limit, window: window, soft: soft, key: key, on_store_error: on_store_error, sinks: sinks, extensions: extensions, invalid_cost: invalid_cost)
         end
 
         # `new` is inert: with no store wired it refuses every query. It checks every setting, so no partial
         # configuration lets a query through either.
-        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, sinks: [], extensions: false)
+        def initialize(store: Store::Null.new, limit: 1, window: 60, soft: false, key: nil, on_store_error: nil, sinks: [], extensions: false, invalid_cost: 1)
           unless Settings.store_answers?(store, take: %i[cost limit window force])
             raise ConfigurationError, "store: must answer take(key, cost:, limit:, window:, force:), like a MemoryStore"
           end
@@ -58,6 +59,40 @@ module GraphQL
           @key = Settings.key_reader(key)
           @on_store_error = Settings.store_error_handler(on_store_error, limiter: :points, sinks: sinks)
           @extensions = extensions
+          unless invalid_cost.nil? || (invalid_cost.is_a?(Integer) && invalid_cost.positive?)
+            raise ConfigurationError, "invalid_cost: must be a positive Integer or nil, got #{invalid_cost.inspect}"
+          end
+
+          @invalid_cost = invalid_cost
+        end
+
+        # One module per limiter, so a schema with several charges each. Inside `ensure`: the answers are already made.
+        def invalid_trace
+          points = self
+          Module.new do
+            define_method(:execute_multiplex) do |multiplex:, &block|
+              super(multiplex: multiplex, &block)
+            ensure
+              points.charge_invalid(multiplex)
+            end
+          end
+        end
+
+        # Charges the multiplex's invalid queries, together per client. It never raises over the answers.
+        def charge_invalid(multiplex)
+          return if @invalid_cost.nil?
+
+          InvalidQueries.grouped(multiplex, self, @key, @limit, @on_store_error).each do |limits, queries|
+            budgets, paid = InvalidQueries.charge(@store, limits, @invalid_cost * queries.size, @window, @on_store_error, queries.first)
+            next if budgets.empty?
+
+            binding = budgets.min_by { |budget| budget[:remaining] }
+            queries.each do |query|
+              record(query, key: binding[:key], cost: @invalid_cost, limit: binding[:limit], remaining: binding[:remaining], limited: !paid, invalid: true)
+            end
+          end
+        rescue StandardError => error
+          InvalidQueries.report(@on_store_error, error, multiplex.queries.first)
         end
 
         def soft?
@@ -154,7 +189,7 @@ module GraphQL
         # In the context hash for instrumentation, and per query for `headers`: queries of a multiplex may share one
         # context hash, where the last query's record wins.
         def record(query, **info)
-          info = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited], **info.slice(:keys) }
+          info = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited], **info.slice(:keys, :invalid) }
           query.context.namespace(NAMESPACE)[:points] = info
           query.context[CONTEXT_KEY] = info
         end

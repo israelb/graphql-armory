@@ -13,7 +13,8 @@ module GraphQL
       # field resolves, when none is left. A trace measures the multiplex with a monotonic clock and charges the
       # elapsed milliseconds when it ends, even when it raises. A running operation is never interrupted: the one
       # that spends the last milliseconds finishes, and the next is refused. Soft mode (the default) charges and
-      # records but refuses nothing. What happened is in `context[:rate_limit_time]`.
+      # records but refuses nothing. What happened is in `context[:rate_limit_time]`. An invalid query, which no analyzer
+      # sees, takes its share of the time too.
       class Time
         CONTEXT_KEY = :rate_limit_time
         NAMESPACE = :graphql_armory
@@ -143,9 +144,12 @@ module GraphQL
             debt = query.context.namespace(NAMESPACE)[:time_charges]&.delete(self)
             [query, debt] if debt
           end
-          return if owed.empty?
+          invalid = invalid_queries(multiplex)
+          payers = owed.size + invalid.values.sum(&:size)
+          return if payers.zero?
 
-          share = (seconds * 1000 / owed.size.to_f).ceil
+          share = (seconds * 1000 / payers.to_f).ceil
+          invalid.each { |limits, queries| charge_invalid(limits, queries, share) }
           # Every query is charged even if one hook raises; the first such error is raised afterwards.
           failure = nil
           owed.each do |query, debt|
@@ -157,6 +161,28 @@ module GraphQL
         end
 
         private
+
+        def invalid_queries(multiplex)
+          InvalidQueries.grouped(multiplex, self, @key, @limit, @on_store_error)
+        rescue StandardError => error
+          InvalidQueries.report(@on_store_error, error, multiplex.queries.first)
+          {}
+        end
+
+        # Never raises over the answers, and never with `force`: an invalid query is not refused, so a charge below what a
+        # key holds would let a client with nothing left keep draining a bucket it shares.
+        def charge_invalid(limits, queries, share)
+          bucket = self.class.method(:bucket_key)
+          budgets, paid = InvalidQueries.charge(@store, limits, share * queries.size, @window, @on_store_error, queries.first, bucket: bucket)
+          return if budgets.empty?
+
+          binding = budgets.min_by { |budget| budget[:remaining] }
+          queries.each do |query|
+            record(query, key: binding[:key], limit: binding[:limit], remaining: binding[:remaining], limited: !paid, invalid: true, elapsed: share)
+          end
+        rescue StandardError => error
+          InvalidQueries.report(@on_store_error, error, queries.first)
+        end
 
         # Each key is charged on its own: a store failure on one, or a hook that raises for it, leaves the others charged. The
         # first error a hook raises is raised afterwards.
@@ -253,8 +279,8 @@ module GraphQL
         end
 
         # `elapsed` is nil until the operation ends and is charged; it stays nil for a refused one.
-        def base_record(key:, limit:, limited:, remaining: nil, keys: nil)
-          { key: key, limit: limit, remaining: remaining, elapsed: nil, window: @window, soft: @soft, limited: limited, **(keys ? { keys: keys } : {}) }
+        def base_record(key:, limit:, limited:, remaining: nil, keys: nil, invalid: false, elapsed: nil)
+          { key: key, limit: limit, remaining: remaining, elapsed: elapsed, window: @window, soft: @soft, limited: limited, **(keys ? { keys: keys } : {}), **(invalid ? { invalid: true } : {}) }
         end
 
         # The budget before the run; the charge completes the same hash, which the response already holds.
