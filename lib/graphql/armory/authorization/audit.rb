@@ -65,7 +65,7 @@ module GraphQL
             OwnChecks.(schema, definitions, findings)
             Overrides.(schema, definitions, findings)
           else
-            findings.problem(:plugin, "Schema", "never installed the plugin: add `use GraphQL::Armory::Authorization, adapter: ...`")
+            findings.problem(:plugin, "Schema", "never installed the plugin: add `use GraphQL::Armory::Authorization, adapter: ...`", at: schema)
           end
 
           foreign_policies = ForeignPolicies.new(adapter, findings)
@@ -79,7 +79,7 @@ module GraphQL
           ObservedRules.(schema, definitions, findings)
           VisibilityModels.(schema, definitions, findings)
           IntrospectionFields.(schema, findings)
-          findings.problem(:model, "Schema", listing_error.message) if listing_error && !findings.problem?(:model)
+          findings.problem(:model, "Schema", listing_error.message, at: schema) if listing_error && !findings.problem?(:model)
           findings.report(Reach.new(definitions))
         end
 

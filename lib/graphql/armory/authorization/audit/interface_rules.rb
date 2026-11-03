@@ -22,15 +22,15 @@ module GraphQL
               path = "#{interface.graphql_name}.#{field.original_name}"
               PlainResolvers.report(findings, path, field) if covered && !bypassed && PlainResolvers.open?(field)
               unless field.respond_to?(:armory_declared)
-                findings.problem(:unprotected, path, "its field class does not include Base, so it is not checked on a bypassed implementer") if bypassed
+                findings.problem(:unprotected, path, "its field class does not include Base, so it is not checked on a bypassed implementer", at: field) if bypassed
                 next
               end
 
               case field.armory_declared
               when true
-                findings.problem(:field_without_rule, path, "uses authorize: true, but an interface has no action of its own, so it is always denied")
+                findings.problem(:field_without_rule, path, "uses authorize: true, but an interface has no action of its own, so it is always denied", at: field)
               when nil
-                findings.problem(:field_without_rule, path, "declares no rule and an implementing type is bypassed, so it is denied") if bypassed
+                findings.problem(:field_without_rule, path, "declares no rule and an implementing type is bypassed, so it is denied", at: field) if bypassed
               end
             end
           end

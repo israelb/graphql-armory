@@ -66,12 +66,12 @@ module GraphQL
           def note_override(path, member, falls_back)
             reason = member.armory_override_reason if member.respond_to?(:armory_override_reason)
             if falls_back && reason
-              @findings.bypass(path, reason)
+              @findings.bypass(path, reason, at: member)
             elsif falls_back
               @findings.problem(:ignored_rule, path, "is defined more than once: hidden from a user, it falls back to the other definition, and its own rule, arguments, type and extensions do not apply. " \
-                                                     "Remove one or declare override_reason:; for a definition on an ancestor, Schema::Visibility with dynamic: true and no profiles also stops the fallback")
+                                                     "Remove one or declare override_reason:; for a definition on an ancestor, Schema::Visibility with dynamic: true and no profiles also stops the fallback", at: member)
             elsif reason
-              @findings.problem(:ignored_rule, path, "declares override_reason: but nothing falls back from it: remove it")
+              @findings.problem(:ignored_rule, path, "declares override_reason: but nothing falls back from it: remove it", at: member)
             end
           end
         end

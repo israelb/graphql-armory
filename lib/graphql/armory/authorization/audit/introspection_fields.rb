@@ -31,7 +31,7 @@ module GraphQL
             name = field.graphql_name
             return if field.owner.superclass.fields[name].equal?(built_in.fields[name])
 
-            @findings.problem(:unprotected, "#{field.owner.graphql_name}.#{name}", "is a custom introspection field, so no type's rule runs on it: move it to a type with a rule")
+            @findings.problem(:unprotected, "#{field.owner.graphql_name}.#{name}", "is a custom introspection field, so no type's rule runs on it: move it to a type with a rule", at: field)
           end
         end
       end

@@ -212,7 +212,7 @@ RSpec.describe "the audit and the schema's denial hooks" do
       report = armory::Audit.(schema)
 
       expect(hook_problems(schema)).to eq([])
-      expect(report.bypasses.map(&:to_a)).to include(["Schema.unauthorized_field", "answers like a missing field"])
+      expect(report.bypasses.map { |bypass| [bypass.path, bypass.reason] }).to include(["Schema.unauthorized_field", "answers like a missing field"])
     end
 
     it "refuses indifferent access, whose keys are Strings" do
@@ -227,7 +227,7 @@ RSpec.describe "the audit and the schema's denial hooks" do
       report = armory::Audit.(schema)
 
       expect(hook_problems(schema)).to eq([])
-      expect(report.bypasses.map(&:to_a)).to include(["Schema.unauthorized_field", "answers like a missing field"])
+      expect(report.bypasses.map { |bypass| [bypass.path, bypass.reason] }).to include(["Schema.unauthorized_field", "answers like a missing field"])
     end
 
     it "still reports the hook it does not name" do

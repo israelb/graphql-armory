@@ -15,7 +15,7 @@ module GraphQL
 
               findings.problem(:ignored_rule, type.graphql_name, "the connection's nodes field returns the nodes without building an edge, so this rule does not " \
                                                                  "cover it: put the rule on the field that returns the connection (on a root field, on a resolver: " \
-                                                                 "a field rule asks the parent's policy), or remove the nodes field with has_nodes_field(false)")
+                                                                 "a field rule asks the parent's policy), or remove the nodes field with has_nodes_field(false)", at: type)
             end
           end
 

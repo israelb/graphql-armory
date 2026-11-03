@@ -15,7 +15,7 @@ module GraphQL
               input.all_argument_definitions.select(&:loads).reject(&:from_resolver?).each do |argument|
                 name = GraphQL::Schema::Member::BuildType.underscore(argument.graphql_name)
                 findings.problem(:unscoped_load, "#{input.graphql_name}(#{name})",
-                                 "its input object class does not include Base, so it loads through the app's object_from_id, not the user's scope")
+                                 "its input object class does not include Base, so it loads through the app's object_from_id, not the user's scope", at: argument)
               end
             end
           end

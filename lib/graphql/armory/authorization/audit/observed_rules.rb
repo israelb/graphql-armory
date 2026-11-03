@@ -9,24 +9,24 @@ module GraphQL
           def self.call(schema, definitions, findings)
             definitions.each do |type|
               rule = type.armory_rule if type.respond_to?(:armory_rule)
-              report(findings, type.graphql_name, rule.observe, unobservable(type)) if rule&.observed?
+              report(findings, type.graphql_name, rule.observe, unobservable(type), at: type) if rule&.observed?
               next unless type.respond_to?(:fields)
 
               Definitions.fields_at_every_level(type).each do |field|
                 reason = observed_reason(field)
-                report(findings, "#{type.graphql_name}.#{field.graphql_name}", reason, field.resolver ? field : nil) if reason
+                report(findings, "#{type.graphql_name}.#{field.graphql_name}", reason, field.resolver ? field : nil, at: field) if reason
               end
             end
-            custom_introspection(schema).each { |field| report(findings, "#{field.owner.graphql_name}.#{field.graphql_name}", field.armory_observe) }
+            custom_introspection(schema).each { |field| report(findings, "#{field.owner.graphql_name}.#{field.graphql_name}", field.armory_observe, at: field) }
           end
 
-          def self.report(findings, path, reason, resolver_field = nil)
+          def self.report(findings, path, reason, resolver_field = nil, at: nil)
             effect = if resolver_field
                        "raises on every query, because #{resolver_field.graphql_name} has a resolver or a mutation, which can write (#{reason}): remove observe:"
                      else
                        "serves what this rule would refuse (#{reason}): remove it to enforce the rule"
                      end
-            findings.problem(:observed, path, "observe: #{effect}")
+            findings.problem(:observed, path, "observe: #{effect}", at: at)
           end
 
           # Its own observe:, or `authorize: true` on an owner whose rule is observed: if that owner is only a parent, no

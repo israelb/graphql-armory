@@ -42,7 +42,7 @@ module GraphQL
               sections = [
                 section("#{new_problems.size} new #{plural('problem', new_problems.size)}:", new_problems.map { |problem| new_line(problem) }),
                 section("#{gone.size} accepted #{plural('problem', gone.size)} no longer found (remove them from the baseline):", gone.map { |entry| "#{entry.path} (#{entry.kind}): #{entry.message}" }),
-                section("#{accepted.size} accepted in the baseline, still open:", accepted),
+                section("#{accepted.size} accepted in the baseline, still open:", accepted.map { |problem| Report.line(problem.to_s, problem.location) }),
                 bypasses_text
               ].compact
               sections.unshift("Passes only because of its baseline.") if passes? && !accepted.empty?
@@ -54,7 +54,7 @@ module GraphQL
 
             def new_line(problem)
               extra = grown[problem]
-              extra ? "#{problem} (it now also reaches #{extra.join(', ')})" : problem.to_s
+              Report.line(extra ? "#{problem} (it now also reaches #{extra.join(', ')})" : problem.to_s, problem.location)
             end
 
             def section(title, lines)
@@ -64,7 +64,7 @@ module GraphQL
             end
 
             def bypasses_text
-              section("#{report.bypasses.size} declared #{report.bypasses.size == 1 ? 'bypass' : 'bypasses'}:", report.bypasses.map { |bypass| "#{bypass.path}: #{bypass.reason}" })
+              section("#{report.bypasses.size} declared #{report.bypasses.size == 1 ? 'bypass' : 'bypasses'}:", report.bypasses.map { |bypass| Report.line("#{bypass.path}: #{bypass.reason}", bypass.location) })
             end
 
             def plural(word, count)

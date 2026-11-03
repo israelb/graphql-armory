@@ -39,7 +39,7 @@ module GraphQL
           def note_type(type)
             return unless type.respond_to?(:armory_rule) && type.armory_rule&.visible_when && @seen.add?(type)
 
-            report(type.graphql_name, model_problem { type.armory_model })
+            report(type.graphql_name, model_problem { type.armory_model }, type)
           end
 
           def note_field(field, path)
@@ -50,14 +50,14 @@ module GraphQL
                       else
                         "uses visible_when:, but what defines it cannot name a model, so a request that reads it raises: put it on an object type that includes Base"
                       end
-            report(path, problem)
+            report(path, problem, field)
           end
 
           def note_arguments(path, arguments)
             arguments.each do |argument|
               next unless argument.respond_to?(:armory_visible_when) && argument.armory_visible_when && @seen.add?(argument)
 
-              report("#{path}(#{argument.keyword})", model_problem { argument.armory_model })
+              report("#{path}(#{argument.keyword})", model_problem { argument.armory_model }, argument)
             end
           end
 
@@ -66,8 +66,8 @@ module GraphQL
             field.owner.respond_to?(:kind) && field.owner.kind.interface? ? field.owner.graphql_name : type.graphql_name
           end
 
-          def report(path, problem)
-            @findings.problem(:model, path, problem) if problem && !@findings.problem?(:model, path)
+          def report(path, problem, at)
+            @findings.problem(:model, path, problem, at: at) if problem && !@findings.problem?(:model, path)
           end
 
           def model_problem

@@ -54,7 +54,7 @@ module GraphQL
             return if same || !@seen.add?([resolver, path, policy])
 
             @findings.problem(:foreign_policy, path, "its resolver's rule asks #{asked || "the policy found from its model"}, not #{policy}, the `policy:` of this type. " \
-                                                     "Name the same `policy:` on the resolver")
+                                                     "Name the same `policy:` on the resolver", at: resolver)
           end
 
           def note(member, path, policy, model)
@@ -63,7 +63,7 @@ module GraphQL
 
             asked = member.armory_policy || "the policy found from the record"
             @findings.problem(:foreign_policy, path, "its rule asks #{asked}, not #{policy}, the `policy:` of this type: it is defined on a class that does not name that policy. " \
-                                                     "Move the rule to the class that names it and remove the original, or name the `policy:` on the class that defines the rule, if it can hold one")
+                                                     "Move the rule to the class that names it and remove the original, or name the `policy:` on the class that defines the rule, if it can hold one", at: member)
           end
 
           # With no `policy:` of its own, a rule asks what the adapter finds from the model, which may be the same policy.

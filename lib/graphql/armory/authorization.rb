@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "graphql/armory/authorization/errors"
+require "graphql/armory/authorization/location"
 require "graphql/armory/authorization/configuration"
 require "graphql/armory/authorization/rule"
 require "graphql/armory/authorization/memo"

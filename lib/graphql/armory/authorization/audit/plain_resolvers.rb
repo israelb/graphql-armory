@@ -13,7 +13,7 @@ module GraphQL
                                 "serves it, unless its own code refuses. Include Base in the resolver and declare `authorize`, or use a field class that includes Base and declare `authorize: :none, reason: \"...\"`"
 
           def self.report(findings, path, field)
-            findings.problem(:unprotected, path, field.respond_to?(:armory_declared) ? PROBLEM : PLAIN_FIELD_PROBLEM)
+            findings.problem(:unprotected, path, field.respond_to?(:armory_declared) ? PROBLEM : PLAIN_FIELD_PROBLEM, at: field)
           end
 
           def self.covering?(rule)
