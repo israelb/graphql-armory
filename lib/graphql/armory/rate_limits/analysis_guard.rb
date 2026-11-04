@@ -23,7 +23,7 @@ module GraphQL
         REASK = :limiter_guard_reask
         RAISED = :limiter_guard_raised
         VISITED = :limiter_guard_visited
-        STALE = [ASKED, ANSWERS, VISITED, RAISED, :time_charges].freeze
+        STALE = [ASKED, ANSWERS, VISITED, RAISED, :points, :time_charges].freeze
         NOT_CHARGED = "This query could not be charged to its rate limit."
         LIMIT_UNKNOWN = "The limits of this query could not be computed."
 
