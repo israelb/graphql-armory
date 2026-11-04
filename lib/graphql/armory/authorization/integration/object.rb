@@ -61,11 +61,11 @@ module GraphQL
           end
 
           def authorized?(object, context)
-            rule = armory_rule
+            rule = Integration.type_rule(self, context)
             return false if rule.nil?
 
             Integration.refuse_unobservable(self, rule, context)
-            Integration.allowed?(object, Integration.with_owner_model(rule, self), context) && super
+            Integration.allowed?(object, rule, context) && super
           rescue GraphQL::UnauthorizedError
             raise
           rescue StandardError => error

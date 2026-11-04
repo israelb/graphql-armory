@@ -17,7 +17,22 @@ module GraphQL
             raise ArgumentError, "user_key must be a Symbol or a String, got #{user_key.class}" unless user_key.is_a?(Symbol) || user_key.is_a?(String)
 
             @user_key = user_key
+            @found = nil
           end
+
+          # A copy that remembers, for one query, which policies a record's class answers to: every item of a list asks the
+          # same few classes. Only the class is remembered, never a record, and a lookup that raises is asked again.
+          def per_query
+            copy = self.class.new(user_key: @user_key)
+            copy.found = {}
+            copy
+          end
+
+          protected
+
+          attr_writer :found
+
+          public
 
           def actor(context)
             context[@user_key]
@@ -71,8 +86,17 @@ module GraphQL
           # policy, past the first, or a subclass past its own stricter policy.
           def policies_for(rule, subject)
             return [rule.policy] if rule.policy
+            # A Symbol's policies depend on the Symbol itself, not only on its class.
+            return find_policies(rule.model, subject) if @found.nil? || Symbol === subject
 
-            model = normalize(rule.model) if rule.model
+            # For anything else they depend only on the declared model and the class Pundit is asked about.
+            by_target = (@found[rule.model] ||= {}.compare_by_identity)
+            target = record_target(subject)
+            by_target.fetch(target) { by_target[target] = find_policies(rule.model, subject) }
+          end
+
+          def find_policies(declared_model, subject)
+            model = normalize(declared_model) if declared_model
             declared = finder(model).policy if model
             target = model_named?(subject, model) ? subject : record_target(subject)
             own = finder(target).policy

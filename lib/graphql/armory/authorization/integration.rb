@@ -42,7 +42,7 @@ module GraphQL
           return Adapters::Null.new.scope(nil, items, rule) if rule.nil?
 
           configuration = configuration(context)
-          Scope.(items, rule, context, adapter: configuration.adapter, sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
+          Scope.(items, rule, context, adapter: query_adapter(context), sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
         end
 
         # Looks an object up inside the user's scope, by primary key unless a key is given.
@@ -111,6 +111,16 @@ module GraphQL
         end
 
         # The rule with the model its owner wraps, the one the audit reads: named by the rule, or named like the type.
+        # The rule a type checks its objects with, model included, worked out once per type per query: every item of a list
+        # asks it. Nil when nothing covers the type. A rule declared while a query runs applies from the next query.
+        def self.type_rule(type, context)
+          rules = context.namespace(:armory)[:type_rules] ||= {}.compare_by_identity
+          rules.fetch(type) do
+            rule = type.armory_rule
+            rules[type] = rule && with_owner_model(rule, type)
+          end
+        end
+
         def self.with_owner_model(rule, owner)
           return rule if rule.none? || rule.policy || rule.model || !owner.respond_to?(:armory_model)
 
@@ -187,10 +197,20 @@ module GraphQL
           store = context.namespace(:armory)
           authorize = store[:authorize] ||= begin
             configuration = configuration(context)
-            Authorize.build(context, adapter: configuration.adapter, sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
+            Authorize.build(context, adapter: query_adapter(context), sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
           end
 
           authorize.(subject, rule, context)
+        end
+
+        # The adapter this query asks, shared by the checks and the scopes: an adapter that can remember lookups for one
+        # query (`per_query`) gets a copy of its own for each.
+        def self.query_adapter(context)
+          store = context.namespace(:armory)
+          store[:adapter] ||= begin
+            adapter = configuration(context).adapter
+            adapter.respond_to?(:per_query) ? adapter.per_query : adapter
+          end
         end
 
         # Whether a type or field may appear in the schema this user sees. The question is asked of the

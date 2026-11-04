@@ -32,6 +32,8 @@ module GraphQL
           raise ArgumentError, "observe: needs a text saying why this rule is observed, got #{observe.class}" unless observe.nil? || (observe.is_a?(String) && !observe.strip.empty?)
           raise ArgumentError, "observe: does not apply to a bypass, which refuses nothing" if observe && none?
 
+          # Every answer is remembered under its rule, once per item: the hash is computed once.
+          @hash = members.hash
           freeze
         end
 
@@ -67,9 +69,7 @@ module GraphQL
         end
         alias eql? ==
 
-        def hash
-          members.hash
-        end
+        attr_reader :hash
 
         protected
 
