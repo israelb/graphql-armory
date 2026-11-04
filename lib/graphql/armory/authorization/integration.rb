@@ -110,7 +110,6 @@ module GraphQL
           end
         end
 
-        # The rule with the model its owner wraps, the one the audit reads: named by the rule, or named like the type.
         # The rule a type checks its objects with, model included, worked out once per type per query: every item of a list
         # asks it. Nil when nothing covers the type. A rule declared while a query runs applies from the next query.
         def self.type_rule(type, context)
@@ -121,6 +120,7 @@ module GraphQL
           end
         end
 
+        # The rule with the model its owner wraps, the one the audit reads: named by the rule, or named like the type.
         def self.with_owner_model(rule, owner)
           return rule if rule.none? || rule.policy || rule.model || !owner.respond_to?(:armory_model)
 
@@ -203,15 +203,22 @@ module GraphQL
           authorize.(subject, rule, context)
         end
 
-        # The adapter this query asks, shared by the checks and the scopes: an adapter that can remember lookups for one
-        # query (`per_query`) gets a copy of its own for each.
+        # The adapter this query asks, shared by the checks and the scopes. The Pundit adapter, a subclass included, gets a
+        # copy of its own that remembers lookups for this query. Any other adapter is asked as configured: a wrapper around
+        # Pundit keeps its own answers, it only remembers nothing.
         def self.query_adapter(context)
           store = context.namespace(:armory)
           store[:adapter] ||= begin
             adapter = configuration(context).adapter
-            adapter.respond_to?(:per_query) ? adapter.per_query : adapter
+            pundit?(adapter) ? adapter.per_query : adapter
           end
         end
+
+        # Never loads Pundit: while its adapter is not loaded, no adapter can be one.
+        def self.pundit?(adapter)
+          !Adapters.autoload?(:Pundit) && Adapters::Pundit === adapter
+        end
+        private_class_method :pundit?
 
         # Whether a type or field may appear in the schema this user sees. The question is asked of the
         # model's class, with no record, so the rule's action must be one a policy can answer that way.
