@@ -5,7 +5,8 @@ module GraphQL
     module Authorization
       # Where something of the app's schema was written, as "path:line", for the audit's report. graphql-ruby keeps no
       # location for a field or an argument, so the plugin's field and argument classes record the line that declared them,
-      # and a type records the line of its `authorize`. Anything else falls back to the line of its class.
+      # and a type records the line of its `authorize`. Anything else falls back to the line of its class, and a type
+      # graphql-ruby generated (a mutation's payload, a connection, an edge) to the class it was generated from.
       #
       # Limits: a schema built from SDL has no Ruby lines; a field declared by a helper method points to the helper; a class
       # reopened in several files gives the first one.
@@ -45,10 +46,31 @@ module GraphQL
           when GraphQL::Schema::Field, GraphQL::Schema::Argument
             (thing.armory_location if thing.respond_to?(:armory_location)) || absolute(thing.owner)
           when Module
-            (thing.armory_rule_location if thing.respond_to?(:armory_rule_location)) || constant(thing)
+            (thing.armory_rule_location if thing.respond_to?(:armory_rule_location)) || constant(thing) || generated_from(thing)
           end
         end
         private_class_method :absolute
+
+        # graphql-ruby generates some types as classes with no constant: a mutation's payload, and a type's connection and
+        # edge. They point to the class they were generated from, which was written somewhere.
+        # A connection of connections can lead back to itself, so each class is visited once.
+        def self.generated_from(type)
+          seen = {}.compare_by_identity
+          while type.is_a?(Module) && !seen.key?(type)
+            seen[type] = true
+            source = type.mutation if type.respond_to?(:mutation)
+            source ||= type.node_type if type.respond_to?(:node_type)
+            return unless source.is_a?(Module)
+
+            found = (source.armory_rule_location if source.respond_to?(:armory_rule_location)) || constant(source)
+            return found if found
+
+            type = source
+          end
+        rescue StandardError, NotImplementedError
+          nil
+        end
+        private_class_method :generated_from
 
         # Only when the name leads back to this class: a class may answer another constant's name. A location is never worth
         # failing the audit, so a `name` that raises gives none.
