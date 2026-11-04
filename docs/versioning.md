@@ -264,6 +264,44 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 `version` is the schema's own label, never the client's value. `:version_defaulted` counts the clients that do not send a version yet; `:version_refused` with `:retired` counts the clients still on a version you retired. See [Telemetry](telemetry.md).
 
+### The audit
+
+Most mistakes in a versioned schema are refused with `ConfigurationError`, but only when a query first asks the member, which may be in production. The audit asks every member of every served version before that:
+
+```ruby
+report = GraphQL::Armory::Versioning::Audit.(AppSchema)
+report.ok?
+puts report
+```
+
+```ruby
+# spec/graphql/versions_spec.rb
+require "graphql/armory/versioning/rspec"
+
+RSpec.describe AppSchema do
+  it { is_expected.to have_consistent_versions }
+end
+```
+
+```sh
+bin/rake "graphql_armory:versions:audit[AppSchema]"   # prints the report; exit 1 on problems
+```
+
+It asks each member with a context that names the version and `armory_full_schema: true`, so Authorization's `visible_when:` never hides a refusal from it; it records no signal. What it reports:
+
+| Kind | What it means |
+|---|---|
+| `:plugin` | The schema never installed `use GraphQL::Armory::Versioning` |
+| `:visibility` | Neither `Schema::Visibility` nor `Schema::Warden` is used |
+| `:refused` | A query of a served version would be refused: under `Schema` for the schema's own refusals (a root type or an `extra_types` type with a lifecycle, `AlwaysVisible`, a late-bound name with twins, an abstract load, subscription twins), otherwise at the member that refuses (overlapping twins, a default naming a member outside the version, shadowing, ...) |
+| `:duplicate` | Two definitions of one type name that one version both sees (type twins whose lifecycles overlap) |
+| `:empty` | An enum with no value in a served version |
+| `:undeclared_version` | `added:` or `removed:` names a label that is not in `versions:` |
+| `:outside_lifecycle` | A served version lists a type, field, argument, enum value or membership outside its lifecycle: your own `visible?` answers before the plugin's, or graphql-ruby serves it without asking. A client of that version gets it |
+| `:unchecked` | Asking the member raised something else (an app `visible?` that needs a user, for example): it was not checked |
+
+`ok?` means: no query of a served version is refused, and no served version lists a member outside its lifecycle. It does not check yet, and the report says so: members hidden in a version because their type is, fields served by a parent or an interface under the Warden, interfaces and unions left with no member, types with no visible field, your own `visible?` methods, defaults of arguments without `Base`, and subscription triggers. A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
+
 ### Testing with versioning
 
 `Versioning::Controls` holds a small schema to test against: `Controls::Versions.example` (`2024-01-15` retired, `2024-06-01` and `2025-01-01` served), `Controls::Schema.example(visibility: :visibility | :warden, default:, base:, sinks:)` with a field of each lifecycle, `Controls::Root.example(resolved)` that records what resolved, and `Controls::Context.example(version:)`. For the other members: `Controls::Argument.example` and `Controls::EnumValue.example` (base classes with `Base`), `Controls::Status.example` and `Controls::InvoiceFilter.example` (an enum and an input object with a value or field of each lifecycle), `Controls::MembersQuery.example` (`invoices(filter:, first:, page:)` and `status`) and `Controls::MembersRoot.example(resolved, status:)`. The decision itself is `Versioning::Gate`: `Gate.build(versions:, default:, retired:)` takes `use`'s settings, `gate.(context)` answers a `Decision` and records its signal, and `gate.resolve(label)` answers it recording nothing. `Gate.new`, with nothing wired, refuses every request. `Gate::Substitute` answers the decision you tell it (`answer(decision)`) and records the contexts and labels it was asked about.
