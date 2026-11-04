@@ -592,7 +592,7 @@ RSpec.describe "Versioning 2b1 probes: type lifecycles" do
     it "security S45a: implements with added: inside an interface is refused" do
       bb = bases
       other = Module.new { include bb[:interface]; graphql_name "Other" }
-      expect { Module.new { include bb[:interface]; graphql_name "I2"; implements other, added: VERSIONING_2B1_L } }.to raise_error(VERSIONING_2B1_VER::ConfigurationError, /implements/)
+      expect { Module.new { include bb[:interface]; graphql_name "I2"; implements other, added: VERSIONING_2B1_L } }.to raise_error(VERSIONING_2B1_VER::ConfigurationError, /I2: an interface cannot implement another/)
     end
 
     it "security S45b: implements with a late-bound String and removed: on an object is refused" do
