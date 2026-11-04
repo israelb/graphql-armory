@@ -88,9 +88,9 @@ RSpec.describe "use GraphQL::Armory::Versioning: the gate" do
       end
 
       it "resolves nothing for a field outside the version with validate: false" do
-        # graphql 2.4's interpreter raises a NoMethodError instead; neither runs the field.
-        expected = Gem::Version.new(GraphQL::VERSION) < Gem::Version.new("2.5") ? NoMethodError : GraphQL::Error
-        expect { run(schema, "{ invoice { amount } }", validate: false, context: { armory_version: "2025-01-01" }) }.to raise_error(expected)
+        # Some graphql versions raise a GraphQL::Error, others (2.4, 2.5) a NoMethodError from the interpreter; none runs the field.
+        expect { run(schema, "{ invoice { amount } }", validate: false, context: { armory_version: "2025-01-01" }) }
+          .to raise_error { |error| expect(error).to be_a(GraphQL::Error).or be_a(NoMethodError) }
         expect(resolved).not_to include(:amount)
       end
 

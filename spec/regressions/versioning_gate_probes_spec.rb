@@ -34,6 +34,21 @@ require "digest"
 # a refused version), PATH13 (custom context_class), BLD2 (second use), BLD3 (AlwaysVisible after use), BLD4 (Gate.new),
 # BLD5 (lifecycle shapes), BLD7 (Base outside a field class), VER2 (non-query contexts), VER3 (context-less get_field).
 # Kept from the independent verification of PR #65 (API versioning, increment 1).
+# Some graphql versions (2.4, 2.5) pass `quirks_mode:` to json, which json 3.1 refuses: they cannot print a String
+# argument in `to_definition`. Asked once, by trying.
+module VersioningProbeSupport
+  def self.prints_strings?
+    return @prints_strings if defined?(@prints_strings)
+
+    @prints_strings = begin
+      GraphQL::Language.serialize("x")
+      true
+    rescue ArgumentError
+      false
+    end
+  end
+end
+
 RSpec.describe "Regression probes: versioning increment 1" do
   VERSIONING_PROBE_LABELS = %w[2024-01-15 2024-06-01 2025-01-01].freeze
   RETIRED = %w[2024-01-15].freeze
@@ -271,7 +286,7 @@ RSpec.describe "Regression probes: versioning increment 1" do
   end
 
   it "[security] PATH9 to_definition per version, and armory_full_schema does not widen" do
-    skip "graphql 2.4 with json 3.1 cannot print a String argument" if Gem::Version.new(GraphQL::VERSION) < Gem::Version.new("2.5")
+    skip "this graphql with json 3.1 cannot print a String argument" unless VersioningProbeSupport.prints_strings?
     schema = controls_schema
     v25 = schema.to_definition(context: { armory_version: "2025-01-01" })
     v24 = schema.to_definition(context: { armory_version: "2024-06-01" })
@@ -305,7 +320,7 @@ RSpec.describe "Regression probes: versioning increment 1" do
   end
 
   it "[preservation] ENV1 to_definition of a plainly deprecated field (no versioning) prints" do
-    skip "graphql 2.4 with json 3.1 cannot print a String argument" if Gem::Version.new(GraphQL::VERSION) < Gem::Version.new("2.5")
+    skip "this graphql with json 3.1 cannot print a String argument" unless VersioningProbeSupport.prints_strings?
     q = Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :old, String, null: true, deprecation_reason: "Use new" }
     s = Class.new(GraphQL::Schema) { query(q) }
     expect(s.to_definition).to include("@deprecated")
@@ -946,7 +961,7 @@ RSpec.describe "Regression probes: versioning increment 1" do
   end
 
   it "[security] TEL5 to_definition and Schema.validate record one signal each" do
-    skip "graphql 2.4 with json 3.1 cannot print a String argument" if Gem::Version.new(GraphQL::VERSION) < Gem::Version.new("2.5")
+    skip "this graphql with json 3.1 cannot print a String argument" unless VersioningProbeSupport.prints_strings?
     signals = []
     s = controls_schema(sinks: [->(sig, data) { signals << [sig, data] }])
     s.to_definition(context: { armory_version: "2024-06-01" })
