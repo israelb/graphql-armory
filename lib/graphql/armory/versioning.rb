@@ -61,6 +61,7 @@ module GraphQL
         decision = Integration.gate(schema).resolve(label)
         raise decision.error if decision.refused?
 
+        Integration.refuse_always_visible(schema)
         Integration.check_schema(schema)
         query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: context.merge(armory_version: label))
         View.new(query.types)

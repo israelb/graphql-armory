@@ -126,7 +126,7 @@ class Types::CreateContract < Types::BaseMutation
 end
 ```
 
-A type outside the version is gone with everything that uses it: graphql-ruby hides each field that returns it and each argument that takes it, and the plugin also hides an argument that `loads:` it. A subclass keeps its parent's lifecycle unless it declares its own, which must fit inside the parent's; a mutation's generated input and payload types take the mutation's; an object never takes its interfaces', and an interface never takes the interfaces it includes.
+A type outside the version is gone with everything that uses it: graphql-ruby hides each field that returns it and each argument that takes it, and the plugin also hides an argument that `loads:` it. An argument that `loads:` an interface or union still lives, but an object of a member type outside the version is not authorized there: graphql-ruby's unauthorized path runs (`unauthorized_object`), never the resolver. A field leaves with the type that declared it, so an interface that includes a versioned interface loses that interface's fields where it does not live. A subclass keeps its parent's lifecycle unless it declares its own, which must fit inside every versioned ancestor's; a mutation's generated input and payload types take the mutation's; an object never takes its interfaces', and an interface never takes the interfaces it includes. `lifecycle` needs `added:`, `removed:` or both.
 
 A new member of a union or a new implementer of an interface is a new type: give it `lifecycle added:`. A lifecycle on the membership itself (`implements Archivable, added:`, `possible_types Contract, added:`) is not supported yet and raises `ConfigurationError`, because graphql-ruby would accept those keywords and ignore them.
 
@@ -224,7 +224,7 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 `include GraphQL::Armory::Versioning::Base` in an object, interface (after `include GraphQL::Schema::Interface`), union, enum, scalar, input object, resolver or mutation class adds the class method `lifecycle added:, removed:`, with the same rules; `Type.armory_lifecycle.to_h` answers it, inherited as described in "How to use it". `GraphQL::Armory::Versioning.types(schema, label, context: {})` answers a `Versioning::View`; `View.new` with nothing answers nothing.
 
-These raise `ConfigurationError` when the first query of the schema is built, and from `Versioning.types`:
+These raise `ConfigurationError` when a query of the schema is built (a `GraphQL::Query` built by hand included), and from `Versioning.types`; a root or `extra_types` changed later is checked again:
 
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.
@@ -233,7 +233,7 @@ These raise `ConfigurationError` when the class is defined: `implements` or a un
 
 These raise `ConfigurationError`, naming the member, the first time a query asks about it, because graphql-ruby would otherwise serve the member outside its version:
 
-- A subclass with its own lifecycle that lives in a version where its versioned parent does not.
+- A type that lives in a version where one of its versioned ancestors does not.
 
 - A `default_value:` that names an input field or enum value the query's version does not have, by its own lifecycle or its type's. Introspection would print it, and the field would run without it. Use a default that every version of the argument has. An enum value renamed across versions with the same Ruby `value:` counts as one: the default is fine in every version where either name lives. The check runs only on argument classes that include `Base`: an argument class without it can still print, in an older version's SDL, a default naming a value added later.
 - A versioned argument or enum value with the same name as one its parent class defines (an input object, enum, resolver or mutation subclass, or a field's own argument over its resolver's). graphql-ruby serves the parent's definition where the local one is hidden. Version the parent's definition, or rename it.
@@ -271,7 +271,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 - **Default values that graphql-ruby checks at boot.** graphql-ruby validates every `default_value:` against the latest version when the schema loads, so a default naming an enum value removed in the latest version raises its `InvalidDefaultValueError` at boot, whatever the argument's own lifecycle.
 - **An enum with every value hidden in V** raises graphql-ruby's `MissingValuesError` on any query that reaches it in V, introspection included. Give the enum the lifecycle instead.
 - **Named `Schema::Visibility` profiles** (`profiles:`) are not supported yet: any field of a class that includes `Base` asked under one raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work.
-- **`Schema::AlwaysVisible`** never asks `visible?`, so nothing would be versioned: the first query raises `ConfigurationError` instead, even when it was added after `use`.
+- **`Schema::AlwaysVisible`** never asks `visible?`, so nothing would be versioned: the first query and `Versioning.types` raise `ConfigurationError` instead, even when it was added after `use`.
 - **Your own `visible?`** on a base class must call `super`, or the plugin is skipped for those members.
 - **Two refusing plugins.** With persisted queries, a request both refuse gets the persisted query's code. Either way nothing runs.
 - **Signals.** `to_definition`, `Schema.validate` and subscription triggers go through `query_class` too, so each records one signal.

@@ -37,6 +37,8 @@ module GraphQL
           return version(query.context) if query.respond_to?(:context) && !query.context.equal?(context)
           return version(query.query.context) if PARTIAL && query.is_a?(PARTIAL)
 
+          # A query built without the schema's query class skipped `Lookup`, and with it the schema check.
+          check_schema(context.schema)
           decision = gate(context.schema).resolve(context[:armory_version])
           raise decision.error if decision.refused?
 
@@ -83,8 +85,13 @@ module GraphQL
         module Field
           include Member
 
+          # A field also leaves with the type that declared it: an interface that includes a versioned interface would
+          # otherwise keep that interface's fields where it does not live.
           def visible?(context)
-            super && @armory_lifecycle.covers?(Integration.version(context))
+            return false unless super
+
+            version = Integration.version(context)
+            @armory_lifecycle.covers?(version) && Integration.lifecycle_of(owner).covers?(version)
           rescue ConfigurationError => error
             raise error.class, "#{owner.graphql_name}.#{graphql_name}: #{error.message}"
           end
@@ -200,6 +207,10 @@ module GraphQL
         # An interface takes nothing from the interfaces it includes, and objects take nothing from their interfaces.
         module Type
           def lifecycle(added: nil, removed: nil)
+            if added.nil? && removed.nil?
+              raise ConfigurationError, "lifecycle needs added:, removed: or both; a type with neither lives in every version"
+            end
+
             @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
           rescue ConfigurationError => error
             raise error.class, "#{graphql_name}: #{error.message}"
@@ -224,6 +235,20 @@ module GraphQL
 
             Integration.refuse_wider_than_parent(self, version)
             true
+          rescue ConfigurationError => error
+            raise error.class, "#{graphql_name}: #{error.message}"
+          end
+        end
+
+        # Extended into object types. An argument that `loads:` an abstract type checks the loaded object's type against the
+        # abstract type's members with no context, so an object of a type outside the version would load: it is not
+        # authorized there, and the resolver never runs with it.
+        module Authorized
+          def authorized?(object, context)
+            lifecycle = armory_lifecycle
+            return super if Lifecycle::EVERYWHERE.equal?(lifecycle)
+
+            lifecycle.covers?(Integration.version(context)) && super
           rescue ConfigurationError => error
             raise error.class, "#{graphql_name}: #{error.message}"
           end
@@ -265,22 +290,26 @@ module GraphQL
           parent if parent.respond_to?(:armory_lifecycle)
         end
 
-        # A subclass with its own lifecycle must not live where its versioned parent does not: the legacy Warden checks the
-        # parent's visibility for the memberships the subclass inherits.
+        # A type must not live where any versioned ancestor does not: the legacy Warden checks the parents' visibility for the
+        # memberships a subclass inherits. Every ancestor counts, since an intermediate one may never be asked.
         def self.refuse_wider_than_parent(type, version)
-          return unless type.is_a?(Class) && type.instance_variable_defined?(:@armory_lifecycle)
+          return unless type.is_a?(Class)
 
           parent = type.superclass
-          return unless parent.respond_to?(:armory_lifecycle) && !parent.armory_lifecycle.covers?(version)
-
-          raise ConfigurationError, "lives in #{label(version)} but its parent #{parent.graphql_name} does not: a subclass's lifecycle must " \
-                                    "fit inside its parent's"
+          while parent.respond_to?(:armory_lifecycle)
+            unless parent.armory_lifecycle.covers?(version)
+              raise ConfigurationError, "lives in #{label(version)} but its parent #{parent.graphql_name} does not: a subclass's lifecycle " \
+                                        "must fit inside its parent's"
+            end
+            parent = parent.superclass
+          end
         end
 
-        # Checked when the first query of a schema is built, and by `Versioning.types`: graphql-ruby answers these without
-        # asking `visible?` with the query's context.
+        # Checked when a query of a schema is built, and by `Versioning.types`: graphql-ruby answers these without asking
+        # `visible?` with the query's context. Checked again when the roots or `extra_types` change.
         def self.check_schema(schema)
-          return if schema.instance_variable_defined?(:@armory_schema_checked)
+          checked = [schema.query, schema.mutation, schema.subscription, *schema.extra_types]
+          return if schema.instance_variable_get(:@armory_schema_checked) == checked
 
           [schema.query, schema.mutation, schema.subscription].compact.each do |root|
             next unless versioned_type?(root)
@@ -294,7 +323,7 @@ module GraphQL
             raise ConfigurationError, "#{type.graphql_name}: a type with a lifecycle cannot be in extra_types: `__type` and the SDL " \
                                       "read extra_types without asking visible?"
           end
-          schema.instance_variable_set(:@armory_schema_checked, true)
+          schema.instance_variable_set(:@armory_schema_checked, checked)
         end
 
         # graphql-ruby serves a parent's definition of a name when the local one is hidden (enum values on every path,
@@ -472,7 +501,7 @@ module GraphQL
         # Instances (members) get `added:`/`removed:`; classes (types) get `lifecycle`.
         MEMBERS = { GraphQL::Schema::Field => :Field, GraphQL::Schema::Argument => :Argument, GraphQL::Schema::EnumValue => :EnumValue }.freeze
         TYPES = {
-          GraphQL::Schema::Object => %i[Type Implements], GraphQL::Schema::Union => %i[Type Members],
+          GraphQL::Schema::Object => %i[Type Implements Authorized], GraphQL::Schema::Union => %i[Type Members],
           GraphQL::Schema::InputObject => %i[Type], GraphQL::Schema::Enum => %i[Type], GraphQL::Schema::Scalar => %i[Type],
           GraphQL::Schema::Resolver => %i[Type]
         }.freeze
