@@ -76,6 +76,31 @@ module AuditLocations
     end
   end
 
+  class BaseMutation < GraphQL::Schema::RelayClassicMutation
+    include Plugin::Base
+    object_class BaseObject
+    field_class BaseField
+  end
+
+  class Thing < BaseObject
+    RULE_LINE = __LINE__ + 1
+    authorize :read
+    field :name, String, null: true
+  end
+
+  # graphql-ruby generates MakeThingPayload, with no constant.
+  class MakeThing < BaseMutation
+    RULE_LINE = __LINE__ + 1
+    authorize :create, model: :thing
+    field :thing, Thing, null: true
+  end
+
+  class Mutation < BaseObject
+    graphql_name "Mutation"
+    authorize :none, reason: "root", covers_fields: true
+    field :make_thing, mutation: MakeThing
+  end
+
   class Query < BaseObject
     graphql_name "Query"
     authorize :none, reason: "root", covers_fields: true
@@ -87,11 +112,13 @@ module AuditLocations
     field :checked, Checked, null: true
     field :loading, Loading, null: true
     field :init_bypassed, InitBypassed, null: true
+    field :things, Thing.connection_type, null: true
   end
 
   class Schema < GraphQL::Schema
     use Plugin, adapter: Plugin::Adapters::Substitute.new
     query Query
+    mutation Mutation
   end
 
   FILE = File.expand_path(__FILE__).delete_prefix("#{Dir.pwd}/")
@@ -131,6 +158,17 @@ RSpec.describe "the audit's file and line for each problem" do
 
     expect(location_of(:field_without_rule, "InitBypassed.secret")).to eq("#{file}:#{AuditLocations::InitBypassed::FIELD_LINE}")
     expect(argument.location).to eq("#{file}:#{AuditLocations::InitBypassed::ARGUMENT_LINE}")
+  end
+
+  it "gives a payload graphql-ruby generated the line of its mutation" do
+    expect(location_of(:no_rule, "MakeThingPayload")).to eq("#{file}:#{AuditLocations::MakeThing::RULE_LINE}")
+  end
+
+  it "gives a connection and an edge graphql-ruby generated the line of their node type" do
+    location = GraphQL::Armory::Authorization::Location
+
+    expect(location.of(AuditLocations::Thing.connection_type)).to eq("#{file}:#{AuditLocations::Thing::RULE_LINE}")
+    expect(location.of(AuditLocations::Thing.edge_type)).to eq("#{file}:#{AuditLocations::Thing::RULE_LINE}")
   end
 
   it "gives a declared bypass the line that declared it" do
