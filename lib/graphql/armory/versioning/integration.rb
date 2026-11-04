@@ -266,7 +266,10 @@ module GraphQL
         module Membership
           def initialize(abstract_type, object_type, added: nil, removed: nil, **options)
             @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
-            Integration.mark_versioned_membership(abstract_type) unless Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
+            unless Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
+              Integration.refuse_unguarded_membership(abstract_type, object_type)
+              Integration.mark_versioned_membership(abstract_type)
+            end
             super(abstract_type, object_type, **options)
           end
 
@@ -346,8 +349,46 @@ module GraphQL
                                     "to include GraphQL::Armory::Versioning::Base"
         end
 
+        # The checks of a versioned membership run from the types that include `Base`, so a membership between types
+        # without it is refused: graphql-ruby would pass it the keywords and serve it unchecked.
+        def self.refuse_unguarded_membership(abstract_type, object_type)
+          guarded = object_type.is_a?(Class) && object_type.singleton_class.include?(Type) &&
+                    abstract_type.is_a?(Module) && abstract_type.singleton_class.include?(Type)
+          return if guarded
+
+          names = [abstract_type, object_type].map { |type| type.respond_to?(:graphql_name) ? display_name(type) : type.inspect }
+          raise ConfigurationError, "#{names.last} and #{names.first}: a membership with added: or removed: needs an object class and " \
+                                    "an interface or union that include GraphQL::Armory::Versioning::Base"
+        end
+
         def self.mark_versioned_membership(abstract_type)
           abstract_type.instance_variable_set(:@armory_versioned_memberships, true) if abstract_type.is_a?(Module)
+          @versioned_memberships = (@versioned_memberships || 0) + 1
+        end
+
+        def self.versioned_membership_count = @versioned_memberships || 0
+
+        # Every argument of the schema that loads an interface or union with a versioned membership, whatever its class:
+        # an argument class without `Base` never asks. Walked only when a versioned membership exists.
+        def self.refuse_abstract_loads(schema)
+          schema.types.each_value do |type|
+            next if type.introspection?
+
+            arguments = if type.kind.input_object?
+                          type.all_argument_definitions
+                        elsif type.kind.fields?
+                          type.all_field_definitions.flat_map(&:all_argument_definitions)
+                        else
+                          []
+                        end
+            arguments.each do |argument|
+              loads = argument.loads
+              next unless loads && loads.kind.abstract? && versioned_memberships?(loads)
+
+              raise ConfigurationError, "#{argument.path}: it loads #{loads.graphql_name}, which has a membership with a lifecycle: " \
+                                        "graphql-ruby would load an object that is not a member in the query's version. Load the object types instead"
+            end
+          end
         end
 
         def self.versioned_memberships?(abstract_type)
@@ -365,10 +406,15 @@ module GraphQL
           versioned.each do |membership|
             target = type < GraphQL::Schema::Union ? membership.object_type : membership.abstract_type
             others = memberships.reject { |other| other.equal?(membership) || !other.respond_to?(:abstract_type) }
-            if others.any? { |other| (type < GraphQL::Schema::Union ? other.object_type : other.abstract_type).equal?(target) }
-              verb = type < GraphQL::Schema::Union ? "lists" : "implements"
-              raise ConfigurationError, "#{type.graphql_name}: #{verb} #{target.graphql_name} with a lifecycle, but another membership to " \
-                                        "#{target.graphql_name} makes it a member in every version. Keep one"
+            union = type < GraphQL::Schema::Union
+            # Another membership to the same type, or, for an object, to an interface that includes it.
+            overridden = others.any? do |other|
+              reached = union ? other.object_type : other.abstract_type
+              reached.equal?(target) || (!union && reached.is_a?(Module) && reached.include?(target))
+            end
+            if overridden
+              raise ConfigurationError, "#{union ? 'lists' : 'implements'} #{target.graphql_name} with a lifecycle, but another membership " \
+                                        "to #{target.graphql_name}, or to an interface that includes it, makes it a member in every version. Keep one"
             end
             refuse_shared_fields(type, target, others) unless type < GraphQL::Schema::Union
           end
@@ -399,7 +445,7 @@ module GraphQL
             source = sources.find { |_, fields| fields.key?(name) && !fields[name].equal?(definition) }
             next unless source
 
-            raise ConfigurationError, "#{object.graphql_name}: implements #{interface.graphql_name} with a lifecycle, but " \
+            raise ConfigurationError, "implements #{interface.graphql_name} with a lifecycle, but " \
                                       "#{interface.graphql_name}.#{name} is also declared by #{display_name(source.first)}, so graphql-ruby could serve " \
                                       "#{interface.graphql_name}'s definition where the membership does not live. Declare #{name} on " \
                                       "#{object.graphql_name}, or rename one"
@@ -436,9 +482,13 @@ module GraphQL
         # Checked when a query of a schema is built, and by `Versioning.types`: graphql-ruby answers these without asking
         # `visible?` with the query's context. Checked again when the roots or `extra_types` change.
         def self.check_schema(schema)
-          checked = [schema.query, schema.mutation, schema.subscription, *schema.extra_types]
+          checked = [schema.query, schema.mutation, schema.subscription, versioned_membership_count, *schema.extra_types]
           return if schema.instance_variable_get(:@armory_schema_checked) == checked
 
+          # Under `Schema::Visibility` such a type counts as referenced and its members are filtered; there `schema.types`
+          # would also ask every member's `visible?` before any query.
+          visibility = schema.respond_to?(:use_visibility_profile?) && schema.use_visibility_profile?
+          refuse_abstract_loads(schema) if versioned_membership_count.positive? && !visibility
           [schema.query, schema.mutation, schema.subscription].compact.each do |root|
             next unless versioned_type?(root)
 

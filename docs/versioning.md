@@ -251,13 +251,15 @@ These raise `ConfigurationError` when a query of the schema is built (a `GraphQL
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.
 
-These raise `ConfigurationError` when the class is defined, before anything is added, because graphql-ruby would ignore the keywords, apply them partly or add memberships without them: `implements` or `possible_types` with `added:` or `removed:` when the abstract type's `type_membership_class` does not include `Base`, when a member is named by a String, when the implemented interface implements other interfaces (implement each one directly), or when the class implementing is an interface. Without `Base` on the type, graphql-ruby accepts and ignores them.
+These raise `ConfigurationError` when the class is defined, before anything is added, because graphql-ruby would ignore the keywords, apply them partly or add memberships without them: `implements` or `possible_types` with `added:` or `removed:` when the abstract type's `type_membership_class` does not include `Base`, when a member is named by a String, when the implemented interface implements other interfaces (implement each one directly), or when the class implementing is an interface. A membership class with `Base` also refuses a lifecycle between types that do not both include `Base` (an object class, and an interface or union), since the checks below run from those types.
+
+This raises `ConfigurationError` when the argument is asked, and, under the legacy Warden, when any query of the schema is built, whatever the argument's class: an argument that `loads:` an interface or union with a versioned membership, because graphql-ruby checks the loaded object against the members with no context. Load the object types instead.
 
 These raise `ConfigurationError` the first time a query asks about the type, because graphql-ruby would serve the membership or the interface's definitions where it does not live:
 
-- An object or union with a versioned membership and another membership to the same abstract type or object (a parent's, or a repeated one).
+- An object or union with a versioned membership and another membership to the same abstract type or object (a parent's, or a repeated one), or, for an object, to an interface that includes the versioned one.
 - An object that implements an interface with a lifecycle whose field another of its interfaces or a parent class declares differently. Declare the field on the object, or rename one.
-- An argument that `loads:` an interface or union with a versioned membership: graphql-ruby checks the loaded object against the members with no context. Load the object types instead.
+
 
 These raise `ConfigurationError`, naming the member, the first time a query asks about it, because graphql-ruby would otherwise serve the member outside its version:
 

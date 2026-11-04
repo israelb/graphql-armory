@@ -133,7 +133,7 @@ RSpec.describe "use GraphQL::Armory::Versioning: memberships" do
           .to eq([[[], ["Invoice"]], [["Archivable"], %w[Contract Invoice]]])
       end
 
-      it "refuses an argument that loads an abstract type with a versioned membership" do
+      it "refuses, on any query, an argument that loads an abstract type with a versioned membership" do
         b = catalog[:b]
         archivable = catalog[:archivable]
         invoice = catalog[:invoice]
@@ -145,9 +145,13 @@ RSpec.describe "use GraphQL::Armory::Versioning: memberships" do
           end
         end
 
-        expect { run(schema_over(query, visibility), "{ __typename }", new) }.not_to raise_error
-        expect { run(schema_over(query, visibility), '{ archive(itemId: "1") }', old) }
-          .to raise_error(versioning::ConfigurationError, /archive.itemId: it loads Archivable, which has a membership with a lifecycle/)
+        # Under Warden every query refuses it, since an argument class without Base would never ask; under Visibility the
+        # argument refuses when asked, and graphql-ruby filters the members of a loaded type itself.
+        text = visibility == :warden ? "{ __typename }" : '{ archive(itemId: "1") }'
+        [old, new].each do |version|
+          expect { run(schema_over(query, visibility), text, version) }
+            .to raise_error(versioning::ConfigurationError, /archive.itemId: it loads Archivable, which has a membership with a lifecycle/)
+        end
       end
 
       it "refuses an interface membership whose fields another source of the object also declares" do
@@ -168,7 +172,7 @@ RSpec.describe "use GraphQL::Armory::Versioning: memberships" do
         child = Class.new(parent) { graphql_name "Child"; implements archivable, added: "2025-01-01" }
         contract = catalog[:contract]
         twice = Class.new(b[:union]) { graphql_name "Twice"; possible_types contract; possible_types contract, added: "2025-01-01" }
-        query = Class.new(b[:object]) { graphql_name "Query"; field :child, child, null: true; field :twice, twice, null: true }
+        query = Class.new(b[:object]) { graphql_name "Query"; field :child, child, null: true }
 
         expect { run(schema_over(query, visibility), "{ child { archived } }", old) }
           .to raise_error(versioning::ConfigurationError, /Child: implements Archivable with a lifecycle, but another membership to Archivable/)
@@ -207,7 +211,8 @@ RSpec.describe "use GraphQL::Armory::Versioning: memberships" do
         -> { Module.new { include b[:interface]; graphql_name "D"; implements archivable, added: "2025-01-01" } } => /D: an interface cannot implement another with added: or removed:/,
         -> { Class.new(plain_union) { graphql_name "E"; possible_types contract, added: "2025-01-01" } } => /E: possible_types with added: or removed: needs E's type_membership_class to include GraphQL::Armory::Versioning::Base/,
         -> { Class.new(b[:union]) { graphql_name "F"; possible_types "Contract", added: "2025-01-01" } } => /F: possible_types "Contract" with added: or removed: needs the object's class, not a name/,
-        -> { Class.new(object) { graphql_name "G"; implements archivable, added: "" } } => /G: added: must be a non-empty String/
+        -> { Class.new(object) { graphql_name "G"; implements archivable, added: "" } } => /G: added: must be a non-empty String/,
+        -> { Class.new(Class.new(GraphQL::Schema::Object)) { graphql_name "H"; implements archivable, added: "2025-01-01" } } => /H and Archivable: a membership with added: or removed: needs an object class and an interface or union that include GraphQL::Armory::Versioning::Base/
       }
 
       refused.each { |definition, message| expect(&definition).to raise_error(versioning::ConfigurationError, message) }
