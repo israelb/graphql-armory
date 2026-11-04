@@ -25,7 +25,7 @@ Rules for the verifier's brief:
 
 Before merging, the parent reproduces each finding with a security effect and knows its cause; a finding with an unknown cause is never merged past. A "holds" is read as "not broken by these probes", never as a guarantee. Whatever stays open, including the `## Not probed` surfaces that matter, is named to the user with its impact, as a risk and not as a detail.
 
-Template:
+Template, in its security-behavior form. For code with no security behavior, leave out B everywhere (setup, negative controls, cleanup) and run the probes and the sanity check on the interpreter with 2.6 only.
 
 ```
 Independently verify <feature> of the gem at <repo path> (branch <branch>, PR #<n>;
@@ -77,9 +77,9 @@ actual, advisories apart, `## Not probed`, path of P with a one-line index of it
 code that reproduces it and its cause, or says the cause is unknown.
 ```
 
-**Design review before code (security behavior).** Before the first RED spec of a change that opens, relaxes or adds a check, a read-only agent (`general-purpose`, `opus`, no Docker, no probes) gets the design and the current code and answers one question: how would you break it? It names each gap with the code path that causes it. The design is fixed before any code. This is where the hole of a design is found cheaply; the verifier below is for what survives it.
+**Design review before code (security behavior).** Before the first RED spec of a change with security behavior (the first row of the depth table below), a read-only agent (`general-purpose`, `opus`, no Docker, no probes) gets the design and the current code and answers one question: how would you break it? It names each gap with the code path that causes it. The design is fixed before any code. This is where the hole of a design is found cheaply; the verifier below is for what survives it.
 
-**Hard cap: one full verification and one recheck per PR.** Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. The recheck is a new agent only when the correction changed the design; when it only closed the reported gaps, the parent reruns only the probes of those blockers, only on the configuration where they failed, and then the full suite once. No other probe and no new agent. A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Whatever stays open after the recheck becomes one decision for the user and issues with a reproduction that was run; never a third round. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier stays on `opus`, so another model reviews the code.
+**Hard cap: one full verification and one recheck per PR.** Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. The recheck is a new agent only when the correction changed the design; when it only closed the reported gaps, the parent reruns only the probes of those blockers, only on the configuration where they failed, and then the full suite once. No other probe and no new agent. A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Whatever stays open after the recheck becomes one decision for the user and issues with a reproduction that was run; never a third round. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier keeps its tier's model, so another model reviews the code.
 
 Depth by change, so the verifier costs what the risk is worth:
 

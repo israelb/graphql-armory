@@ -32,7 +32,7 @@ Open-source extensions for graphql-ruby, one module at a time. Read `README.md` 
 
 ## Independent verification (mandatory before every merge)
 
-A separate `general-purpose` agent on `opus`, briefed with the template in `.github/VERIFICATION.md`. Read that file before verifying, before a design review, and when a finding goes to the backlog. It also holds these, the ones most often needed:
+A separate `general-purpose` agent, on the model its risk tier names (below), briefed with the template in `.github/VERIFICATION.md`. Read that file before verifying, before a design review, and when a finding goes to the backlog. It also holds these, the ones most often needed:
 
 - Security behavior gets a read-only design review before the first RED spec. Docs get their claims checked on `sonnet`, with no probe list.
 - The verifier's model and probe configurations follow the change's risk: `opus` for security behavior, `sonnet` for everything else (table in `.github/VERIFICATION.md`).
