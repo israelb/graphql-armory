@@ -21,10 +21,10 @@ module GraphQL
           end
 
           # A copy that remembers, for one query, which policies a record's class answers to: every item of a list asks the
-          # same few classes. Only the class is remembered, never a record, and a lookup that raises is asked again. A copy
-          # (`dup`), so a subclass keeps whatever its own `initialize` stored.
+          # same few classes. Only the class is remembered, never a record, and a lookup that raises is asked again. A `clone`,
+          # so a subclass keeps what its `initialize` stored and an instance keeps the modules and methods added to it.
           def per_query
-            copy = dup
+            copy = clone(freeze: false)
             copy.found = {}
             copy
           end
