@@ -508,16 +508,16 @@ Both execution engines are tested: the default interpreter and `Execution::Next`
 
 ## Performance
 
-`benchmark/authorization.rb`, 1000 invoices, graphql 2.6.2, Ruby 3.2, Docker on Windows:
+`benchmark/authorization.rb`, 1000 invoices, graphql 2.6.14, Ruby 3.2, Docker on Windows. Time per query; the cost of the gem is armory minus plain:
 
 | Engine | Query | plain | armory (array) | armory (relation) |
 |---|---|---|---|---|
-| interpreter | `number` | 117.6 i/s | 45.9 i/s | 44.2 i/s |
-| interpreter | 3 fields | 58.8 i/s | 21.6 i/s | 21.0 i/s |
-| next | `number` | 654.2 i/s | 71.8 i/s | 70.8 i/s |
-| next | 3 fields | 417.5 i/s | 42.1 i/s | 39.5 i/s |
+| interpreter | `number` | 7.9 ms | 18.8 ms | 21.9 ms |
+| interpreter | 3 fields | 14.8 ms | 54.9 ms | 59.6 ms |
+| next | `number` | 1.6 ms | 13.8 ms | 16.1 ms |
+| next | 3 fields | 2.4 ms | 37.5 ms | 38.7 ms |
 
-The absolute cost is about 13 to 15 ms per 1000 items on both engines; most of it is probably Pundit's policy lookup, which is not cached so code reloading cannot serve stale classes. Run it yourself: `docker compose run --rm test bundle exec ruby benchmark/authorization.rb` (add `GRAPHQL_ARMORY_ENGINE=next` for Next).
+That is about 11 to 14 µs per item for one field, a third to a half less than in 0.1.0.pre11. Within one query the gem remembers, for each type, its rule and, for each record class, which Pundit policies answer for it; it never remembers a record or an answer across queries, and the next query looks everything up again, so code reloading cannot serve stale classes. Run it yourself: `docker compose run --rm test bundle exec ruby benchmark/authorization.rb` (add `GRAPHQL_ARMORY_ENGINE=next` for Next, and `PROFILE=1` passed with `docker compose run -e` to see where the time goes).
 
 ## Migrating
 

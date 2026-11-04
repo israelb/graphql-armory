@@ -42,7 +42,7 @@ module GraphQL
           return Adapters::Null.new.scope(nil, items, rule) if rule.nil?
 
           configuration = configuration(context)
-          Scope.(items, rule, context, adapter: configuration.adapter, sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
+          Scope.(items, rule, context, adapter: query_adapter(context), sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
         end
 
         # Looks an object up inside the user's scope, by primary key unless a key is given.
@@ -107,6 +107,16 @@ module GraphQL
           types.any? do |type|
             rule = type.armory_rule if type.respond_to?(:armory_rule)
             rule && rule.none? && !rule.covers_fields?
+          end
+        end
+
+        # The rule a type checks its objects with, model included, worked out once per type per query: every item of a list
+        # asks it. Nil when nothing covers the type. A rule declared while a query runs applies from the next query.
+        def self.type_rule(type, context)
+          rules = context.namespace(:armory)[:type_rules] ||= {}.compare_by_identity
+          rules.fetch(type) do
+            rule = type.armory_rule
+            rules[type] = rule && with_owner_model(rule, type)
           end
         end
 
@@ -187,11 +197,28 @@ module GraphQL
           store = context.namespace(:armory)
           authorize = store[:authorize] ||= begin
             configuration = configuration(context)
-            Authorize.build(context, adapter: configuration.adapter, sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
+            Authorize.build(context, adapter: query_adapter(context), sinks: configuration.sinks, on_sink_error: configuration.on_sink_error)
           end
 
           authorize.(subject, rule, context)
         end
+
+        # The adapter this query asks, shared by the checks and the scopes. The Pundit adapter, a subclass included, gets a
+        # copy of its own that remembers lookups for this query. Any other adapter is asked as configured: a wrapper around
+        # Pundit keeps its own answers, it only remembers nothing.
+        def self.query_adapter(context)
+          store = context.namespace(:armory)
+          store[:adapter] ||= begin
+            adapter = configuration(context).adapter
+            pundit?(adapter) ? adapter.per_query : adapter
+          end
+        end
+
+        # Never loads Pundit: while its adapter is not loaded, no adapter can be one.
+        def self.pundit?(adapter)
+          !Adapters.autoload?(:Pundit) && Adapters::Pundit === adapter
+        end
+        private_class_method :pundit?
 
         # Whether a type or field may appear in the schema this user sees. The question is asked of the
         # model's class, with no record, so the rule's action must be one a policy can answer that way.

@@ -153,4 +153,82 @@ RSpec.describe GraphQL::Armory::Authorization::Adapters::Pundit do
       expect(scoped.map(&:number)).to contain_exactly("A-1", "A-2")
     end
   end
+
+  describe "#per_query" do
+    # A record class whose policy is found through `policy_class`, counting each lookup.
+    def record_class(lookups, answer)
+      policy = Class.new do
+        define_method(:initialize) { |_user, _record| nil }
+        define_method(:read?) { answer }
+      end
+      Class.new do
+        define_singleton_method(:policy_class) do
+          lookups << self
+          policy
+        end
+      end
+    end
+
+    it "finds a class's policies once per query" do
+      lookups = []
+      allowed = record_class(lookups, true)
+      copy = adapter.per_query
+
+      answers = Array.new(3) { copy.authorized?(world.alice, allowed.new, read) }
+
+      expect(answers).to eq([true, true, true])
+      expect(lookups.size).to eq(1)
+    end
+
+    it "keeps the adapter it was copied from remembering nothing" do
+      lookups = []
+      allowed = record_class(lookups, true)
+      adapter.per_query.authorized?(world.alice, allowed.new, read)
+
+      2.times { adapter.authorized?(world.alice, allowed.new, read) }
+
+      expect(lookups.size).to eq(3)
+    end
+
+    it "asks each class its own policy in the same query" do
+      lookups = []
+      allowed = record_class(lookups, true)
+      refused = record_class(lookups, false)
+      copy = adapter.per_query
+
+      answers = [allowed, refused, allowed, refused].map { |klass| copy.authorized?(world.alice, klass.new, read) }
+
+      expect(answers).to eq([true, false, true, false])
+      expect(lookups).to eq([allowed, refused])
+    end
+
+    it "asks the declared model's policy and the record's own for each class, once" do
+      copy = adapter.per_query
+      rule = authorization::Rule.new(:read, model: Invoice)
+      credit = Credit.create!(account: world.account_b)
+
+      answers = [world.a1, credit, world.a1, credit].map { |record| copy.authorized?(world.alice, record, rule) }
+
+      expect(answers).to eq([true, false, true, false])
+    end
+
+    it "looks a class with no policy up again, and raises each time" do
+      copy = adapter.per_query
+
+      2.times do
+        expect { copy.authorized?(world.alice, Ghost.new, read) }.to raise_error(Pundit::NotDefinedError)
+      end
+    end
+
+    it "is one copy per query, shared by the checks and the scopes" do
+      integration = authorization::Integration
+      schema = IntegrationSchema.build(adapter: adapter)
+      first, second = Array.new(2) { GraphQL::Query.new(schema, "{ __typename }", context: { current_user: world.alice }).context }
+
+      expect(integration.query_adapter(first)).to be(integration.query_adapter(first))
+      expect(integration.query_adapter(first)).not_to be(integration.query_adapter(second))
+      expect(integration.query_adapter(first)).not_to be(adapter)
+      expect(integration.query_adapter(first)).to be_a(described_class)
+    end
+  end
 end
