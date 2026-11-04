@@ -205,8 +205,7 @@ RSpec.describe "Verifier probes: analysis refusals on the raise path" do
     expect(takes).to eq(1)
   end
 
-  xit "pre-existing, in the backlog: security R4 a Query the app analyzed itself before executing keeps a stale VISITED (interpreter only)" do
-    skip "multiplex_next takes options, not Query objects" if ArmoryEngine.next?
+  it "security R4 a Query the app analyzed itself before executing keeps no stale state" do
     raiser = Class.new(GraphQL::Analysis::Analyzer) do
       define_method(:on_enter_field) { |node, _p, _v| raise GraphQL::ExecutionError, "multiplex says no" if node.name == "trap" }
       define_method(:result) { nil }
@@ -214,11 +213,13 @@ RSpec.describe "Verifier probes: analysis refusals on the raise path" do
     schema = build { multiplex_analyzer raiser }
     query = GraphQL::Query.new(schema, "{ trap report report }", context: { rate_limit_key: "user:1" }, root_value: root)
     GraphQL::Analysis.analyze_query(query, query.analyzers)
-    result = schema.multiplex([query], max_complexity: 50).first
+    result = mux(schema, [query], max_complexity: 50).first
     log("R4", [result.to_h, takes])
     expect(result.to_h["data"]).to be_nil
+    expect(codes(result)).to eq(["QUERY_LIMIT_UNKNOWN"])
+    # The app's own analysis charged once; the execution asks Points again and charges again.
+    expect(takes).to eq(2)
   end
-
   # ---- Shared context hash
 
   it "security C2 one Hash shared by a clean query and a raising one, multiplex analyzer: the raising one is refused, either order" do

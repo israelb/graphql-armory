@@ -10,8 +10,10 @@ module GraphQL
       # own: a refusal it returns or raises stands, and one that raises anything else cannot answer, so unless another refusal
       # stands the query is refused with QUERY_LIMIT_UNKNOWN. A multiplex analyzer cannot be asked again, so when the raise
       # stopped the visit before its end, a query of a multiplex with multiplex analyzers is refused the same way.
-      # Only the analysis of an execution counts: an analysis the app runs itself takes no slot and charges nothing here. It
-      # does not cover a trace that takes no modules from the schema (`context[:trace]`, or a class given to `trace_mode`).
+      # Only the analysis of an execution decides here. An analysis the app runs itself is not guarded: its limiters still
+      # charge and take a slot, and the execution charges again; what it answered is dropped when the execution's analysis
+      # starts. It does not cover a trace that takes no modules from the schema (`context[:trace]`, or a class given to
+      # `trace_mode`).
       module AnalysisGuard
         ANSWERS = :limiter_answers
         ASKED = :limiter_asked
@@ -21,6 +23,7 @@ module GraphQL
         REASK = :limiter_guard_reask
         RAISED = :limiter_guard_raised
         VISITED = :limiter_guard_visited
+        STALE = [ASKED, ANSWERS, VISITED, RAISED, :points, :time_charges].freeze
         NOT_CHARGED = "This query could not be charged to its rate limit."
         LIMIT_UNKNOWN = "The limits of this query could not be computed."
 
@@ -147,6 +150,10 @@ module GraphQL
           return reasked(state) { super } if state.delete(REASK)
           return super unless state.delete(ARMED)
 
+          # An analysis the app ran itself on this Query left its answers and its visit: the execution decides from its own.
+          # Time's debt from that analysis goes too, so a query the execution refuses is not charged for it. A Concurrency
+          # slot it took stays recorded, so that the end of the execution releases it.
+          STALE.each { |key| state.delete(key) }
           begin
             super
           rescue GraphQL::ExecutionError, GraphQL::UnauthorizedError => error

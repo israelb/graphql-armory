@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: a `Query` your app analyzed itself (`GraphQL::Analysis.analyze_query`) before executing it no longer lets that analysis's answers decide the execution. When an analyzer raised during the execution's analysis, the guard read them as "already charged and visited" and ran the query undercounted. The execution now decides from its own analysis, on both engines; it charges `Points` again, as it already did when nothing raised, and a `Time` debt from the app's analysis is dropped. `Points.headers` no longer report what the app's analysis recorded. The docs no longer say the app's own analysis charges nothing: it does. [Rate limiting](docs/rate-limiting.md).
+
 ## 0.1.0.pre11 (2026-11-03)
 
 This release closes the ways an [Authorization](docs/authorization.md) rule under `observe:` could still let a resolver or its arguments run for a user the rule would refuse, and gives every misconfigured observed root the same error on every engine. It also makes [the audit](docs/authorization.md#the-audit) say the file and line of each problem. Anyone using `observe:` or comparing audit problems as whole structs should read Breaking before upgrading.
