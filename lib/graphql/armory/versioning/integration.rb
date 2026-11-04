@@ -109,13 +109,16 @@ module GraphQL
 
             armory_refuse_on_schema_directive if owner.is_a?(Class) && owner < GraphQL::Schema::Directive
             in_default = armory_default_members
-            return true if !armory_versioned? && in_default.empty?
+            loaded = armory_loaded_lifecycle
+            return true if !armory_versioned? && in_default.empty? && loaded.nil?
 
             version = Integration.version(context)
             return false unless @armory_lifecycle.covers?(version)
+            # A `loads:` argument takes an ID, so graphql-ruby never hides it with the loaded type: it is hidden here.
+            return false if loaded && !loaded.covers?(version)
 
             # Each entry lists the definitions the default may mean (an enum value renamed across versions keeps its Ruby value).
-            missing = in_default.reject { |choices| choices.any? { |member| member.armory_lifecycle.covers?(version) } }
+            missing = in_default.reject { |choices| choices.any? { |member| Integration.covers?(member, version) } }
             return true if missing.empty?
 
             raise ConfigurationError, "its default_value names #{missing.map { |choices| choices.first.path }.join(', ')}, not in " \
@@ -133,6 +136,13 @@ module GraphQL
 
             Integration.refuse_shadowing(self, armory_inherited_arguments) if armory_versioned?
             @armory_default_members = default_value? ? Integration.members_in(type, default_value).freeze : [].freeze
+          end
+
+          def armory_loaded_lifecycle
+            return @armory_loaded_lifecycle if defined?(@armory_loaded_lifecycle)
+
+            lifecycle = loads && Integration.lifecycle_of(loads)
+            @armory_loaded_lifecycle = lifecycle && !Lifecycle::EVERYWHERE.equal?(lifecycle) ? lifecycle : nil
           end
 
           def armory_inherited_arguments
@@ -179,6 +189,114 @@ module GraphQL
           end
         end
 
+        # Extended into a type class (object, input object, enum, scalar, union, resolver or mutation) and included into an
+        # interface's definition methods by `include GraphQL::Armory::Versioning::Base`.
+        #
+        #   class Types::Contract < Types::BaseObject
+        #     lifecycle added: "2025-01-01"
+        #   end
+        #
+        # A class without its own lifecycle takes its mutation's (a generated payload or input type) or its superclass's.
+        # An interface takes nothing from the interfaces it includes, and objects take nothing from their interfaces.
+        module Type
+          def lifecycle(added: nil, removed: nil)
+            @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
+          rescue ConfigurationError => error
+            raise error.class, "#{graphql_name}: #{error.message}"
+          end
+
+          # When the type lives, for the audit and for tooling.
+          def armory_lifecycle
+            return @armory_lifecycle if defined?(@armory_lifecycle)
+
+            source = Integration.lifecycle_source(self)
+            source ? source.armory_lifecycle : Lifecycle::EVERYWHERE
+          end
+
+          def visible?(context)
+            return false unless super
+
+            lifecycle = armory_lifecycle
+            return true if Lifecycle::EVERYWHERE.equal?(lifecycle)
+
+            version = Integration.version(context)
+            return false unless lifecycle.covers?(version)
+
+            Integration.refuse_wider_than_parent(self, version)
+            true
+          rescue ConfigurationError => error
+            raise error.class, "#{graphql_name}: #{error.message}"
+          end
+        end
+
+        # `implements` with `added:` or `removed:` is refused until memberships can carry a lifecycle: graphql-ruby would
+        # accept the keywords and ignore them.
+        module Implements
+          def implements(*interfaces, added: nil, removed: nil, **options)
+            Integration.refuse_membership_lifecycle(self, :implements, added, removed)
+            super(*interfaces, **options)
+          end
+        end
+
+        # The same for a union's `possible_types`.
+        module Members
+          def possible_types(*types, added: nil, removed: nil, **options)
+            Integration.refuse_membership_lifecycle(self, :possible_types, added, removed)
+            super(*types, **options)
+          end
+        end
+
+        def self.refuse_membership_lifecycle(type, method, added, removed)
+          return if added.nil? && removed.nil?
+
+          raise ConfigurationError, "#{type.graphql_name}: `#{method}` with added: or removed: is not supported yet, and graphql-ruby would " \
+                                    "ignore it. Give the member type its own `lifecycle` instead"
+        end
+
+        # The class a type without its own lifecycle takes it from: its mutation (a generated payload or input type), else its
+        # superclass. Modules (interfaces) take it from nothing.
+        def self.lifecycle_source(type)
+          return unless type.is_a?(Class)
+
+          mutation = type.mutation if type.respond_to?(:mutation)
+          return mutation if mutation.is_a?(Class) && !mutation.equal?(type) && mutation.respond_to?(:armory_lifecycle)
+
+          parent = type.superclass
+          parent if parent.respond_to?(:armory_lifecycle)
+        end
+
+        # A subclass with its own lifecycle must not live where its versioned parent does not: the legacy Warden checks the
+        # parent's visibility for the memberships the subclass inherits.
+        def self.refuse_wider_than_parent(type, version)
+          return unless type.is_a?(Class) && type.instance_variable_defined?(:@armory_lifecycle)
+
+          parent = type.superclass
+          return unless parent.respond_to?(:armory_lifecycle) && !parent.armory_lifecycle.covers?(version)
+
+          raise ConfigurationError, "lives in #{label(version)} but its parent #{parent.graphql_name} does not: a subclass's lifecycle must " \
+                                    "fit inside its parent's"
+        end
+
+        # Checked when the first query of a schema is built, and by `Versioning.types`: graphql-ruby answers these without
+        # asking `visible?` with the query's context.
+        def self.check_schema(schema)
+          return if schema.instance_variable_defined?(:@armory_schema_checked)
+
+          [schema.query, schema.mutation, schema.subscription].compact.each do |root|
+            next unless versioned_type?(root)
+
+            raise ConfigurationError, "#{root.graphql_name}: a root type cannot have a lifecycle: a version without it would have no " \
+                                      "#{root.graphql_name} root. Version its fields instead"
+          end
+          schema.extra_types.each do |type|
+            next unless versioned_type?(type)
+
+            raise ConfigurationError, "#{type.graphql_name}: a type with a lifecycle cannot be in extra_types: `__type` and the SDL " \
+                                      "read extra_types without asking visible?"
+          end
+          schema.instance_variable_set(:@armory_schema_checked, true)
+        end
+
         # graphql-ruby serves a parent's definition of a name when the local one is hidden (enum values on every path,
         # arguments under the legacy Warden), so a versioned member must not shadow one.
         def self.refuse_shadowing(member, inherited)
@@ -221,18 +339,19 @@ module GraphQL
           end
         end
 
-        # Every versioned enum value and input field a type can reach, through lists and nested input objects.
+        # Every versioned type, enum value and input field a type can reach, through lists and nested input objects.
         def self.versioned_members_of(type, seen = {}.compare_by_identity)
           type = type.unwrap
           return [] if seen.key?(type)
 
           seen[type] = true
+          own = versioned_type?(type) ? [type] : []
           if type.kind.enum?
-            type.all_enum_value_definitions.select { |defn| versioned?(defn) }
+            own + type.all_enum_value_definitions.select { |defn| versioned?(defn) }
           elsif type.kind.input_object?
-            type.all_argument_definitions.flat_map { |defn| (versioned?(defn) ? [defn] : []) + versioned_members_of(defn.type, seen) }
+            own + type.all_argument_definitions.flat_map { |defn| (versioned?(defn) ? [defn] : []) + versioned_members_of(defn.type, seen) }
           else
-            []
+            own
           end
         end
 
@@ -241,8 +360,21 @@ module GraphQL
           directive.subclasses.reduce(directive.locations) { |locations, subclass| locations | directive_locations(subclass) }
         end
 
+        def self.lifecycle_of(member)
+          member.respond_to?(:armory_lifecycle) ? member.armory_lifecycle : Lifecycle::EVERYWHERE
+        end
+
+        def self.versioned_type?(type) = !Lifecycle::EVERYWHERE.equal?(lifecycle_of(type))
+
+        # A member is versioned by its own lifecycle, or, for an argument or input field, by its type's.
         def self.versioned?(member)
-          member.respond_to?(:armory_lifecycle) && !Lifecycle::EVERYWHERE.equal?(member.armory_lifecycle)
+          versioned_type?(member) || (member.is_a?(GraphQL::Schema::Argument) && versioned_type?(member.type.unwrap))
+        end
+
+        def self.covers?(member, version)
+          return false unless lifecycle_of(member).covers?(version)
+
+          !member.is_a?(GraphQL::Schema::Argument) || lifecycle_of(member.type.unwrap).covers?(version)
         end
 
         def self.label(version)
@@ -271,6 +403,7 @@ module GraphQL
         module Lookup
           def initialize(schema, query_string = nil, **options)
             Integration.refuse_always_visible(schema)
+            Integration.check_schema(schema)
             super
 
             decision = schema.armory_versioning.(context)
@@ -320,25 +453,42 @@ module GraphQL
         end
       end
 
-      # Goes in your base field, argument and enum value classes. Types and their memberships come in a later version.
+      # Goes in your base classes: fields, arguments, enum values, objects, interfaces (after `include
+      # GraphQL::Schema::Interface`), unions, enums, scalars, input objects, resolvers and mutations.
       #
       #   class Types::BaseField < GraphQL::Schema::Field
       #     include GraphQL::Armory::Versioning::Base
       #     argument_class Types::BaseArgument
       #   end
-      #   class Types::BaseArgument < GraphQL::Schema::Argument;  include GraphQL::Armory::Versioning::Base; end
-      #   class Types::BaseEnumValue < GraphQL::Schema::EnumValue; include GraphQL::Armory::Versioning::Base; end
+      #   class Types::BaseObject < GraphQL::Schema::Object
+      #     include GraphQL::Armory::Versioning::Base
+      #     field_class Types::BaseField
+      #   end
+      #   module Types::BaseInterface
+      #     include GraphQL::Schema::Interface
+      #     include GraphQL::Armory::Versioning::Base
+      #   end
       module Base
-        KINDS = { GraphQL::Schema::Field => :Field, GraphQL::Schema::Argument => :Argument, GraphQL::Schema::EnumValue => :EnumValue }.freeze
+        # Instances (members) get `added:`/`removed:`; classes (types) get `lifecycle`.
+        MEMBERS = { GraphQL::Schema::Field => :Field, GraphQL::Schema::Argument => :Argument, GraphQL::Schema::EnumValue => :EnumValue }.freeze
+        TYPES = {
+          GraphQL::Schema::Object => %i[Type Implements], GraphQL::Schema::Union => %i[Type Members],
+          GraphQL::Schema::InputObject => %i[Type], GraphQL::Schema::Enum => %i[Type], GraphQL::Schema::Scalar => %i[Type],
+          GraphQL::Schema::Resolver => %i[Type]
+        }.freeze
 
         def self.included(base)
-          kind = base.is_a?(Class) && KINDS.find { |parent, _| base <= parent }&.last
-          unless kind
-            raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field, argument or enum value class for now, not #{base}: " \
-                                 "versioning types and their memberships is not supported yet"
+          if !base.is_a?(Class) && base.include?(GraphQL::Schema::Interface)
+            modules = [Integration::Type, Integration::Implements]
+            base.definition_methods { modules.each { |mod| include mod } }
+          elsif base.is_a?(Class) && (member = MEMBERS.find { |parent, _| base <= parent })
+            base.include(Integration.const_get(member.last))
+          elsif base.is_a?(Class) && (type = TYPES.find { |parent, _| base <= parent })
+            type.last.each { |name| base.extend(Integration.const_get(name)) }
+          else
+            raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field, argument, enum value, object, interface, union, enum, " \
+                                 "scalar, input object, resolver or mutation class, not #{base}. In an interface, include GraphQL::Schema::Interface first"
           end
-
-          base.include(Integration.const_get(kind))
         end
       end
     end

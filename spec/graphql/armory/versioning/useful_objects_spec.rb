@@ -145,14 +145,19 @@ RSpec.describe "GraphQL::Armory::Versioning objects" do
   end
 
   describe "Base" do
-    it "goes in a field, argument or enum value class, and refuses any other in this version" do
-      kinds = [GraphQL::Schema::Field, GraphQL::Schema::Argument, GraphQL::Schema::EnumValue].map do |parent|
+    it "goes in member and type classes, and refuses anything else" do
+      members = [GraphQL::Schema::Field, GraphQL::Schema::Argument, GraphQL::Schema::EnumValue].map do |parent|
         Class.new(parent) { include GraphQL::Armory::Versioning::Base }.include?(versioning::Integration::Member)
       end
+      types = [GraphQL::Schema::Object, GraphQL::Schema::Union, GraphQL::Schema::InputObject, GraphQL::Schema::Enum,
+               GraphQL::Schema::Scalar, GraphQL::Schema::Mutation].map do |parent|
+        Class.new(parent) { include GraphQL::Armory::Versioning::Base }.singleton_class.include?(versioning::Integration::Type)
+      end
+      interface = Module.new { include GraphQL::Schema::Interface; include GraphQL::Armory::Versioning::Base }
 
-      expect(kinds).to eq([true, true, true])
-      expect { Class.new(GraphQL::Schema::Object) { include GraphQL::Armory::Versioning::Base } }
-        .to raise_error(ArgumentError, /goes in a field, argument or enum value class/)
+      expect([members, types, interface.singleton_class.include?(versioning::Integration::Type)]).to eq([[true] * 3, [true] * 6, true])
+      expect { Class.new(GraphQL::Schema) { include GraphQL::Armory::Versioning::Base } }.to raise_error(ArgumentError, /goes in a field, argument/)
+      expect { Module.new { include GraphQL::Armory::Versioning::Base } }.to raise_error(ArgumentError, /include GraphQL::Schema::Interface first/)
     end
   end
 

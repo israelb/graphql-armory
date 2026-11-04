@@ -54,6 +54,18 @@ module GraphQL
         Integration.version(context)
       end
 
+      # One version's schema for tooling (a `View`): what a query naming `label` sees, decided the way a request is, with
+      # `context:` merged in (a user, for `visible_when:`). Records no signal. Raises the refusal for a version that is not
+      # served, and `ConfigurationError` for a schema versioning cannot serve.
+      def self.types(schema, label, context: {})
+        decision = Integration.gate(schema).resolve(label)
+        raise decision.error if decision.refused?
+
+        Integration.check_schema(schema)
+        query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: context.merge(armory_version: label))
+        View.new(query.types)
+      end
+
       # `versions:` the labels, oldest first; `retired:` the oldest ones, no longer served; `default:` what a request with no
       # version gets: `:latest`, a served label or `:refuse`. `sinks:` and `on_sink_error:` as in Telemetry.
       def self.use(schema, versions:, default: Gate::UNSET, retired: [], sinks: [], on_sink_error: nil)
@@ -76,4 +88,5 @@ require "graphql/armory/versioning/lifecycle"
 require "graphql/armory/versioning/decision"
 require "graphql/armory/versioning/gate"
 require "graphql/armory/versioning/integration"
+require "graphql/armory/versioning/view"
 require "graphql/armory/versioning/controls"
