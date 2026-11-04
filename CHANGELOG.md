@@ -2,9 +2,18 @@
 
 ## Unreleased
 
-- Changed: the audit gives a location to the types graphql-ruby generates with no constant: a mutation's payload points to its mutation, and a connection or an edge to its node type. Before, their problems had none. [The audit](docs/authorization.md#the-audit).
-- Changed: authorizing a list costs a third to a half less per item for one field, and about a fifth less with three. Within one query the gem now remembers each type's rule and, with the Pundit adapter (a subclass included), which policies answer for each record class; nothing is kept across queries. An adapter that wraps Pundit is asked as configured and remembers nothing. [Authorization, Performance](docs/authorization.md#performance).
-- Fixed: a `Query` your app analyzed itself (`GraphQL::Analysis.analyze_query`) before executing it no longer lets that analysis's answers decide the execution. When an analyzer raised during the execution's analysis, the guard read them as "already charged and visited" and ran the query undercounted. The execution now decides from its own analysis, on both engines; it charges `Points` again, as it already did when nothing raised, and a `Time` debt from the app's analysis is dropped. `Points.headers` no longer report what the app's analysis recorded. The docs no longer say the app's own analysis charges nothing: it does. [Rate limiting](docs/rate-limiting.md).
+## 0.1.0.pre12 (2026-11-04)
+
+This release makes [Authorization](docs/authorization.md) cheaper on lists and gives the audit a file and line for the types graphql-ruby generates, and it fixes a way an analysis your app runs itself could let [Rate limiting](docs/rate-limiting.md) undercount a query. Upgrade if you authorize long lists, read the audit's locations, or call `GraphQL::Analysis.analyze_query` before executing a `Query`. Nothing breaks.
+
+### Changed
+
+- Authorizing a list costs a third to a half less per item for one field, and about a fifth less with three. Within one query the gem remembers each type's rule and, with the Pundit adapter (a subclass included), which policies answer for each record class; nothing is kept across queries, so code reloading never serves a stale class. An adapter that wraps Pundit is asked as configured and remembers nothing. [Performance](docs/authorization.md#performance). (#62)
+- The audit gives a location to the types graphql-ruby generates with no constant: a mutation's payload points to its mutation, and a connection or an edge to its node type. Before, their problems had none. Limit: an anonymous subclass of a named type and a subscription's payload still have none. [The audit](docs/authorization.md#the-audit). (#63)
+
+### Fixed
+
+- A `Query` your app analyzed itself (`GraphQL::Analysis.analyze_query`) before executing it no longer lets that analysis's answers decide the execution. When an analyzer raised during the execution's analysis, the guard read them as "already charged and visited" and ran the query undercounted. The execution now decides from its own analysis, on both engines: it charges `Points` again, as it already did when nothing raised, takes a second `Concurrency` slot, and charges `Time` only for itself. `Points.headers` no longer report what the app's analysis recorded. Limit: a trace module that runs an analysis inside `analyze_multiplex` must be added after `use`. [Rate limiting](docs/rate-limiting.md). (#61)
 
 ## 0.1.0.pre11 (2026-11-03)
 
