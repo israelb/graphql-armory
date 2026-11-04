@@ -21,6 +21,7 @@ module GraphQL
           end
 
           def call(schema)
+            @schema = schema
             @definitions.each do |type|
               next if Definitions.introspection?(type)
 
@@ -47,14 +48,19 @@ module GraphQL
             levels.flat_map { |level| level.public_send(reader).keys }.uniq.each do |name|
               definitions = levels.filter_map { |level| [level.public_send(reader)[name]].flatten if level.public_send(reader).key?(name) }
               definitions.flatten.each { |member| @override_paths[member] ||= "#{prefix}.#{member.public_send(name_reader)}" }
-              falling = definitions.last.size == 1 ? definitions.flatten[0...-1] : definitions.flatten
+              falling = definitions.last.size == 1 || twins?(definitions.last) ? definitions[0...-1].flatten : definitions.flatten
               falling.each { |member| @falling_back[member] ||= "#{prefix}.#{member.public_send(name_reader)}" }
-              definitions.select { |level| level.size > 1 }.flatten.each { |member| @duplicates << member }
+              definitions.select { |level| level.size > 1 && !twins?(level) }.flatten.each { |member| @duplicates << member }
             end
           end
 
           # graphql-ruby skips the fallback to a lower level only when the request carries a visibility profile. A static
           # profile runs with a plain Hash, so only `Schema::Visibility` with no profiles, not turned off below, rules it out.
+          # Versioning's twins: definitions on one level that no served version sees together are one member.
+          def twins?(level)
+            level.size > 1 && defined?(Versioning) && Versioning.respond_to?(:disjoint?) && Versioning.disjoint?(@schema, level)
+          end
+
           def visibility_without_fallback?(schema)
             visibility = schema.visibility
             return false unless visibility
