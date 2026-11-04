@@ -165,7 +165,29 @@ value "VOID", "Cancelled.", removed: "2025-01-01"
 value "VOID", "Voided by the issuer.", value_method: false, added: "2025-01-01"   # the second skips graphql-ruby's value method
 ```
 
-Each version sees exactly one of them, in every place graphql-ruby reads the schema. Two definitions that one version would both see raise `ConfigurationError` (an unversioned one beside a versioned one included). [Authorization](authorization.md)'s audit reads them as one member, and each keeps its own rule. Two definitions may also be kept apart by their types' lifecycles. Field twins need graphql 2.4.9 or later, and `value_method: false` on an enum value graphql 2.4.10 or later. Two type classes with one `graphql_name` come in a later part.
+Each version sees exactly one of them, in every place graphql-ruby reads the schema. Two definitions that one version would both see raise `ConfigurationError` (an unversioned one beside a versioned one included). [Authorization](authorization.md)'s audit reads them as one member, and each keeps its own rule. Two definitions may also be kept apart by their types' lifecycles. Field twins need graphql 2.4.9 or later, and `value_method: false` on an enum value graphql 2.4.10 or later.
+
+A type changes shape the same way: two classes with one `graphql_name` and lifecycles that do not overlap, each returned by its own field twin:
+
+```ruby
+class Types::MoneyV1 < Types::BaseObject
+  graphql_name "Money"
+  lifecycle removed: "2025-01-01"
+  field :cents, Integer, null: false
+end
+
+class Types::MoneyV2 < Types::BaseObject
+  graphql_name "Money"
+  lifecycle added: "2025-01-01"
+  field :amount, String, null: false
+  field :currency, String, null: false
+end
+
+field :total, Types::MoneyV1, null: false, removed: "2025-01-01"
+field :total, Types::MoneyV2, null: false, added: "2025-01-01"
+```
+
+Each version sees one `Money`. Reference each twin by its class: a `GraphQL::Schema::LateBoundType` naming a type with twins raises `ConfigurationError`, since graphql-ruby binds the name to the first class registered with it in every version. Give both twins a common base without a lifecycle; never subclass one twin from the other (the subclass would be refused as wider than its parent). A `resolve_type` answers the twin of the query's version (see "Data outside the version"), and Authorization's audit judges each twin's rule.
 
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
 
@@ -293,7 +315,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
 ## Guarantees and limits
 
-**What is guaranteed.** A client that names version V gets V's schema on every path that reads the query's schema: selection and aliases, fragments, validation and its suggestions, introspection (`__schema`, `__type`, `fields`), `to_definition` and `Schema.validate` with V in the context, on the interpreter and on `Execution::Next`, and each query of a multiplex sees its own version. A refused version runs nothing, even with `validate: false`, and even when the query brings its own `static_validator:` (the plugin replaces it; a [persisted queries](persisted-queries.md) refusal is kept, since it runs nothing either). The version lives in the query's context: one query's version cannot reach another's. What this part covers is types, fields, arguments (input fields and directive arguments included) and enum values; memberships (`implements`, `possible_types`) carry no lifecycle yet.
+**What is guaranteed.** A client that names version V gets V's schema on every path that reads the query's schema: selection and aliases, fragments, validation and its suggestions, introspection (`__schema`, `__type`, `fields`), `to_definition` and `Schema.validate` with V in the context, on the interpreter and on `Execution::Next`, and each query of a multiplex sees its own version. A refused version runs nothing, even with `validate: false`, and even when the query brings its own `static_validator:` (the plugin replaces it; a [persisted queries](persisted-queries.md) refusal is kept, since it runs nothing either). The version lives in the query's context: one query's version cannot reach another's. What this part covers is types, fields, arguments (input fields and directive arguments included), enum values and memberships (`implements`, `possible_types`).
 
 **Limits.**
 
@@ -302,7 +324,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 - **Queries built outside `query_class`.** A `Query::Partial` (`run_partials`) sees its parent's version, because it reads its parent's schema, and so does the second context `Schema::Visibility`'s `migration_errors: true` builds for a query; neither records a signal. A `GraphQL::Query` your code builds itself skips `query_class`: it is decided from its own `armory_version` the first time a versioned field is asked about, and records no signal. A refused version raises `RefusedVersionError` there instead of answering a validation error, and such a query that touches no field of a class that includes `Base` runs.
 - **`validate: false` with a field outside the version** raises graphql-ruby's own error ("No field definition found", or a `NoMethodError` on graphql 2.4) quoting the client's selection; nothing resolves.
 - **The legacy `Schema::Warden` falls back.** When a type's own definition of a field is hidden in V, the Warden serves a parent class's or an interface's definition of the same name instead. `Schema::Visibility` never does: use it. For arguments and enum values, where graphql-ruby falls back on every path, the plugin refuses the shape instead (see Reference).
-- **Data outside the version fails the response.** A resolver that returns an enum value the client's version does not have raises graphql-ruby's `GraphQL::Schema::Enum::UnresolvedValueError`, and a `resolve_type` that answers a type outside it raises `GraphQL::UnresolvedTypeError`; neither is turned into `null`. Filter or map the data in the resolver with `GraphQL::Armory::Versioning.version(context)`:
+- **Data outside the version fails the response.** A resolver that returns an enum value the client's version does not have raises graphql-ruby's `GraphQL::Schema::Enum::UnresolvedValueError`, and a `resolve_type` that answers a type outside it raises `GraphQL::UnresolvedTypeError`, the twin of another version included; neither is turned into `null`. Filter or map the data in the resolver with `GraphQL::Armory::Versioning.version(context)`:
 
   ```ruby
   def docs                                            # Doc's member Contract arrived in 2025-01-01
@@ -313,6 +335,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
   ```
 
   The plugin decides the schema, never the data.
+- **Type twins outside a query.** Lookups with no context answer one twin: `AppSchema.get_type("Money")` and Warden's `AppSchema.types` the one the latest version sees (none, when no twin lives there). A `LateBoundType` is refused only when the field, argument or type naming it includes `Base`. Two mutations sharing a `graphql_name` generate two payload and input types sharing one too, so they are type twins as well, each with its mutation's lifecycle. Under the legacy Warden, a union's members are matched by name, so a union listing one twin makes the other findable by name. Authorization's check of an interface's implementers (an implementer that bypasses the interface's rule) reads every twin in every version: a bypass on one twin denies the interface's fields in all of them.
 - **A type reachable only through types outside the version** is not listed, introspected or selectable there, but its name can still be found: a fragment or variable naming it gets a different error than an unknown name. Version such types together.
 - **A type reachable only through a hidden membership** stays findable by name (`__type`, `__schema.types`, the SDL, `Versioning.types`) under `Schema::Visibility`, while the legacy Warden drops it. Give it its own `lifecycle`.
 - **An interface or union left with no member in V.** The legacy Warden hides an interface with no visible implementer, with every field that returns it; `Schema::Visibility` keeps it, and an empty union prints as an invalid `union X` in the SDL. Give the abstract type the lifecycle its members have.

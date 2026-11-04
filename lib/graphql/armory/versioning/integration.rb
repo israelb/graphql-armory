@@ -67,11 +67,17 @@ module GraphQL
             rescue ConfigurationError => error
               raise error.class, "#{kwargs[:name] || args.first}: #{error.message}"
             end
+            late_bound = Integration.late_bound_name(kwargs.key?(:type) ? kwargs[:type] : args[1])
             super(*args, **kwargs, &block)
+            Integration.mark_late_bound(self, late_bound) if late_bound
           end
 
           # When the member lives, for the audit and for tooling.
           attr_reader :armory_lifecycle
+
+          # The GraphQL names its type was given by, when it was a `LateBoundType`: the schema check refuses one that has
+          # twins.
+          def armory_late_bound = @armory_late_bound || []
 
           private
 
@@ -298,6 +304,10 @@ module GraphQL
         # would ignore the keywords, apply them partly or fail halfway.
         module Implements
           def implements(*interfaces, added: nil, removed: nil, **options)
+            interfaces.each do |interface|
+              name = Integration.late_bound_name(interface)
+              Integration.mark_late_bound(self, name) if name
+            end
             return super(*interfaces, **options) if added.nil? && removed.nil?
 
             Integration.check_implements(self, interfaces, added, removed)
@@ -376,20 +386,66 @@ module GraphQL
 
         def self.versioned_membership_count = @versioned_memberships || 0
 
+        # The GraphQL name a type expression binds late: a `LateBoundType`, bare, wrapped or in a list. A String is a Ruby
+        # constant, bound to one class at once.
+        def self.late_bound_name(expression)
+          case expression
+          when GraphQL::Schema::LateBoundType then expression.graphql_name
+          when GraphQL::Schema::Wrapper then late_bound_name(expression.of_type)
+          when Array then late_bound_name(expression.first) if expression.size == 1
+          end
+        end
+
+        def self.mark_late_bound(member, name)
+          member.instance_variable_set(:@armory_late_bound, [*member.instance_variable_get(:@armory_late_bound), name])
+          @late_bound = (@late_bound || 0) + 1
+        end
+
+        def self.late_bound_count = @late_bound || 0
+
+        # Every type the schema holds, twins included: Warden's `schema.types` keeps one per name, the one the latest
+        # version sees, and nil where none does.
+        def self.definitions(schema)
+          Armory::Definitions.(schema, schema.extra_types).reject { |type| Armory::Definitions.introspection?(type) }
+        end
+
+        # Every argument a type holds, at every level of its fields, twins included.
+        def self.arguments_in(type)
+          return type.all_argument_definitions if type.kind.input_object?
+
+          Armory::Definitions.fields_at_every_level(type).flat_map(&:all_argument_definitions)
+        end
+
+        # graphql-ruby binds a late-bound name to the first type registered with it, whatever the version: one that has
+        # twins would serve the wrong one. Only members that include `Base` are known.
+        def self.refuse_late_bound_twins(types, directives)
+          # A base interface module brought in with `include` has no name of its own.
+          named = types.group_by do |type|
+            type.graphql_name
+          rescue GraphQL::RequiredImplementationMissingError
+            nil
+          end
+          twins = named.select { |name, list| name && list.size > 1 }
+          return if twins.empty?
+
+          members = types.flat_map { |type| [type, *Armory::Definitions.fields_at_every_level(type), *arguments_in(type)] }
+          members.concat(directives.flat_map(&:all_argument_definitions))
+          members.each do |member|
+            names = member.instance_variable_get(:@armory_late_bound)
+            twin = names&.find { |name| twins.key?(name) }
+            next unless twin
+
+            at = member.respond_to?(:path) ? member.path : display_name(member)
+            raise ConfigurationError, "#{at}: names #{twin} by name, and #{twin} has more than one definition: graphql-ruby binds the " \
+                                      "name to the first one registered, in every version. Reference the class instead"
+          end
+        end
+
         # Every argument of the schema that loads an interface or union with a versioned membership, whatever its class:
         # an argument class without `Base` never asks. Walked only when a versioned membership exists.
-        def self.refuse_abstract_loads(schema)
-          schema.types.each_value do |type|
-            next if type.introspection?
-
-            arguments = if type.kind.input_object?
-                          type.all_argument_definitions
-                        elsif type.kind.fields?
-                          type.all_field_definitions.flat_map(&:all_argument_definitions)
-                        else
-                          []
-                        end
-            arguments.each do |argument|
+        def self.refuse_abstract_loads(types)
+          types.each do |type|
+            arguments_in(type).each do |argument|
               loads = argument.loads
               next unless loads && loads.kind.abstract? && versioned_memberships?(loads)
 
@@ -498,13 +554,17 @@ module GraphQL
         # Checked when a query of a schema is built, and by `Versioning.types`: graphql-ruby answers these without asking
         # `visible?` with the query's context. Checked again when the roots or `extra_types` change.
         def self.check_schema(schema)
-          checked = [schema.query, schema.mutation, schema.subscription, versioned_membership_count, *schema.extra_types]
+          checked = [schema.query, schema.mutation, schema.subscription, versioned_membership_count, late_bound_count, *schema.extra_types]
           return if schema.instance_variable_get(:@armory_schema_checked) == checked
 
-          # Under `Schema::Visibility` such a type counts as referenced and its members are filtered; there `schema.types`
-          # would also ask every member's `visible?` before any query.
+          # Under `Schema::Visibility` such a type counts as referenced and its members are filtered.
           visibility = schema.respond_to?(:use_visibility_profile?) && schema.use_visibility_profile?
-          refuse_abstract_loads(schema) if versioned_membership_count.positive? && !visibility
+          abstract_loads = versioned_membership_count.positive? && !visibility
+          if abstract_loads || late_bound_count.positive?
+            types = definitions(schema)
+            refuse_abstract_loads(types) if abstract_loads
+            refuse_late_bound_twins(types, schema.directives.values) if late_bound_count.positive?
+          end
           refuse_subscription_twins(schema)
           [schema.query, schema.mutation, schema.subscription].compact.each do |root|
             next unless versioned_type?(root)
