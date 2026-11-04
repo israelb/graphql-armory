@@ -506,8 +506,9 @@ RSpec.describe "Regression probes: versioning twins (2b3a)" do
                attempt { run(s, "{ echo(f: { b: 1 }) }", TW_V1, root: r) }]
         warn "T18 #{vis} (type-disjoint twins): #{out.inspect}"
         echoes = out.map { |st, x| st == :ok ? x.dig("data", "echo") : st }
-        expect([echoes[0], echoes[1]]).to match([a_string_including(":a"), a_string_including(":b")])
-        expect(echoes[2]).to be_nil.or(be_a(String).and(satisfy { |e| !e.include?(":b") }))
+        # Hash#inspect prints `{:a => 1}` or `{a: 1}` depending on the Ruby version.
+        expect([echoes[0], echoes[1]]).to match([a_string_matching(/\ba\b/), a_string_matching(/\bb\b/)])
+        expect(echoes[2]).to be_nil.or(be_a(String).and(satisfy { |e| !e.match?(/\bb\b/) }))
       end
 
       it "preservation T19 (advisory probe): overlap refusal does not depend on the user (Authorization first in the chain)" do
