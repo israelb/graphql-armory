@@ -147,15 +147,49 @@ module GraphQL
           query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: { armory_full_schema: true, armory_version: version.label })
           context = query.context
           members.each do |member|
-            next if findings.path?(path_of(member))
+            # graphql-ruby never asks a member whose owner the version does not have.
+            next if findings.path?(path_of(member)) || !owners_live?(member, version)
 
             guarded(findings, member) { member.visible?(context) }
           end
           types = query.types
-          definitions.map(&:graphql_name).uniq.each do |name|
-            guarded(findings, name) { types.type(name) }
+          view = View.new(types)
+          # As `__type(name:)` asks it: graphql-ruby checks that the name is reachable in V first.
+          definitions.filter_map { |type| named(type) }.uniq.each do |name|
+            guarded(findings, name) { view.type(name) }
           end
-          outside_lifecycle(View.new(types), version, findings)
+          outside_lifecycle(view, version, findings)
+          directive_arguments(types, view, version, findings)
+        end
+
+        # A base interface module brought in with `include` has no name of its own.
+        def named(type)
+          type.graphql_name
+        rescue GraphQL::RequiredImplementationMissingError
+          nil
+        end
+
+        # The field, input object or directive that holds a member, and the type that holds that field, all live in V.
+        def owners_live?(member, version)
+          owner = member.respond_to?(:owner) ? member.owner : nil
+          while owner
+            return false unless owner.is_a?(Module) ? Integration.lifecycle_of(owner).covers?(version) : Integration.covers?(owner, version)
+
+            owner = owner.respond_to?(:owner) && !owner.is_a?(Module) ? owner.owner : nil
+          end
+          true
+        rescue ConfigurationError
+          false # an owner's label not in versions: is reported as :undeclared_version
+        end
+
+        # Directives are not types: their arguments are listed apart.
+        def directive_arguments(types, view, version, findings)
+          directives = guarded(findings, "Schema") { types.directives } || []
+          directives.each do |directive|
+            guarded(findings, directive) { view.arguments(directive) }&.each do |member|
+              outside(findings, member, version) unless covered?(member, version)
+            end
+          end
         end
 
         # A member that a version lists must live there: an app `visible?` that answers before the plugin's, or a check
@@ -215,7 +249,8 @@ module GraphQL
         def membership_covers?(abstract, object, version)
           found = abstract.kind.union? ? abstract.type_memberships : object.interface_type_memberships
           found.any? do |membership|
-            membership.respond_to?(:abstract_type) && membership.abstract_type.equal?(abstract) && membership.object_type.equal?(object) &&
+            # An inherited membership names the class that declared it.
+            membership.respond_to?(:abstract_type) && membership.abstract_type.equal?(abstract) && object <= membership.object_type &&
               Integration.lifecycle_of(membership).covers?(version)
           end
         end

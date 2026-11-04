@@ -25,7 +25,7 @@ module GraphQL
             @out.print(report)
             report.ok? ? 0 : 1
           rescue NameError => error
-            raise unless error.name.to_s == schema_name.to_s.split("::").last
+            raise unless schema_name.to_s.split("::").include?(error.name.to_s)
 
             fail_with("No schema named #{schema_name}")
           end
