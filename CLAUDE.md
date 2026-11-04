@@ -20,7 +20,7 @@ Open-source extensions for graphql-ruby, one module at a time. Read `README.md` 
 ## Workflow per increment
 
 1. One branch off `main` (`feat/<name>`), one PR against `main`. Tests first (observe RED), then code, then docs (the module page in `docs/`, CHANGELOG, the Modules table in README).
-2. Run the suite on both engines and an older graphql before opening the PR:
+2. While fixing, run only the specs you touch on the interpreter with graphql 2.6. Run the full suite on both engines and an older graphql once, right before opening the PR (the three configurations can run in parallel only with a separate `BUNDLE_GEMFILE` and `BUNDLE_PATH` each, so they never share a lock):
    ```
    docker compose run --rm test bash bin/test                                              # interpreter, graphql 2.6
    GRAPHQL_ARMORY_ENGINE=next GRAPHQL_VERSION="~> 2.6.0" docker compose run --rm test bash bin/test
@@ -35,7 +35,8 @@ Open-source extensions for graphql-ruby, one module at a time. Read `README.md` 
 A separate `general-purpose` agent on `opus`, briefed with the template in `.github/VERIFICATION.md`. Read that file before verifying, before a design review, and when a finding goes to the backlog. It also holds these, the ones most often needed:
 
 - Security behavior gets a read-only design review before the first RED spec. Docs get their claims checked on `sonnet`, with no probe list.
-- Hard cap: one full verification and one recheck per PR. One batch fixes every blocker. What stays open becomes one decision for the user and issues with a reproduction that was run.
+- The verifier's model and probe configurations follow the change's risk: `opus` for security behavior, `sonnet` for everything else (table in `.github/VERIFICATION.md`).
+- Hard cap: one full verification and one recheck per PR. One batch fixes every blocker. The recheck reruns only those blockers' probes, on the configuration where they failed, then the suite once. What stays open becomes one decision for the user and issues with a reproduction that was run.
 - Matrix invariant (`spec/security/audit_runtime_matrix_spec.rb`): if a refused user gets the data, the audit must not say ok.
 
 ## Releases

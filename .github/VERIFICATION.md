@@ -16,8 +16,8 @@ Rules for the verifier's brief:
   - Run it, do not only read the verdict: a probe of a check or an audit compares what it says with what the query really returns to a refused user.
   - Find out who really answers: read `method(name).owner` on the real class, because include order and graphql-ruby's own methods (not only the app's) can win over the plugin's. Try the shapes graphql-ruby generates, such as its install template.
   - Attack every exemption and filter in the diff: try to hide a real bypass behind each one.
-- Probes are grouped in one spec file per run, each probe its own `it` so a failure does not mask the others, and that file runs once per configuration: interpreter and `next` on graphql 2.6, interpreter on 2.4. A result that differs between configurations is always reported, even when neither side is a blocker.
-- Negative control: each probe is labelled "security" (the feature must change its outcome) or "preservation" (existing behaviour or a schema that must stay clean). A security probe that passes on the branch runs again on the `origin/main` copy: if it also passes there, it did not exercise the feature and is reported as "no coverage", not as "holds". A preservation probe is expected to pass on both.
+- Probes are grouped in one spec file per run, each probe its own `it` so a failure does not mask the others, and that file runs once per configuration: interpreter and `next` on graphql 2.6, interpreter on 2.4. A result that differs between configurations is always reported, even when neither side is a blocker. A change with no security behavior runs its probes on the interpreter with graphql 2.6 only: CI covers the other configurations.
+- Negative control: each probe is labelled "security" (the feature must change its outcome) or "preservation" (existing behaviour or a schema that must stay clean). A security probe that passes on the branch runs again on the `origin/main` copy, on the interpreter with graphql 2.6 only: if it also passes there, it did not exercise the feature and is reported as "no coverage", not as "holds". A preservation probe is expected to pass on both, and is not run on `origin/main`. A change with no security behavior needs no `origin/main` copy.
 - Finding a blocker does not end the verification: the whole probe list is run.
 - Probe files: the verifier keeps each spec-shaped file in a third `mktemp -d` directory that it does not remove, and reports that path with a one-line index of its files. Docker mounts only the scratch copy, so it copies them there to run them. These are the inputs for `spec/regressions/`.
 - Severity: a blocker is a realistic defect that reproduces, is not a documented limit, and this diff causes or leaves unfixed in what it claims to fix. Silently ignoring an option with success, or a refused user getting data, is always a blocker under that test. The same defect already on `origin/main` and outside what the PR claims to fix is a pre-existing finding: it does not stop the merge, and it must carry its reproduction and go to the backlog. A refusal for the wrong reason (right outcome, wrong rule or message) is an advisory.
@@ -56,10 +56,10 @@ the real class (include order, graphql-ruby's own methods, its install template)
 exemption and filter in the diff.
 
 Group the probes in one spec file, each probe its own `it`, label each "security" or "preservation",
-keep the file in P and copy it into A and B to run it. Run it once per configuration: interpreter and
-next on 2.6, interpreter on 2.4; report any difference between them. Every security probe that passes
-in A runs again in B: if it also passes in B it is "no coverage", not "holds". Do not stop at the
-first blocker.
+keep the file in P and copy it into A and B to run it. Run it in A once per configuration:
+interpreter and next on 2.6, interpreter on 2.4; report any difference between them. Every security
+probe that passes in A runs again in B, on the interpreter with 2.6 only: if it also passes in B it is
+"no coverage", not "holds". Do not stop at the first blocker.
 
 Blocker = a realistic defect that reproduces, is not a documented limit, and this diff causes or
 leaves unfixed in what it claims to fix; an option silently ignored with success, or a refused user
@@ -79,9 +79,17 @@ code that reproduces it and its cause, or says the cause is unknown.
 
 **Design review before code (security behavior).** Before the first RED spec of a change that opens, relaxes or adds a check, a read-only agent (`general-purpose`, `opus`, no Docker, no probes) gets the design and the current code and answers one question: how would you break it? It names each gap with the code path that causes it. The design is fixed before any code. This is where the hole of a design is found cheaply; the verifier below is for what survives it.
 
-**Hard cap: one full verification and one recheck per PR.** Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. The recheck is a new agent only when the correction changed the design; when it only closed the reported gaps, the parent reruns the kept probe files on the branch, on the interpreter and `next` with graphql 2.6 (2.4 is CI's). A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Whatever stays open after the recheck becomes one decision for the user and issues with a reproduction that was run; never a third round. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier stays on `opus`, so another model reviews the code.
+**Hard cap: one full verification and one recheck per PR.** Correction bounds: one batch fixes every reported blocker, then one recheck limited to those blockers, with no new break ideas. The recheck is a new agent only when the correction changed the design; when it only closed the reported gaps, the parent reruns only the probes of those blockers, only on the configuration where they failed, and then the full suite once. No other probe and no new agent. A new finding in a recheck is reported only: it is a blocker only if the correction caused it. Whatever stays open after the recheck becomes one decision for the user and issues with a reproduction that was run; never a third round. If the same blocker still fails after the correction, or the correction caused a new one, suggest to the user `/model fable` for the main session (it cannot change itself); the verifier stays on `opus`, so another model reviews the code.
 
-Depth by change: security behavior gets the design review, the full verifier and that recheck. Docs get their claims checked against the code on `sonnet`, with no probe list.
+Depth by change, so the verifier costs what the risk is worth:
+
+| Change | Verifier | Probes |
+|---|---|---|
+| Security behavior (a check, a scope, a lookup, visibility, the audit's verdict) | design review, then `opus` | three configurations in A; security probes in B on the interpreter with graphql 2.6 |
+| Code with no security behavior (performance, refactor, a report's text or location) | `sonnet` | interpreter with graphql 2.6, A only; no B |
+| Docs | `sonnet`, claims checked against the code | none |
+
+When unsure whether a change has security behavior, it has.
 
 **Audit-versus-runtime matrix.** `spec/security/audit_runtime_matrix_spec.rb` crosses where a rule lives, where its `policy:` lives and whether a bypass applies, on both engines. Its invariant: if a refused user gets the data, the audit must not say ok. A finding of a new shape adds a shape to it, not only a spec of its own.
 
