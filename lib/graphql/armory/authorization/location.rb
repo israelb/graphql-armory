@@ -53,12 +53,14 @@ module GraphQL
 
         # graphql-ruby generates some types as classes with no constant: a mutation's payload, and a type's connection and
         # edge. They point to the class they were generated from, which was written somewhere.
-        # A connection of connections can lead back to itself, so each class is visited once.
+        # Only an object type is followed: a schema also answers `mutation`, with its root type. A connection of connections
+        # can lead back to itself, so each class is visited once, and the walk stops after a few steps.
         def self.generated_from(type)
           seen = {}.compare_by_identity
-          while type.is_a?(Module) && !seen.key?(type)
+          while type.is_a?(Class) && type < GraphQL::Schema::Object && !seen.key?(type) && seen.size < 16
             seen[type] = true
             source = type.mutation if type.respond_to?(:mutation)
+            source = nil unless source.is_a?(Class) && source < GraphQL::Schema::Resolver
             source ||= type.node_type if type.respond_to?(:node_type)
             return unless source.is_a?(Module)
 
