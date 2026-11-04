@@ -852,8 +852,8 @@ RSpec.describe "Versioning audit 3a: verification probes" do
     app = Rake::Application.new
     original = Rake.application
     Rake.application = app
-    load File.expand_path("lib/tasks/graphql_armory.rake", "/app")
-    load File.expand_path("lib/tasks/graphql_armory.rake", "/app")
+    load File.expand_path("../../lib/tasks/graphql_armory.rake", __dir__)
+    load File.expand_path("../../lib/tasks/graphql_armory.rake", __dir__)
     expect(Rake::Task.task_defined?("graphql_armory:audit")).to be(true)
     expect(Rake::Task.task_defined?("graphql_armory:audit_baseline")).to be(true)
     expect(Rake::Task["graphql_armory:audit"].actions.size).to eq(1)
