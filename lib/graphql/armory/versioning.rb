@@ -67,6 +67,17 @@ module GraphQL
         View.new(query.types)
       end
 
+      # Whether no served version of `schema` sees more than one of `definitions` (twins of one name), for Authorization's
+      # audit. False for a schema without versioning.
+      def self.disjoint?(schema, definitions)
+        return false unless schema.respond_to?(:armory_versioning)
+
+        lifecycles = definitions.map { |definition| Integration.lifecycle_of(definition) }
+        schema.armory_versioning.versions.each_served.all? do |version|
+          lifecycles.count { |lifecycle| lifecycle.covers?(version) } <= 1
+        end
+      end
+
       # `versions:` the labels, oldest first; `retired:` the oldest ones, no longer served; `default:` what a request with no
       # version gets: `:latest`, a served label or `:refuse`. `sinks:` and `on_sink_error:` as in Telemetry.
       def self.use(schema, versions:, default: Gate::UNSET, retired: [], sinks: [], on_sink_error: nil)

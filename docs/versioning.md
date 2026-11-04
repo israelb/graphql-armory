@@ -152,6 +152,21 @@ end
 
 Outside the membership, the object is not a member: the interface's fields are gone from it (a field the object declares itself stays), `interfaces` and `possibleTypes` omit it, a fragment on the abstract type does not apply to it, and a `resolve_type` answering it raises `GraphQL::UnresolvedTypeError` (see "Data outside the version"). The membership only hides the relationship: the object stays in the schema, so a type new with the membership takes its own `lifecycle` too. A membership lifecycle wider than its types' changes nothing outside theirs. A type new to a union or interface altogether simply takes `lifecycle added:`.
 
+To change a field, argument or enum value's shape without renaming it, give it two definitions on the same owner, with lifecycles that do not overlap:
+
+```ruby
+field :total, Integer, null: false, method: :total_cents, removed: "2025-01-01"   # an Int up to 2024-06-01
+field :total, String, null: false, method: :total_text, added: "2025-01-01"      # a String from 2025-01-01
+
+argument :first, Integer, required: false, removed: "2025-01-01"
+argument :first, String, required: false, added: "2025-01-01"
+
+value "VOID", "Cancelled.", removed: "2025-01-01"
+value "VOID", "Voided by the issuer.", value_method: false, added: "2025-01-01"   # the second skips graphql-ruby's value method
+```
+
+Each version sees exactly one of them, in every place graphql-ruby reads the schema. Two definitions that one version would both see raise `ConfigurationError` (an unversioned one beside a versioned one included). [Authorization](authorization.md)'s audit reads them as one member, and each keeps its own rule. Field twins need graphql 2.4.9 or later. Two type classes with one `graphql_name` come in a later part.
+
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
 
 ### Labels
@@ -248,6 +263,8 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 These raise `ConfigurationError` when a query of the schema is built (a `GraphQL::Query` built by hand included), and from `Versioning.types`; a root or `extra_types` changed later is checked again:
 
+- Two definitions of one argument name on a subscription field, or in an input object it takes: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise.
+
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.
 
@@ -258,6 +275,7 @@ This raises `ConfigurationError` when the argument is asked, and, under the lega
 These raise `ConfigurationError` the first time a query asks about the type, because graphql-ruby would serve the membership or the interface's definitions where it does not live:
 
 - An object or union with a versioned membership and another membership to the same abstract type or object (a parent's, or a repeated one), or, for an object, to an interface that includes the versioned one.
+- A field, argument or enum value defined more than once on one owner, with lifecycles that overlap in the query's version.
 - An object that implements an interface with a lifecycle whose field another of its interfaces or a parent class declares differently. Declare the field on the object, or rename one.
 
 
@@ -279,7 +297,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
 **Limits.**
 
-- **Lookups with no context see every field and argument.** `Types::Invoice.get_field("amount")`, `Types::Invoice.fields`, `get_argument`, a union's `possible_types`, an object's `interfaces` and other lookups without a query answer the member whatever its lifecycle: graphql-ruby answers them without asking `visible?`. Enum values asked without a query (`Types::Status.values`) and, under `Schema::Visibility`, `AppSchema.get_type` answer the latest version. Read a version's schema through `Versioning.types(schema, label)` or `to_definition(context: { armory_version: ... })`.
+- **Lookups with no context see every field and argument.** With two definitions of one name, they raise graphql-ruby's `DuplicateNamesError` instead (`Types::Invoice.get_field("total")`, and the default values graphql-ruby checks when the schema boots). `Types::Invoice.get_field("amount")`, `Types::Invoice.fields`, `get_argument`, a union's `possible_types`, an object's `interfaces` and other lookups without a query answer the member whatever its lifecycle: graphql-ruby answers them without asking `visible?`. Enum values asked without a query (`Types::Status.values`) and, under `Schema::Visibility`, `AppSchema.get_type` answer the latest version. Read a version's schema through `Versioning.types(schema, label)` or `to_definition(context: { armory_version: ... })`.
 - **Subscription triggers** build their query with `context: {}` unless you pass one, so the `default:` policy applies to them: under `default: :refuse` a trigger that reaches a versioned field raises `MissingVersionError`, and under `:latest` it cannot name a field removed in the latest version. Pass `context: { armory_version: ... }` to every `trigger`. Subscriptions are not tested with versioning yet.
 - **Queries built outside `query_class`.** A `Query::Partial` (`run_partials`) sees its parent's version, because it reads its parent's schema, and so does the second context `Schema::Visibility`'s `migration_errors: true` builds for a query; neither records a signal. A `GraphQL::Query` your code builds itself skips `query_class`: it is decided from its own `armory_version` the first time a versioned field is asked about, and records no signal. A refused version raises `RefusedVersionError` there instead of answering a validation error, and such a query that touches no field of a class that includes `Base` runs.
 - **`validate: false` with a field outside the version** raises graphql-ruby's own error ("No field definition found", or a `NoMethodError` on graphql 2.4) quoting the client's selection; nothing resolves.

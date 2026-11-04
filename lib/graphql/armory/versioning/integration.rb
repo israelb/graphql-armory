@@ -76,6 +76,11 @@ module GraphQL
           private
 
           def armory_versioned? = !Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
+
+          # The other definitions of this name on the same owner, found once.
+          def armory_twins
+            @armory_twins ||= Integration.twins_of(self).freeze
+          end
         end
 
         # Included in a field class by `include GraphQL::Armory::Versioning::Base`.
@@ -88,6 +93,7 @@ module GraphQL
           # A field also leaves with the type that declared it: an interface that includes a versioned interface would
           # otherwise keep that interface's fields where it does not live.
           def visible?(context)
+            Integration.refuse_twin_overlap(self, armory_twins, context, field: true)
             return false unless super
 
             version = Integration.version(context)
@@ -112,6 +118,7 @@ module GraphQL
           EXECUTABLE = %i[QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD INLINE_FRAGMENT VARIABLE_DEFINITION].freeze
 
           def visible?(context)
+            Integration.refuse_twin_overlap(self, armory_twins, context)
             return false unless super
 
             armory_refuse_on_schema_directive if owner.is_a?(Class) && owner < GraphQL::Schema::Directive
@@ -188,6 +195,7 @@ module GraphQL
           include Member
 
           def visible?(context)
+            Integration.refuse_twin_overlap(self, armory_twins, context)
             return false unless super
             return true unless armory_versioned?
 
@@ -421,6 +429,14 @@ module GraphQL
           type.instance_variable_set(:@armory_memberships_checked, memberships.size)
         end
 
+        # Every definition of each field name a type declares or inherits, twins included, read without a query.
+        def self.field_definitions(type, own_only: false)
+          levels = own_only ? [type] : type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }
+          levels.each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |level, found|
+            level.own_fields.each { |name, definitions| found[name].concat(Array(definitions)) }
+          end
+        end
+
         def self.display_name(type)
           type.graphql_name
         rescue GraphQL::RequiredImplementationMissingError
@@ -433,16 +449,16 @@ module GraphQL
 
         def self.refuse_shared_fields(object, interface, others)
           own = object.own_fields
-          sources = others.map(&:abstract_type).select { |other| other.is_a?(Module) }.map { |other| [other, other.fields] }
+          sources = others.map(&:abstract_type).select { |other| other.is_a?(Module) }.map { |other| [other, field_definitions(other)] }
           object.ancestors.each do |ancestor|
             next unless ancestor.is_a?(Class) && ancestor < GraphQL::Schema::Object && !ancestor.equal?(object)
 
-            sources << [ancestor, ancestor.own_fields]
+            sources << [ancestor, field_definitions(ancestor, own_only: true)]
           end
-          interface.fields.each do |name, definition|
+          field_definitions(interface).each do |name, definitions|
             next if own.key?(name)
 
-            source = sources.find { |_, fields| fields.key?(name) && !fields[name].equal?(definition) }
+            source = sources.find { |_, fields| fields.key?(name) && !(fields[name] - definitions).empty? }
             next unless source
 
             raise ConfigurationError, "implements #{interface.graphql_name} with a lifecycle, but " \
@@ -489,6 +505,7 @@ module GraphQL
           # would also ask every member's `visible?` before any query.
           visibility = schema.respond_to?(:use_visibility_profile?) && schema.use_visibility_profile?
           refuse_abstract_loads(schema) if versioned_membership_count.positive? && !visibility
+          refuse_subscription_twins(schema)
           [schema.query, schema.mutation, schema.subscription].compact.each do |root|
             next unless versioned_type?(root)
 
@@ -502,6 +519,60 @@ module GraphQL
                                       "read extra_types without asking visible?"
           end
           schema.instance_variable_set(:@armory_schema_checked, checked)
+        end
+
+        # Twins: other definitions of a member's name on its own owner.
+        def self.twins_of(member)
+          holder = member.owner
+          definitions = case member
+                        when GraphQL::Schema::Field then holder.own_fields[member.graphql_name] if holder.respond_to?(:own_fields)
+                        when GraphQL::Schema::Argument then holder.own_arguments[member.graphql_name] if holder.respond_to?(:own_arguments)
+                        when GraphQL::Schema::EnumValue
+                          holder.all_enum_value_definitions.select { |value| value.owner.equal?(holder) && value.graphql_name == member.graphql_name }
+                        end
+          Array(definitions).reject { |definition| definition.equal?(member) }
+        end
+
+        # graphql-ruby 2.4.0 to 2.4.8 fail with NoMethodError under Schema::Visibility when no twin of a field is visible.
+        FIELD_TWINS = Gem::Version.new(GraphQL::VERSION) >= Gem::Version.new("2.4.9")
+
+        # Two definitions of one name that a version would both see: graphql-ruby would raise DuplicateNamesError on every
+        # query that asks for it. Checked before any other `visible?`, so the answer never depends on the user.
+        def self.refuse_twin_overlap(member, twins, context, field: false)
+          return if twins.empty?
+          raise ConfigurationError, "has two definitions, which needs graphql 2.4.9 or later" if field && !FIELD_TWINS
+
+          version = version(context)
+          return unless lifecycle_of(member).covers?(version) && twins.any? { |twin| lifecycle_of(twin).covers?(version) }
+
+          raise ConfigurationError, "is defined more than once for #{label(version)}: graphql-ruby would refuse every query that asks " \
+                                    "for it. Give the definitions lifecycles that do not overlap"
+        end
+
+        # graphql-ruby's subscription trigger reads the arguments of a subscription field with no query, where twins raise.
+        def self.refuse_subscription_twins(schema)
+          root = schema.subscription
+          return unless root
+
+          seen = {}.compare_by_identity
+          root.all_field_definitions.each do |field|
+            refuse_argument_twins(field.path, field.path, field.all_argument_definitions, seen)
+          end
+        end
+
+        def self.refuse_argument_twins(at, holder, arguments, seen)
+          arguments.group_by(&:graphql_name).each do |name, definitions|
+            if definitions.size > 1
+              raise ConfigurationError, "#{at}: #{holder}.#{name} has two definitions, and graphql-ruby's subscription trigger reads " \
+                                        "arguments with no version, where they raise. Keep one definition"
+            end
+
+            input = definitions.first.type.unwrap
+            next unless input.kind.input_object? && !seen.key?(input)
+
+            seen[input] = true
+            refuse_argument_twins(definitions.first.path, input.graphql_name, input.all_argument_definitions, seen)
+          end
         end
 
         # graphql-ruby serves a parent's definition of a name when the local one is hidden (enum values on every path,
@@ -528,20 +599,20 @@ module GraphQL
             found << choices if !choices.empty? && choices.all? { |defn| versioned?(defn) }
           elsif type.kind.input_object? && value.respond_to?(:each_pair)
             value.each_pair do |key, item|
-              argument = input_field(type, key.to_s)
-              next unless argument
+              arguments = input_fields(type, key.to_s)
+              next if arguments.empty?
 
-              found << [argument] if versioned?(argument)
-              members_in(argument.type, item, found)
+              found << arguments if arguments.all? { |argument| versioned?(argument) }
+              members_in(arguments.first.type, item, found)
             end
           end
           found
         end
 
         # graphql-ruby accepts a default's key as the field's GraphQL name, its keyword (`as:`) or its underscored name.
-        def self.input_field(type, key)
+        def self.input_fields(type, key)
           camelized = GraphQL::Schema::Member::BuildType.camelize(key)
-          type.all_argument_definitions.find do |defn|
+          type.all_argument_definitions.select do |defn|
             defn.graphql_name == key || defn.graphql_name == camelized || defn.keyword.to_s == key
           end
         end
