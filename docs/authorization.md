@@ -225,7 +225,7 @@ load "tasks/graphql_armory.rake"
 - A type, a mutation or a resolver gives the line of its own `authorize`, or else of its class.
 - An own check or a denial hook gives the line of its method.
 
-A type graphql-ruby generates gives the line of the class it came from: a mutation's payload the line of its mutation, a connection or an edge the line of its node type. `location` is `nil` when there is no Ruby line to give: a schema built from SDL, or any other class with no name and no `authorize` of its own. A field declared by a helper method gives the helper's line, and a class reopened in several files gives the first one. The location is not part of a problem for the [baseline](#adopting-it-on-a-schema-with-many-problems): moving code never turns an accepted problem into a new one.
+A type graphql-ruby generates gives the line of the class it came from: a mutation's payload the line of its mutation, a connection or an edge the line of its node type. `location` is `nil` when there is no Ruby line to give: a schema built from SDL, or any other class with no name and no `authorize` of its own, such as an anonymous subclass of a named type or the payload of a subscription. A field declared by a helper method gives the helper's line, and a class reopened in several files gives the first one. The location is not part of a problem for the [baseline](#adopting-it-on-a-schema-with-many-problems): moving code never turns an accepted problem into a new one.
 
 | Kind | What it means | What to do |
 |---|---|---|
