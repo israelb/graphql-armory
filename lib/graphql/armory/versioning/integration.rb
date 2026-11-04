@@ -94,44 +94,44 @@ module GraphQL
         #
         #   argument :first, Integer, required: false, added: "2025-01-01"
         #
-        # The first time it is asked, it also refuses what graphql-ruby would serve outside the version anyway: a default
-        # value naming a member the version does not have, a versioned argument shadowing a parent's of the same name, and a
-        # lifecycle on a type-system directive's argument.
+        # When it is asked, it also refuses what graphql-ruby would serve outside the version anyway: a default value naming a
+        # member the version does not have, a versioned argument shadowing a parent's of the same name, and, on a directive
+        # used in the SDL, a lifecycle or a type with versioned members.
         module Argument
           include Member
 
           # Where graphql-ruby runs a directive while executing a query. Any other location is the schema's own (SDL), where
-          # applied arguments are printed without asking `visible?`.
+          # applied arguments are printed as the latest version sees them, without asking `visible?`.
           EXECUTABLE = %i[QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD INLINE_FRAGMENT VARIABLE_DEFINITION].freeze
 
           def visible?(context)
             return false unless super
 
+            armory_refuse_on_schema_directive if owner.is_a?(Class) && owner < GraphQL::Schema::Directive
             in_default = armory_default_members
             return true if !armory_versioned? && in_default.empty?
 
             version = Integration.version(context)
             return false unless @armory_lifecycle.covers?(version)
 
-            missing = in_default.reject { |member| member.armory_lifecycle.covers?(version) }
+            # Each entry lists the definitions the default may mean (an enum value renamed across versions keeps its Ruby value).
+            missing = in_default.reject { |choices| choices.any? { |member| member.armory_lifecycle.covers?(version) } }
             return true if missing.empty?
 
-            raise ConfigurationError, "its default_value names #{missing.map(&:path).join(', ')}, not in #{Integration.label(version)}: " \
-                                      "introspection would print it and the field would run without it. Use a default every version of this argument has"
+            raise ConfigurationError, "its default_value names #{missing.map { |choices| choices.first.path }.join(', ')}, not in " \
+                                      "#{Integration.label(version)}: introspection would print it and the field would run without it. " \
+                                      "Use a default every version of this argument has"
           rescue ConfigurationError => error
             raise error.class, "#{path}: #{error.message}"
           end
 
           private
 
-          # The versioned members the default value names, found once, after the checks that refuse a definition.
+          # The versioned members the default value names, found once, after the check that refuses a shadowing definition.
           def armory_default_members
             return @armory_default_members if defined?(@armory_default_members)
 
-            if armory_versioned?
-              Integration.refuse_shadowing(self, armory_inherited_arguments)
-              armory_refuse_type_system_directive
-            end
+            Integration.refuse_shadowing(self, armory_inherited_arguments) if armory_versioned?
             @armory_default_members = default_value? ? Integration.members_in(type, default_value).freeze : [].freeze
           end
 
@@ -142,14 +142,19 @@ module GraphQL
             sources.flat_map(&:all_argument_definitions)
           end
 
-          def armory_refuse_type_system_directive
-            return unless owner.is_a?(Class) && owner < GraphQL::Schema::Directive
-
-            schema_locations = owner.locations - EXECUTABLE
+          # Asked every time, not remembered: a subclass defined later may add a location, and an argument's owner is the
+          # class that declared it, so the subclasses' locations count too.
+          def armory_refuse_on_schema_directive
+            schema_locations = Integration.directive_locations(owner) - EXECUTABLE
             return if schema_locations.empty?
 
-            raise ConfigurationError, "is on a type-system directive (#{schema_locations.join(', ')}): the SDL prints applied " \
-                                      "directive arguments without asking visible?, so they cannot be versioned"
+            where = "is on a directive used in the SDL (#{schema_locations.join(', ')}), which prints applied arguments as the latest version sees them"
+            raise ConfigurationError, "#{where}: it cannot have a lifecycle" if armory_versioned?
+
+            reached = Integration.versioned_members_of(type)
+            return if reached.empty?
+
+            raise ConfigurationError, "#{where}: its type cannot reach versioned members (#{reached.first(3).map(&:path).join(', ')})"
           end
         end
 
@@ -184,7 +189,9 @@ module GraphQL
                                     "one is hidden. Version the parent's definition, or give this one another name"
         end
 
-        # The members with a lifecycle that a Ruby default value names, through lists and nested input objects.
+        # The members with a lifecycle that a Ruby default value names, through lists and nested input objects, as a list of
+        # choices: the default is fine in a version where any definition of a choice lives. A choice with a definition that
+        # lives everywhere is left out.
         def self.members_in(type, value, found = [])
           return found if value.nil?
           return members_in(type.of_type, value, found) if type.non_null?
@@ -192,17 +199,46 @@ module GraphQL
           if type.list?
             (value.is_a?(Array) ? value : [value]).each { |item| members_in(type.of_type, item, found) }
           elsif type.kind.enum?
-            found.concat(type.all_enum_value_definitions.select { |defn| versioned?(defn) && (defn.value == value || defn.graphql_name == value.to_s) })
+            choices = type.all_enum_value_definitions.select { |defn| defn.value == value || defn.graphql_name == value.to_s }
+            found << choices if !choices.empty? && choices.all? { |defn| versioned?(defn) }
           elsif type.kind.input_object? && value.respond_to?(:each_pair)
             value.each_pair do |key, item|
-              argument = type.all_argument_definitions.find { |defn| defn.graphql_name == key.to_s || defn.keyword.to_s == key.to_s }
+              argument = input_field(type, key.to_s)
               next unless argument
 
-              found << argument if versioned?(argument)
+              found << [argument] if versioned?(argument)
               members_in(argument.type, item, found)
             end
           end
           found
+        end
+
+        # graphql-ruby accepts a default's key as the field's GraphQL name, its keyword (`as:`) or its underscored name.
+        def self.input_field(type, key)
+          camelized = GraphQL::Schema::Member::BuildType.camelize(key)
+          type.all_argument_definitions.find do |defn|
+            defn.graphql_name == key || defn.graphql_name == camelized || defn.keyword.to_s == key
+          end
+        end
+
+        # Every versioned enum value and input field a type can reach, through lists and nested input objects.
+        def self.versioned_members_of(type, seen = {}.compare_by_identity)
+          type = type.unwrap
+          return [] if seen.key?(type)
+
+          seen[type] = true
+          if type.kind.enum?
+            type.all_enum_value_definitions.select { |defn| versioned?(defn) }
+          elsif type.kind.input_object?
+            type.all_argument_definitions.flat_map { |defn| (versioned?(defn) ? [defn] : []) + versioned_members_of(defn.type, seen) }
+          else
+            []
+          end
+        end
+
+        # A directive's locations and those of every subclass, since an inherited argument's owner is the parent.
+        def self.directive_locations(directive)
+          directive.subclasses.reduce(directive.locations) { |locations, subclass| locations | directive_locations(subclass) }
         end
 
         def self.versioned?(member)

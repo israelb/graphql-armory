@@ -186,9 +186,9 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 These raise `ConfigurationError`, naming the member, the first time a query asks about it, because graphql-ruby would otherwise serve the member outside its version:
 
-- A `default_value:` that names an input field or enum value the query's version does not have. Introspection would print it, and the field would run without it. Use a default that every version of the argument has.
+- A `default_value:` that names an input field or enum value the query's version does not have. Introspection would print it, and the field would run without it. Use a default that every version of the argument has. An enum value renamed across versions with the same Ruby `value:` counts as one: the default is fine in every version where either name lives. The check runs only on argument classes that include `Base`: an argument class without it can still print, in an older version's SDL, a default naming a value added later.
 - A versioned argument or enum value with the same name as one its parent class defines (an input object, enum, resolver or mutation subclass, or a field's own argument over its resolver's). graphql-ruby serves the parent's definition where the local one is hidden. Version the parent's definition, or rename it.
-- A versioned argument on a directive with a type-system location (`FIELD_DEFINITION`, `OBJECT` and the rest): the SDL prints applied directive arguments without asking `visible?`. Arguments of directives used in queries (`FIELD`, `QUERY` and the rest) can be versioned; graphql-ruby's built-in directives cannot.
+- On a directive used in the SDL (any location such as `FIELD_DEFINITION` or `OBJECT`, on the directive or on a subclass of it), an argument with a lifecycle, or one whose type reaches a versioned enum value or input field: the SDL prints applied directive arguments as the latest version sees them, without asking `visible?`. Arguments of directives used only in queries (`FIELD`, `QUERY` and the rest) can be versioned and can use versioned enums; graphql-ruby's built-in directives cannot be versioned.
 
 Context key: `armory_version` (a String naming a served version).
 

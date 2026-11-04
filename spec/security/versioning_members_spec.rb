@@ -222,7 +222,7 @@ RSpec.describe "use GraphQL::Armory::Versioning: arguments, input fields and enu
         expect(messages(run(plain, "{ invoices @trace(level: 1) }", "2024-06-01", root: ok))).to eq(["Directive 'trace' doesn't accept argument 'level'"])
         expect(run(plain, "{ invoices @trace(level: 1) }", "2025-01-01", root: ok)).to eq("data" => { "invoices" => "ok" })
         expect { tagged.to_definition(context: { armory_version: "2025-01-01" }) }
-          .to raise_error(versioning::ConfigurationError, /owner\.team: .*type-system/)
+          .to raise_error(versioning::ConfigurationError, /owner\.team: is on a directive used in the SDL .*cannot have a lifecycle/)
       end
 
       it "runs a field without a required argument hidden in the client's version (documented limit)" do
