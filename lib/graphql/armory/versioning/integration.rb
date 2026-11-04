@@ -98,6 +98,13 @@ module GraphQL
 
           # A field also leaves with the type that declared it: an interface that includes a versioned interface would
           # otherwise keep that interface's fields where it does not live.
+          # `type` given inside the field's block is recorded like the positional one.
+          def type(*args)
+            name = Integration.late_bound_name(args.first) unless args.empty?
+            Integration.mark_late_bound(self, name) if name
+            super
+          end
+
           def visible?(context)
             Integration.refuse_twin_overlap(self, armory_twins, context, field: true)
             return false unless super
@@ -386,13 +393,13 @@ module GraphQL
 
         def self.versioned_membership_count = @versioned_memberships || 0
 
-        # The GraphQL name a type expression binds late: a `LateBoundType`, bare, wrapped or in a list. A String is a Ruby
-        # constant, bound to one class at once.
+        # The GraphQL name a type expression binds late: a `LateBoundType`, bare, wrapped or in a list (`[T, null: true]`
+        # included). A String is a Ruby constant, bound to one class at once.
         def self.late_bound_name(expression)
           case expression
           when GraphQL::Schema::LateBoundType then expression.graphql_name
           when GraphQL::Schema::Wrapper then late_bound_name(expression.of_type)
-          when Array then late_bound_name(expression.first) if expression.size == 1
+          when Array then late_bound_name(expression.first)
           end
         end
 
