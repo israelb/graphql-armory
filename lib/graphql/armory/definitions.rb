@@ -1,0 +1,111 @@
+# frozen_string_literal: true
+
+require "set"
+
+module GraphQL
+  module Armory
+    # Every definition a schema holds, hidden or not, read with no request. graphql-ruby's lookups with no request leave
+    # out what is hidden there and a request can still reach: a type or field hidden by `visible?`, or one of several
+    # definitions of a name. This follows the definitions themselves from the roots, `orphan_types` and `extra`.
+    module Definitions
+      def self.call(schema, extra = [])
+        found = Set.new.compare_by_identity
+        pending = [schema.query, schema.mutation, schema.subscription, *schema.orphan_types, *directive_types(schema), *introspection_field_types(schema), *extra]
+        until pending.empty?
+          type = pending.pop
+          next if !type.respond_to?(:kind) || !found.add?(type)
+
+          pending.concat(referenced_types(type))
+        end
+        found.to_a
+      end
+
+      # A directive argument is client input like any other, and only `schema.types` used to reach its input objects.
+      def self.directive_types(schema)
+        schema.directives.values.flat_map { |directive| arguments_of(directive) }.compact
+      end
+      private_class_method :directive_types
+
+      # `introspection(true)` is a flag anyone can set, and graphql-ruby serves such a type like any other. The `__` prefix
+      # is reserved for introspection by the GraphQL spec: built-in types, what `Schema.introspection` replaces them with,
+      # and their copies all carry it.
+      def self.introspection?(type)
+        type.introspection? && type.graphql_name.start_with?("__")
+      end
+
+      # `Schema.introspection` can add entry points and dynamic fields, which no type holds and a client can reach.
+      def self.introspection_field_types(schema)
+        system = schema.introspection_system
+        (system.entry_points + system.dynamic_fields).flat_map { |field| references_of(field) }.flatten.compact
+      end
+      private_class_method :introspection_field_types
+
+      def self.connection?(type)
+        type.is_a?(Class) && type.include?(GraphQL::Types::Relay::ConnectionBehaviors)
+      end
+
+      def self.referenced_types(type)
+        references = []
+        references << fields_of(type)
+        references << arguments_of(type) if type.kind.input_object?
+        references.concat(interfaces_of(type)) if type.respond_to?(:interface_type_memberships)
+        references.concat(type.orphan_types) if type.kind.interface?
+        references.concat(included_interfaces(type)) if type.kind.interface?
+        references.concat(type.type_memberships.map(&:object_type)) if type.kind.union?
+        references << type.node_type if connection?(type)
+        references.flatten.compact
+      end
+      private_class_method :referenced_types
+
+      # A String or `LateBoundType` that graphql-ruby never matched to an interface stays a bare membership: it has no
+      # type to follow.
+      def self.interfaces_of(type)
+        type.interface_type_memberships.filter_map { |membership| membership.abstract_type if membership.respond_to?(:abstract_type) }
+      end
+      private_class_method :interfaces_of
+
+      # An interface brought in with `include` makes no type membership, and its fields are served all the same.
+      def self.included_interfaces(type)
+        type.ancestors.select { |ancestor| !ancestor.equal?(type) && ancestor.respond_to?(:kind) && ancestor.kind.interface? }
+      end
+      private_class_method :included_interfaces
+
+      # Every definition of every field, nearest first: a hidden one falls back to the next of its name, and
+      # `all_field_definitions` merges them by name. `field ... do ... end` blocks are loaded here, because only
+      # `schema.types` or a request loads them, and the audit reads arguments from them.
+      def self.fields_at_every_level(type)
+        return [] unless type.respond_to?(:all_field_definitions)
+
+        fields = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) }.flat_map { |ancestor| ancestor.own_fields.values.flatten }
+        fields.each { |field| field.ensure_loaded if field.respond_to?(:ensure_loaded) }
+        fields.uniq
+      end
+
+      # A shadowed definition is only served by a fallback, so one whose type cannot load fails nothing that runs today.
+      def self.shadowed?(type, field)
+        !type.all_field_definitions.include?(field)
+      end
+
+      def self.fields_of(type)
+        fields_at_every_level(type).map do |field|
+          references_of(field)
+        rescue GraphQL::Error
+          raise unless shadowed?(type, field)
+
+          nil
+        end
+      end
+      private_class_method :fields_of
+
+      def self.references_of(field)
+        [field.type.unwrap, arguments_of(field)]
+      end
+      private_class_method :references_of
+
+      def self.arguments_of(member)
+        member.all_argument_definitions.flat_map { |argument| [argument.type.unwrap, argument.loads] }
+      end
+      private_class_method :arguments_of
+    end
+  end
+end

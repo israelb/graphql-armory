@@ -94,6 +94,7 @@ module GraphQL
   end
 end
 
+require "graphql/armory/definitions"
 require "graphql/armory/versioning/versions"
 require "graphql/armory/versioning/lifecycle"
 require "graphql/armory/versioning/decision"

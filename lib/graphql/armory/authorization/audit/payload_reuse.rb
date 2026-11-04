@@ -27,7 +27,7 @@ module GraphQL
             end
             return if payloads.empty?
 
-            named = definitions.to_h { |type| [type.graphql_name, type] }
+            named = definitions.group_by(&:graphql_name)
             fields.each { |type, field| note(type, field, objects, payloads, named) }
           end
 
@@ -61,21 +61,22 @@ module GraphQL
           end
 
           def note(type, field, objects, payloads, named)
-            target = returned_type(field, named) or return
-            reused = members(target, objects) & payloads
-            return if reused.empty? || own_payload?(field, target)
+            targets = returned_types(field, named)
+            reused = targets.flat_map { |target| members(target, objects) }.uniq & payloads
+            return if reused.empty? || (targets.one? && own_payload?(field, targets.first))
 
             @findings.problem(:payload_outside_mutation, "#{type.graphql_name}.#{field.original_name}",
                               "returns #{reused.map(&:graphql_name).sort.join(", ")}, a mutation's payload, whose fields are covered by that mutation's rule: " \
                               "here no such rule runs, so they are served with no check. Return a type of its own, or, for a public child of a mutation with a rule, give the parent's field `authorize: :none, reason: \"...\"`", at: field)
           end
 
-          # A shadowed definition may name a type that never resolved; it cannot serve anything.
-          def returned_type(field, named)
+          # A shadowed definition may name a type that never resolved; it cannot serve anything. A late-bound name with
+          # several definitions (Versioning's type twins) may mean any of them.
+          def returned_types(field, named)
             type = field.type.unwrap
-            type.is_a?(GraphQL::Schema::LateBoundType) ? named[type.graphql_name] : type
+            type.is_a?(GraphQL::Schema::LateBoundType) ? named.fetch(type.graphql_name, []) : [type]
           rescue NameError, GraphQL::Error
-            nil
+            []
           end
 
           def members(target, objects)
