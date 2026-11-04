@@ -111,10 +111,19 @@ module GraphQL
 
             store[:version_refusal] = decision
             # A PersistedQueries refusal already runs nothing: its code stands. Any other validator is replaced.
-            return if static_validator.is_a?(PersistedQueries::Refusal)
-
+            @armory_refusal = static_validator.is_a?(PersistedQueries::Refusal) ? static_validator : Refusal.new(schema, decision)
             self.validate = true
-            self.static_validator = Refusal.new(schema, decision)
+            self.static_validator = @armory_refusal
+          end
+
+          # A refused query keeps refusing: code that sets these after the query is built cannot turn the refusal off.
+          # Execution::Next skips validation when `validate` is false.
+          def validate=(value)
+            super(@armory_refusal ? true : value)
+          end
+
+          def static_validator=(validator)
+            super(@armory_refusal || validator)
           end
         end
 

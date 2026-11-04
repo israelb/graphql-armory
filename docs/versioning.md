@@ -60,7 +60,7 @@ class Types::Invoice < Types::BaseObject
 end
 ```
 
-A field lives from `added:` (the first version when absent) up to, not including, `removed:` (still here when absent). A field with neither lives in every version, at no cost. `deprecation_reason:` is graphql-ruby's own and works as always: the field is deprecated in every version it exists in. Deprecating it only from a given version comes in a later part.
+A field lives from `added:` (the first version when absent) up to, not including, `removed:` (still here when absent). A field with neither lives in every version. Every field of a class that includes `Base` still reads the query's version when graphql-ruby asks whether it is visible. `deprecation_reason:` is graphql-ruby's own and works as always: the field is deprecated in every version it exists in. Deprecating it only from a given version comes in a later part.
 
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
 
@@ -86,7 +86,7 @@ It could as well come from the URL or from a version pinned on the client's acco
 | `context[:armory_version]` | Result | `extensions.code` |
 |---|---|---|
 | A served version's label | That version | — |
-| `nil`, or no key | The `default:` policy | `MISSING_API_VERSION` under `default: :refuse` |
+| `nil`, or no key (the key is the Symbol `:armory_version`: a String key `"armory_version"` counts as no key) | The `default:` policy | `MISSING_API_VERSION` under `default: :refuse` |
 | A retired version's label | Refused, nothing runs | `RETIRED_API_VERSION` |
 | Anything else: an unknown or future label, `""`, a label with extra spaces, a Symbol, a number | Refused, nothing runs | `UNKNOWN_API_VERSION` |
 
@@ -164,10 +164,10 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
 - **Lookups with no context see every field.** `Types::Invoice.get_field("amount")`, `Types::Invoice.fields` and other lookups without a query answer the field whatever its lifecycle: graphql-ruby answers them without asking `visible?`. Read a version's schema through `to_definition(context: { armory_version: ... })`. A tooling entry point for this comes in a later part.
 - **Subscription triggers** build their query with `context: {}` unless you pass one, so the `default:` policy applies to them: under `default: :refuse` a trigger that reaches a versioned field raises `MissingVersionError`, and under `:latest` it cannot name a field removed in the latest version. Pass `context: { armory_version: ... }` to every `trigger`. Subscriptions are not tested with versioning yet.
-- **Queries built outside `query_class`.** A `Query::Partial` (`run_partials`) sees its parent's version, because it reads its parent's schema, and so does the second context `Schema::Visibility`'s `migration_errors: true` builds for a query; neither records a signal. A `GraphQL::Query` your code builds itself skips `query_class`: it is decided from its own `armory_version` the first time a versioned field is asked about, and records no signal. A refused version raises `RefusedVersionError` there instead of answering a validation error, and such a query that touches no versioned field runs.
+- **Queries built outside `query_class`.** A `Query::Partial` (`run_partials`) sees its parent's version, because it reads its parent's schema, and so does the second context `Schema::Visibility`'s `migration_errors: true` builds for a query; neither records a signal. A `GraphQL::Query` your code builds itself skips `query_class`: it is decided from its own `armory_version` the first time a versioned field is asked about, and records no signal. A refused version raises `RefusedVersionError` there instead of answering a validation error, and such a query that touches no field of a class that includes `Base` runs.
 - **`validate: false` with a field outside the version** raises graphql-ruby's own error ("No field definition found", or a `NoMethodError` on graphql 2.4) quoting the client's selection; nothing resolves.
 - **The legacy `Schema::Warden` falls back.** When a type's own definition of a field is hidden in V, the Warden serves a parent class's or an interface's definition of the same name instead. `Schema::Visibility` never does: use it.
-- **Named `Schema::Visibility` profiles** (`profiles:`) are not supported yet: a versioned field asked under one raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work.
+- **Named `Schema::Visibility` profiles** (`profiles:`) are not supported yet: any field of a class that includes `Base` asked under one raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work.
 - **`Schema::AlwaysVisible`** never asks `visible?`, so nothing would be versioned: the first query raises `ConfigurationError` instead, even when it was added after `use`.
 - **Your own `visible?`** on a base field class must call `super`, or the plugin is skipped for those fields.
 - **Two refusing plugins.** With persisted queries, a request both refuse gets the persisted query's code. Either way nothing runs.
