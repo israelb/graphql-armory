@@ -64,6 +64,83 @@ module GraphQL
           end
         end
 
+        # A base argument class with `Base`, for field arguments and input-object fields.
+        module Argument
+          def self.example
+            Class.new(GraphQL::Schema::Argument) { include Versioning::Base }
+          end
+        end
+
+        # A base enum value class with `Base`.
+        module EnumValue
+          def self.example
+            Class.new(GraphQL::Schema::EnumValue) { include Versioning::Base }
+          end
+        end
+
+        # `PAID` in every version; `VOID` from 2024-06-01; `CANCELLED` removed in 2025-01-01.
+        module Status
+          def self.example(base_value = EnumValue.example)
+            Class.new(GraphQL::Schema::Enum) do
+              graphql_name "Status"
+              enum_value_class(base_value)
+              value "PAID"
+              value "VOID", added: "2024-06-01"
+              value "CANCELLED", removed: "2025-01-01"
+            end
+          end
+        end
+
+        # `status` in every version; `since` from 2025-01-01; `code` removed in 2025-01-01.
+        module InvoiceFilter
+          def self.example(status = Status.example, base_argument = Argument.example)
+            Class.new(GraphQL::Schema::InputObject) do
+              graphql_name "InvoiceFilter"
+              argument_class(base_argument)
+              argument :status, status, required: false
+              argument :since, String, required: false, added: "2025-01-01"
+              argument :code, String, required: false, removed: "2025-01-01"
+            end
+          end
+        end
+
+        # `invoices(filter:, first:, page:)`: `first` from 2025-01-01, `page` removed in 2025-01-01; `status` answers what the
+        # root holds, so a test can return a value outside the client's version.
+        module MembersQuery
+          def self.example(status: Status.example, base_argument: Argument.example)
+            filter = InvoiceFilter.example(status, base_argument)
+            base_field = Class.new(GraphQL::Schema::Field) { argument_class(base_argument) }
+
+            Class.new(GraphQL::Schema::Object) do
+              graphql_name "Query"
+              field_class(base_field)
+              field :invoices, [String], null: false do
+                argument :filter, filter, required: false
+                argument :first, Integer, required: false, added: "2025-01-01"
+                argument :page, Integer, required: false, removed: "2025-01-01"
+              end
+              field :status, status, null: false
+            end
+          end
+        end
+
+        # The root object for MembersQuery.example: `invoices` adds `[:invoices, arguments]` to `resolved` and answers the
+        # arguments as `name=value` Strings (`filter.key=value` for the filter's fields); `status` answers the value it was given.
+        module MembersRoot
+          def self.example(resolved = [], status: "PAID")
+            Class.new do
+              define_method(:invoices) do |filter: nil, first: nil, page: nil|
+                arguments = { filter: filter&.to_h, first: first, page: page }.compact
+                resolved << [:invoices, arguments]
+                arguments.flat_map do |name, value|
+                  value.is_a?(Hash) ? value.map { |key, item| "#{name}.#{key}=#{item}" } : ["#{name}=#{value}"]
+                end
+              end
+              define_method(:status) { resolved << :status; status }
+            end.new
+          end
+        end
+
         # The schema over Query.example and Versions.example, under `Schema::Visibility` (`visibility: :visibility`) or the
         # legacy `Schema::Warden` (`visibility: :warden`).
         module Schema

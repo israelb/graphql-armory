@@ -145,8 +145,14 @@ RSpec.describe "GraphQL::Armory::Versioning objects" do
   end
 
   describe "Base" do
-    it "goes only in a field class in this version" do
-      expect { Class.new(GraphQL::Schema::Object) { include GraphQL::Armory::Versioning::Base } }.to raise_error(ArgumentError, /field class/)
+    it "goes in a field, argument or enum value class, and refuses any other in this version" do
+      kinds = [GraphQL::Schema::Field, GraphQL::Schema::Argument, GraphQL::Schema::EnumValue].map do |parent|
+        Class.new(parent) { include GraphQL::Armory::Versioning::Base }.include?(versioning::Integration::Member)
+      end
+
+      expect(kinds).to eq([true, true, true])
+      expect { Class.new(GraphQL::Schema::Object) { include GraphQL::Armory::Versioning::Base } }
+        .to raise_error(ArgumentError, /goes in a field, argument or enum value class/)
     end
   end
 

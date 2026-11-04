@@ -57,28 +57,160 @@ module GraphQL
           raise ConfigurationError, "#{schema} uses GraphQL::Schema::AlwaysVisible, which never asks visible?: nothing would be versioned. Remove it"
         end
 
+        # What every versioned member keeps: its lifecycle, built from `added:` and `removed:`, which it strips before `super`.
+        module Member
+          def initialize(*args, added: nil, removed: nil, **kwargs, &block)
+            begin
+              @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
+            rescue ConfigurationError => error
+              raise error.class, "#{kwargs[:name] || args.first}: #{error.message}"
+            end
+            super(*args, **kwargs, &block)
+          end
+
+          # When the member lives, for the audit and for tooling.
+          attr_reader :armory_lifecycle
+
+          private
+
+          def armory_versioned? = !Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
+        end
+
         # Included in a field class by `include GraphQL::Armory::Versioning::Base`.
         #
         #   field :total, Integer, null: false, added: "2024-06-01"     # from 2024-06-01 on
         #   field :amount, Integer, null: false, removed: "2025-01-01"  # up to 2024-06-01
         module Field
-          def initialize(*args, added: nil, removed: nil, **kwargs, &block)
-            begin
-              @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
-            rescue ConfigurationError => error
-              raise ConfigurationError, "#{kwargs[:name]}: #{error.message}"
-            end
-            super(*args, **kwargs, &block)
-          end
-
-          # When the field lives, for the audit and for tooling.
-          attr_reader :armory_lifecycle
+          include Member
 
           def visible?(context)
             super && @armory_lifecycle.covers?(Integration.version(context))
           rescue ConfigurationError => error
-            raise ConfigurationError, "#{owner.graphql_name}.#{graphql_name}: #{error.message}"
+            raise error.class, "#{owner.graphql_name}.#{graphql_name}: #{error.message}"
           end
+        end
+
+        # Included in an argument class: arguments of fields, input-object fields and arguments of executable directives.
+        #
+        #   argument :first, Integer, required: false, added: "2025-01-01"
+        #
+        # The first time it is asked, it also refuses what graphql-ruby would serve outside the version anyway: a default
+        # value naming a member the version does not have, a versioned argument shadowing a parent's of the same name, and a
+        # lifecycle on a type-system directive's argument.
+        module Argument
+          include Member
+
+          # Where graphql-ruby runs a directive while executing a query. Any other location is the schema's own (SDL), where
+          # applied arguments are printed without asking `visible?`.
+          EXECUTABLE = %i[QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD INLINE_FRAGMENT VARIABLE_DEFINITION].freeze
+
+          def visible?(context)
+            return false unless super
+
+            in_default = armory_default_members
+            return true if !armory_versioned? && in_default.empty?
+
+            version = Integration.version(context)
+            return false unless @armory_lifecycle.covers?(version)
+
+            missing = in_default.reject { |member| member.armory_lifecycle.covers?(version) }
+            return true if missing.empty?
+
+            raise ConfigurationError, "its default_value names #{missing.map(&:path).join(', ')}, not in #{Integration.label(version)}: " \
+                                      "introspection would print it and the field would run without it. Use a default every version of this argument has"
+          rescue ConfigurationError => error
+            raise error.class, "#{path}: #{error.message}"
+          end
+
+          private
+
+          # The versioned members the default value names, found once, after the checks that refuse a definition.
+          def armory_default_members
+            return @armory_default_members if defined?(@armory_default_members)
+
+            if armory_versioned?
+              Integration.refuse_shadowing(self, armory_inherited_arguments)
+              armory_refuse_type_system_directive
+            end
+            @armory_default_members = default_value? ? Integration.members_in(type, default_value).freeze : [].freeze
+          end
+
+          def armory_inherited_arguments
+            sources = []
+            sources << owner.resolver if owner.is_a?(GraphQL::Schema::Field) && owner.resolver
+            sources << owner.superclass if owner.is_a?(Class) && owner.superclass.respond_to?(:all_argument_definitions)
+            sources.flat_map(&:all_argument_definitions)
+          end
+
+          def armory_refuse_type_system_directive
+            return unless owner.is_a?(Class) && owner < GraphQL::Schema::Directive
+
+            schema_locations = owner.locations - EXECUTABLE
+            return if schema_locations.empty?
+
+            raise ConfigurationError, "is on a type-system directive (#{schema_locations.join(', ')}): the SDL prints applied " \
+                                      "directive arguments without asking visible?, so they cannot be versioned"
+          end
+        end
+
+        # Included in an enum value class.
+        #
+        #   value "VOID", added: "2024-06-01"
+        module EnumValue
+          include Member
+
+          def visible?(context)
+            return false unless super
+            return true unless armory_versioned?
+
+            unless defined?(@armory_checked)
+              parent = owner.superclass
+              Integration.refuse_shadowing(self, parent.respond_to?(:all_enum_value_definitions) ? parent.all_enum_value_definitions : [])
+              @armory_checked = true
+            end
+            @armory_lifecycle.covers?(Integration.version(context))
+          rescue ConfigurationError => error
+            raise error.class, "#{path}: #{error.message}"
+          end
+        end
+
+        # graphql-ruby serves a parent's definition of a name when the local one is hidden (enum values on every path,
+        # arguments under the legacy Warden), so a versioned member must not shadow one.
+        def self.refuse_shadowing(member, inherited)
+          shadowed = inherited.find { |other| !other.equal?(member) && other.graphql_name == member.graphql_name }
+          return unless shadowed
+
+          raise ConfigurationError, "shadows #{shadowed.path}, so graphql-ruby would serve that one in the versions where this " \
+                                    "one is hidden. Version the parent's definition, or give this one another name"
+        end
+
+        # The members with a lifecycle that a Ruby default value names, through lists and nested input objects.
+        def self.members_in(type, value, found = [])
+          return found if value.nil?
+          return members_in(type.of_type, value, found) if type.non_null?
+
+          if type.list?
+            (value.is_a?(Array) ? value : [value]).each { |item| members_in(type.of_type, item, found) }
+          elsif type.kind.enum?
+            found.concat(type.all_enum_value_definitions.select { |defn| versioned?(defn) && (defn.value == value || defn.graphql_name == value.to_s) })
+          elsif type.kind.input_object? && value.respond_to?(:each_pair)
+            value.each_pair do |key, item|
+              argument = type.all_argument_definitions.find { |defn| defn.graphql_name == key.to_s || defn.keyword.to_s == key.to_s }
+              next unless argument
+
+              found << argument if versioned?(argument)
+              members_in(argument.type, item, found)
+            end
+          end
+          found
+        end
+
+        def self.versioned?(member)
+          member.respond_to?(:armory_lifecycle) && !Lifecycle::EVERYWHERE.equal?(member.armory_lifecycle)
+        end
+
+        def self.label(version)
+          Version::LATEST.equal?(version) ? "the latest version" : version.label
         end
 
         # Keeps the lookup in every query class the schema uses, including one set after `use` or by a child schema.
@@ -152,19 +284,25 @@ module GraphQL
         end
       end
 
-      # Goes in your base field class. Arguments, enum values and types come in later versions of the gem.
+      # Goes in your base field, argument and enum value classes. Types and their memberships come in a later version.
       #
       #   class Types::BaseField < GraphQL::Schema::Field
       #     include GraphQL::Armory::Versioning::Base
+      #     argument_class Types::BaseArgument
       #   end
+      #   class Types::BaseArgument < GraphQL::Schema::Argument;  include GraphQL::Armory::Versioning::Base; end
+      #   class Types::BaseEnumValue < GraphQL::Schema::EnumValue; include GraphQL::Armory::Versioning::Base; end
       module Base
+        KINDS = { GraphQL::Schema::Field => :Field, GraphQL::Schema::Argument => :Argument, GraphQL::Schema::EnumValue => :EnumValue }.freeze
+
         def self.included(base)
-          unless base.is_a?(Class) && base <= GraphQL::Schema::Field
-            raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field class (a GraphQL::Schema::Field subclass) for now, not #{base}: " \
-                                 "versioning arguments, enum values and types is not supported yet"
+          kind = base.is_a?(Class) && KINDS.find { |parent, _| base <= parent }&.last
+          unless kind
+            raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field, argument or enum value class for now, not #{base}: " \
+                                 "versioning types and their memberships is not supported yet"
           end
 
-          base.include(Integration::Field)
+          base.include(Integration.const_get(kind))
         end
       end
     end
