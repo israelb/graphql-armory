@@ -543,7 +543,7 @@ module GraphQL
           raise ConfigurationError, "has two definitions, which needs graphql 2.4.9 or later" if field && !FIELD_TWINS
 
           version = version(context)
-          return unless lifecycle_of(member).covers?(version) && twins.any? { |twin| lifecycle_of(twin).covers?(version) }
+          return unless covers?(member, version) && twins.any? { |twin| covers?(twin, version) }
 
           raise ConfigurationError, "is defined more than once for #{label(version)}: graphql-ruby would refuse every query that asks " \
                                     "for it. Give the definitions lifecycles that do not overlap"
@@ -568,11 +568,20 @@ module GraphQL
             end
 
             input = definitions.first.type.unwrap
+            refuse_enum_twins(definitions.first.path, input) if input.kind.enum?
             next unless input.kind.input_object? && !seen.key?(input)
 
             seen[input] = true
             refuse_argument_twins(definitions.first.path, input.graphql_name, input.all_argument_definitions, seen)
           end
+        end
+
+        # An enum value with two definitions coerces, with no version, to the latest one's Ruby value.
+        def self.refuse_enum_twins(at, enum)
+          name, = enum.all_enum_value_definitions.group_by(&:graphql_name).find { |_, values| values.size > 1 }
+          return unless name
+
+          raise ConfigurationError, "#{at}: #{enum.graphql_name}.#{name} has two definitions, and graphql-ruby's subscription trigger reads "                                     "arguments with no version, where they raise or coerce to the latest. Keep one definition"
         end
 
         # graphql-ruby serves a parent's definition of a name when the local one is hidden (enum values on every path,
@@ -652,7 +661,8 @@ module GraphQL
         def self.covers?(member, version)
           return false unless lifecycle_of(member).covers?(version)
 
-          !member.is_a?(GraphQL::Schema::Argument) || lifecycle_of(member.type.unwrap).covers?(version)
+          typed = member.is_a?(GraphQL::Schema::Argument) || member.is_a?(GraphQL::Schema::Field)
+          !typed || lifecycle_of(member.type.unwrap).covers?(version)
         end
 
         def self.label(version)

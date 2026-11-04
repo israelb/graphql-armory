@@ -72,9 +72,8 @@ module GraphQL
       def self.disjoint?(schema, definitions)
         return false unless schema.respond_to?(:armory_versioning)
 
-        lifecycles = definitions.map { |definition| Integration.lifecycle_of(definition) }
         schema.armory_versioning.versions.each_served.all? do |version|
-          lifecycles.count { |lifecycle| lifecycle.covers?(version) } <= 1
+          definitions.count { |definition| Integration.covers?(definition, version) } <= 1
         end
       end
 

@@ -165,7 +165,7 @@ value "VOID", "Cancelled.", removed: "2025-01-01"
 value "VOID", "Voided by the issuer.", value_method: false, added: "2025-01-01"   # the second skips graphql-ruby's value method
 ```
 
-Each version sees exactly one of them, in every place graphql-ruby reads the schema. Two definitions that one version would both see raise `ConfigurationError` (an unversioned one beside a versioned one included). [Authorization](authorization.md)'s audit reads them as one member, and each keeps its own rule. Field twins need graphql 2.4.9 or later. Two type classes with one `graphql_name` come in a later part.
+Each version sees exactly one of them, in every place graphql-ruby reads the schema. Two definitions that one version would both see raise `ConfigurationError` (an unversioned one beside a versioned one included). [Authorization](authorization.md)'s audit reads them as one member, and each keeps its own rule. Two definitions may also be kept apart by their types' lifecycles. Field twins need graphql 2.4.9 or later, and `value_method: false` on an enum value graphql 2.4.10 or later. Two type classes with one `graphql_name` come in a later part.
 
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
 
@@ -263,7 +263,7 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 These raise `ConfigurationError` when a query of the schema is built (a `GraphQL::Query` built by hand included), and from `Versioning.types`; a root or `extra_types` changed later is checked again:
 
-- Two definitions of one argument name on a subscription field, or in an input object it takes: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise.
+- Two definitions of one argument name or enum value on a subscription field's arguments, or in an input object or enum they take: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise.
 
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.
