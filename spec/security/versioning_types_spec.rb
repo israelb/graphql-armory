@@ -225,15 +225,15 @@ RSpec.describe "use GraphQL::Armory::Versioning: types" do
           .to raise_error(versioning::ConfigurationError, /count\.filter: its default_value names Filter\.range, not in 2024-06-01/)
       end
 
-      it "refuses lifecycles on memberships, versioned root types and versioned extra types" do
+      it "refuses membership lifecycles without a membership class, versioned root types and versioned extra types" do
         b = bases
         archivable = types[:archivable]
         contract = types[:contract]
 
         expect { Class.new(b[:object]) { graphql_name "X"; implements archivable, added: "2025-01-01" } }
-          .to raise_error(versioning::ConfigurationError, /X: .*implements.*not supported yet/)
+          .to raise_error(versioning::ConfigurationError, /X: implements Archivable with added: or removed: needs Archivable's type_membership_class/)
         expect { Class.new(b[:union]) { graphql_name "U"; possible_types contract, removed: "2025-01-01" } }
-          .to raise_error(versioning::ConfigurationError, /U: .*possible_types.*not supported yet/)
+          .to raise_error(versioning::ConfigurationError, /U: possible_types with added: or removed: needs U's type_membership_class/)
 
         versioned_root = Class.new(b[:object]) { graphql_name "Query"; lifecycle added: "2024-06-01"; field :x, Integer, null: true }
         expect { run(schema_over(versioned_root, visibility), "{ __typename }", new) }.to raise_error(versioning::ConfigurationError, /Query: .*root type/)

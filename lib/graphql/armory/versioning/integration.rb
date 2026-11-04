@@ -148,6 +148,12 @@ module GraphQL
           def armory_loaded_lifecycle
             return @armory_loaded_lifecycle if defined?(@armory_loaded_lifecycle)
 
+            # graphql-ruby checks an object loaded as an interface or union against members asked with no context.
+            if loads && loads.kind.abstract? && Integration.versioned_memberships?(loads)
+              raise ConfigurationError, "it loads #{loads.graphql_name}, which has a membership with a lifecycle: graphql-ruby would load " \
+                                        "an object that is not a member in the query's version. Load the object types instead"
+            end
+
             lifecycle = loads && Integration.lifecycle_of(loads)
             @armory_loaded_lifecycle = lifecycle && !Lifecycle::EVERYWHERE.equal?(lifecycle) ? lifecycle : nil
           end
@@ -227,6 +233,7 @@ module GraphQL
           def visible?(context)
             return false unless super
 
+            Integration.refuse_membership_conflicts(self)
             lifecycle = armory_lifecycle
             return true if Lifecycle::EVERYWHERE.equal?(lifecycle)
 
@@ -254,28 +261,149 @@ module GraphQL
           end
         end
 
-        # `implements` with `added:` or `removed:` is refused until memberships can carry a lifecycle: graphql-ruby would
-        # accept the keywords and ignore them.
+        # Included in a type membership class, which the app sets as `type_membership_class` on its base interface and
+        # base union, so `implements X, added:` and `possible_types Y, added:` carry a lifecycle.
+        module Membership
+          def initialize(abstract_type, object_type, added: nil, removed: nil, **options)
+            @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
+            Integration.mark_versioned_membership(abstract_type) unless Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
+            super(abstract_type, object_type, **options)
+          end
+
+          # When the membership lives, for the audit and for tooling.
+          attr_reader :armory_lifecycle
+
+          def visible?(context)
+            return false unless super
+            return true if Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
+
+            @armory_lifecycle.covers?(Integration.version(context))
+          rescue ConfigurationError => error
+            raise error.class, "#{path}: #{error.message}"
+          end
+        end
+
+        # `implements` with `added:` or `removed:` checks every interface before graphql-ruby adds any, since graphql-ruby
+        # would ignore the keywords, apply them partly or fail halfway.
         module Implements
           def implements(*interfaces, added: nil, removed: nil, **options)
-            Integration.refuse_membership_lifecycle(self, :implements, added, removed)
-            super(*interfaces, **options)
+            return super(*interfaces, **options) if added.nil? && removed.nil?
+
+            Integration.check_implements(self, interfaces, added, removed)
+            super(*interfaces, added: added, removed: removed, **options)
           end
         end
 
-        # The same for a union's `possible_types`.
+        # The same for a union's `possible_types`. Called with no types, it is graphql-ruby's reader.
         module Members
           def possible_types(*types, added: nil, removed: nil, **options)
-            Integration.refuse_membership_lifecycle(self, :possible_types, added, removed)
-            super(*types, **options)
+            return super(*types, **options) if added.nil? && removed.nil?
+
+            Integration.check_possible_types(self, types, added, removed)
+            super(*types, added: added, removed: removed, **options)
           end
         end
 
-        def self.refuse_membership_lifecycle(type, method, added, removed)
-          return if added.nil? && removed.nil?
+        def self.check_implements(type, interfaces, added, removed)
+          name = type.graphql_name
+          raise ConfigurationError, "#{name}: an interface cannot implement another with added: or removed:" unless type.is_a?(Class)
 
-          raise ConfigurationError, "#{type.graphql_name}: `#{method}` with added: or removed: is not supported yet, and graphql-ruby would " \
-                                    "ignore it. Give the member type its own `lifecycle` instead"
+          build_lifecycle(name, added, removed)
+          interfaces.each do |interface|
+            unless interface.is_a?(Module)
+              raise ConfigurationError, "#{name}: implements #{interface.inspect} with added: or removed: needs the interface's module, not a name"
+            end
+
+            check_membership_class(name, "implements #{interface.graphql_name}", interface)
+            next if interface.interfaces.empty?
+
+            raise ConfigurationError, "#{name}: implements #{interface.graphql_name} with added: or removed:, but #{interface.graphql_name} " \
+                                      "implements other interfaces, which graphql-ruby would add without the lifecycle. Implement each one directly"
+          end
+        end
+
+        def self.check_possible_types(union, types, added, removed)
+          name = union.graphql_name
+          build_lifecycle(name, added, removed)
+          types.each do |type|
+            next if type.is_a?(Class)
+
+            raise ConfigurationError, "#{name}: possible_types #{type.inspect} with added: or removed: needs the object's class, not a name"
+          end
+          check_membership_class(name, "possible_types", union)
+        end
+
+        def self.build_lifecycle(name, added, removed)
+          Lifecycle.build(added: added, removed: removed)
+        rescue ConfigurationError => error
+          raise error.class, "#{name}: #{error.message}"
+        end
+
+        def self.check_membership_class(name, what, abstract_type)
+          return if abstract_type.type_membership_class.include?(Membership)
+
+          raise ConfigurationError, "#{name}: #{what} with added: or removed: needs #{abstract_type.graphql_name}'s type_membership_class " \
+                                    "to include GraphQL::Armory::Versioning::Base"
+        end
+
+        def self.mark_versioned_membership(abstract_type)
+          abstract_type.instance_variable_set(:@armory_versioned_memberships, true) if abstract_type.is_a?(Module)
+        end
+
+        def self.versioned_memberships?(abstract_type)
+          abstract_type.instance_variable_defined?(:@armory_versioned_memberships)
+        end
+
+        # graphql-ruby serves a membership when any membership to the same abstract type is visible, and `get_field` answers
+        # a hidden interface's definition of a name another source also declares, so both are refused. Checked when the
+        # object or union is asked, again when its memberships change.
+        def self.refuse_membership_conflicts(type)
+          memberships = type.is_a?(Class) && type < GraphQL::Schema::Union ? type.type_memberships : object_memberships(type)
+          return if memberships.nil? || type.instance_variable_get(:@armory_memberships_checked) == memberships.size
+
+          versioned = memberships.select { |membership| membership.respond_to?(:armory_lifecycle) && !Lifecycle::EVERYWHERE.equal?(membership.armory_lifecycle) }
+          versioned.each do |membership|
+            target = type < GraphQL::Schema::Union ? membership.object_type : membership.abstract_type
+            others = memberships.reject { |other| other.equal?(membership) || !other.respond_to?(:abstract_type) }
+            if others.any? { |other| (type < GraphQL::Schema::Union ? other.object_type : other.abstract_type).equal?(target) }
+              verb = type < GraphQL::Schema::Union ? "lists" : "implements"
+              raise ConfigurationError, "#{type.graphql_name}: #{verb} #{target.graphql_name} with a lifecycle, but another membership to " \
+                                        "#{target.graphql_name} makes it a member in every version. Keep one"
+            end
+            refuse_shared_fields(type, target, others) unless type < GraphQL::Schema::Union
+          end
+          type.instance_variable_set(:@armory_memberships_checked, memberships.size)
+        end
+
+        def self.display_name(type)
+          type.graphql_name
+        rescue GraphQL::RequiredImplementationMissingError
+          type.name || type.inspect
+        end
+
+        def self.object_memberships(type)
+          type.interface_type_memberships if type.is_a?(Class) && type < GraphQL::Schema::Object
+        end
+
+        def self.refuse_shared_fields(object, interface, others)
+          own = object.own_fields
+          sources = others.map(&:abstract_type).select { |other| other.is_a?(Module) }.map { |other| [other, other.fields] }
+          object.ancestors.each do |ancestor|
+            next unless ancestor.is_a?(Class) && ancestor < GraphQL::Schema::Object && !ancestor.equal?(object)
+
+            sources << [ancestor, ancestor.own_fields]
+          end
+          interface.fields.each do |name, definition|
+            next if own.key?(name)
+
+            source = sources.find { |_, fields| fields.key?(name) && !fields[name].equal?(definition) }
+            next unless source
+
+            raise ConfigurationError, "#{object.graphql_name}: implements #{interface.graphql_name} with a lifecycle, but " \
+                                      "#{interface.graphql_name}.#{name} is also declared by #{display_name(source.first)}, so graphql-ruby could serve " \
+                                      "#{interface.graphql_name}'s definition where the membership does not live. Declare #{name} on " \
+                                      "#{object.graphql_name}, or rename one"
+          end
         end
 
         # The class a type without its own lifecycle takes it from: its mutation (a generated payload or input type), else its
@@ -499,7 +627,10 @@ module GraphQL
       #   end
       module Base
         # Instances (members) get `added:`/`removed:`; classes (types) get `lifecycle`.
-        MEMBERS = { GraphQL::Schema::Field => :Field, GraphQL::Schema::Argument => :Argument, GraphQL::Schema::EnumValue => :EnumValue }.freeze
+        MEMBERS = {
+          GraphQL::Schema::Field => :Field, GraphQL::Schema::Argument => :Argument, GraphQL::Schema::EnumValue => :EnumValue,
+          GraphQL::Schema::TypeMembership => :Membership
+        }.freeze
         TYPES = {
           GraphQL::Schema::Object => %i[Type Implements Authorized], GraphQL::Schema::Union => %i[Type Members],
           GraphQL::Schema::InputObject => %i[Type], GraphQL::Schema::Enum => %i[Type], GraphQL::Schema::Scalar => %i[Type],
@@ -515,7 +646,7 @@ module GraphQL
           elsif base.is_a?(Class) && (type = TYPES.find { |parent, _| base <= parent })
             type.last.each { |name| base.extend(Integration.const_get(name)) }
           else
-            raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field, argument, enum value, object, interface, union, enum, " \
+            raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field, argument, enum value, type membership, object, interface, union, enum, " \
                                  "scalar, input object, resolver or mutation class, not #{base}. In an interface, include GraphQL::Schema::Interface first"
           end
         end

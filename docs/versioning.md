@@ -55,10 +55,15 @@ class Types::BaseObject < GraphQL::Schema::Object
   field_class Types::BaseField
 end
 
+class Types::BaseTypeMembership < GraphQL::Schema::TypeMembership
+  include GraphQL::Armory::Versioning::Base           # for implements X, added: and possible_types Y, added:
+end
+
 module Types::BaseInterface
   include GraphQL::Schema::Interface                  # first, then Base
   include GraphQL::Armory::Versioning::Base
   field_class Types::BaseField
+  type_membership_class Types::BaseTypeMembership
 end
 
 class Types::BaseInputObject < GraphQL::Schema::InputObject
@@ -71,7 +76,11 @@ class Types::BaseEnum < GraphQL::Schema::Enum
   enum_value_class Types::BaseEnumValue
 end
 
-class Types::BaseUnion < GraphQL::Schema::Union;   include GraphQL::Armory::Versioning::Base; end
+class Types::BaseUnion < GraphQL::Schema::Union
+  include GraphQL::Armory::Versioning::Base
+  type_membership_class Types::BaseTypeMembership
+end
+
 class Types::BaseScalar < GraphQL::Schema::Scalar; include GraphQL::Armory::Versioning::Base; end
 class Types::BaseMutation < GraphQL::Schema::RelayClassicMutation
   include GraphQL::Armory::Versioning::Base
@@ -128,7 +137,20 @@ end
 
 A type outside the version is gone with everything that uses it: graphql-ruby hides each field that returns it and each argument that takes it, and the plugin also hides an argument that `loads:` it. An argument that `loads:` an interface or union still lives, but an object of a member type outside the version is not authorized there: graphql-ruby's unauthorized path runs (`unauthorized_object`), never the resolver. A field leaves with the type that declared it, so an interface that includes a versioned interface loses that interface's fields where it does not live. A subclass keeps its parent's lifecycle unless it declares its own, which must fit inside every versioned ancestor's; a mutation's generated input and payload types take the mutation's; an object never takes its interfaces', and an interface never takes the interfaces it includes. `lifecycle` needs `added:`, `removed:` or both.
 
-A new member of a union or a new implementer of an interface is a new type: give it `lifecycle added:`. A lifecycle on the membership itself (`implements Archivable, added:`, `possible_types Contract, added:`) is not supported yet and raises `ConfigurationError`, because graphql-ruby would accept those keywords and ignore them.
+A membership takes the same keywords when an existing type joins an interface or a union:
+
+```ruby
+class Types::Invoice < Types::BaseObject
+  implements Types::Archivable, added: "2025-01-01"   # an Archivable, with its fields, from 2025-01-01
+end
+
+class Types::Document < Types::BaseUnion
+  possible_types Types::Invoice
+  possible_types Types::Contract, added: "2025-01-01"
+end
+```
+
+Outside the membership, the object is not a member: the interface's fields are gone from it (a field the object declares itself stays), `interfaces` and `possibleTypes` omit it, a fragment on the abstract type does not apply to it, and a `resolve_type` answering it raises `GraphQL::UnresolvedTypeError` (see "Data outside the version"). The membership only hides the relationship: the object stays in the schema, so a type new with the membership takes its own `lifecycle` too. A membership lifecycle wider than its types' changes nothing outside theirs. A type new to a union or interface altogether simply takes `lifecycle added:`.
 
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
 
@@ -229,7 +251,13 @@ These raise `ConfigurationError` when a query of the schema is built (a `GraphQL
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.
 
-These raise `ConfigurationError` when the class is defined: `implements` or a union's `possible_types` with `added:` or `removed:`, in a class that includes `Base`. Without `Base`, graphql-ruby accepts and ignores them.
+These raise `ConfigurationError` when the class is defined, before anything is added, because graphql-ruby would ignore the keywords, apply them partly or add memberships without them: `implements` or `possible_types` with `added:` or `removed:` when the abstract type's `type_membership_class` does not include `Base`, when a member is named by a String, when the implemented interface implements other interfaces (implement each one directly), or when the class implementing is an interface. Without `Base` on the type, graphql-ruby accepts and ignores them.
+
+These raise `ConfigurationError` the first time a query asks about the type, because graphql-ruby would serve the membership or the interface's definitions where it does not live:
+
+- An object or union with a versioned membership and another membership to the same abstract type or object (a parent's, or a repeated one).
+- An object that implements an interface with a lifecycle whose field another of its interfaces or a parent class declares differently. Declare the field on the object, or rename one.
+- An argument that `loads:` an interface or union with a versioned membership: graphql-ruby checks the loaded object against the members with no context. Load the object types instead.
 
 These raise `ConfigurationError`, naming the member, the first time a query asks about it, because graphql-ruby would otherwise serve the member outside its version:
 
@@ -249,7 +277,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
 **Limits.**
 
-- **Lookups with no context see every field and argument.** `Types::Invoice.get_field("amount")`, `Types::Invoice.fields`, `get_argument`, a union's `possible_types` and other lookups without a query answer the member whatever its lifecycle: graphql-ruby answers them without asking `visible?`. Enum values asked without a query (`Types::Status.values`) and, under `Schema::Visibility`, `AppSchema.get_type` answer the latest version. Read a version's schema through `Versioning.types(schema, label)` or `to_definition(context: { armory_version: ... })`.
+- **Lookups with no context see every field and argument.** `Types::Invoice.get_field("amount")`, `Types::Invoice.fields`, `get_argument`, a union's `possible_types`, an object's `interfaces` and other lookups without a query answer the member whatever its lifecycle: graphql-ruby answers them without asking `visible?`. Enum values asked without a query (`Types::Status.values`) and, under `Schema::Visibility`, `AppSchema.get_type` answer the latest version. Read a version's schema through `Versioning.types(schema, label)` or `to_definition(context: { armory_version: ... })`.
 - **Subscription triggers** build their query with `context: {}` unless you pass one, so the `default:` policy applies to them: under `default: :refuse` a trigger that reaches a versioned field raises `MissingVersionError`, and under `:latest` it cannot name a field removed in the latest version. Pass `context: { armory_version: ... }` to every `trigger`. Subscriptions are not tested with versioning yet.
 - **Queries built outside `query_class`.** A `Query::Partial` (`run_partials`) sees its parent's version, because it reads its parent's schema, and so does the second context `Schema::Visibility`'s `migration_errors: true` builds for a query; neither records a signal. A `GraphQL::Query` your code builds itself skips `query_class`: it is decided from its own `armory_version` the first time a versioned field is asked about, and records no signal. A refused version raises `RefusedVersionError` there instead of answering a validation error, and such a query that touches no field of a class that includes `Base` runs.
 - **`validate: false` with a field outside the version** raises graphql-ruby's own error ("No field definition found", or a `NoMethodError` on graphql 2.4) quoting the client's selection; nothing resolves.
@@ -266,6 +294,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
   The plugin decides the schema, never the data.
 - **A type reachable only through types outside the version** is not listed, introspected or selectable there, but its name can still be found: a fragment or variable naming it gets a different error than an unknown name. Version such types together.
+- **A type reachable only through a hidden membership** stays findable by name (`__type`, `__schema.types`, the SDL, `Versioning.types`) under `Schema::Visibility`, while the legacy Warden drops it. Give it its own `lifecycle`.
 - **An interface or union left with no member in V.** The legacy Warden hides an interface with no visible implementer, with every field that returns it; `Schema::Visibility` keeps it, and an empty union prints as an invalid `union X` in the SDL. Give the abstract type the lifecycle its members have.
 - **A required argument hidden in V is not required in V.** A client of a version where the argument does not exist cannot send it, so the field runs without it: the resolver needs a Ruby default for it. An input field hidden in V is absent from the input object, and a `validates required: { one_of: }` whose every option is hidden in V fails every request in V.
 - **Default values that graphql-ruby checks at boot.** graphql-ruby validates every `default_value:` against the latest version when the schema loads, so a default naming an enum value removed in the latest version raises its `InvalidDefaultValueError` at boot, whatever the argument's own lifecycle.
