@@ -18,4 +18,5 @@ require "graphql/armory/persisted_queries"
 require "graphql/armory/rate_limits"
 require "graphql/armory/keyset"
 require "graphql/armory/versioning"
+require "graphql/armory/caching"
 require "graphql/armory/railtie" if defined?(::Rails::Railtie)

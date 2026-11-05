@@ -353,7 +353,8 @@ RSpec.describe "Adoption fixes probes" do
     end
 
     it "[security] U15 nothing in lib reads :current_user except the adapters' default" do
-      lines = Dir[File.join(root_dir, "lib", "**", "*.{rb,rake}")].flat_map do |file|
+      # Controls are test data: they build a context with `current_user`, they never read one.
+      lines = Dir[File.join(root_dir, "lib", "**", "*.{rb,rake}")].reject { |file| file.include?("/controls/") }.flat_map do |file|
         File.readlines(file).grep(/\bcurrent_user\b/).reject { |line| line.strip.start_with?("#") }.map { |line| "#{File.basename(file)}: #{line.strip}" }
       end
       expect(lines.size).to eq(2)
