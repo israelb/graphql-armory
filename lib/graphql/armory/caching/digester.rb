@@ -19,7 +19,10 @@ module GraphQL
         def self.build(encoder:)
           raise ConfigurationError, "encoder: must answer mac(bytes, purpose:) (an Encoder subclass)" unless encoder.respond_to?(:mac)
 
-          new(mac: ->(bytes) { encoder.mac(bytes, purpose: PURPOSE) })
+          digester = new(mac: ->(bytes) { encoder.mac(bytes, purpose: PURPOSE) })
+          # Once at boot: an encoder that cannot digest (Legacy, Null, no key) fails here, not on the first request.
+          digester.("")
+          digester
         end
 
         def initialize(mac: nil)

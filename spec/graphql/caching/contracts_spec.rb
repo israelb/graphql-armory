@@ -344,3 +344,12 @@ RSpec.describe GraphQL::Armory::Caching::RecordKeys do
     expect(%i[armory armory_cache graphql_armory].map { |name| context.namespace?(name) }).to eq([false, false, false])
   end
 end
+
+RSpec.describe GraphQL::Armory::Caching::Digester do
+  it "fails at build, not on the first request, when the encoder cannot digest" do
+    encoder = Object.new
+    def encoder.mac(_bytes, purpose:) = raise(GraphQL::Armory::Caching::ConfigurationError, "cannot digest")
+
+    expect { described_class.build(encoder: encoder) }.to raise_error(GraphQL::Armory::Caching::ConfigurationError, /cannot digest/)
+  end
+end
