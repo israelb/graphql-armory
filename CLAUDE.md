@@ -17,24 +17,33 @@ Open-source extensions for graphql-ruby, one module at a time. Read `README.md` 
   - Test data lives in `lib/` as `Controls::X.example`, so other projects can reuse it.
   - RSpec uses no mocks (`mock_with :nothing`; no `receive`, `instance_double` or `stub_const`).
 
-## Workflow per increment
+## Workflow per feature
 
-1. One branch off `main` (`feat/<name>`), one PR against `main`. Tests first (observe RED), then code, then docs (the module page in `docs/`, CHANGELOG, the Modules table in README).
-2. While fixing, run only the specs you touch on the interpreter with graphql 2.6. Run the full suite on both engines and an older graphql once, right before opening the PR (the three configurations can run in parallel only with a separate `BUNDLE_GEMFILE` and `BUNDLE_PATH` each, so they never share a lock):
+A feature (a module, or a large part of one) is designed whole, built in parallel and verified once:
+
+1. **Design everything first.** One design for the whole feature in the maintainers' private notes: what it guarantees, every place a check lives, its limits, and the split into independent units (each with its code, specs and docs, and its own edit surface).
+2. **One design review, by an independent agent,** before any code: read-only, `opus`, no Docker, no probes; "how would you break it?" over the whole design and the current code. Fix the design before step 3. Skip it only for docs or a fix with no design.
+3. **Build the units in parallel,** one writer per unit in its own git worktree. Each writes its specs first (observe RED), then code, then its docs section, and runs only its focused specs. Units never edit CHANGELOG or README; they return their CHANGELOG sentence.
+4. **One integration branch** (`feat/<name>`): merge the units, wire what joins them, write CHANGELOG, README and the module page, and run the full suite once. One PR against `main`.
+5. **One independent verification of the whole feature** at the end (below), then one correction batch and one recheck. The task log lives in the ignored `odd/tasks/<feature>.md`.
+
+A small fix runs the same steps with one unit and no worktree.
+
+While working, run only the specs you touch on the interpreter with graphql 2.6. Run the full suite on both engines and an older graphql once, right before opening the PR (the three configurations can run in parallel only with a separate `BUNDLE_GEMFILE` and `BUNDLE_PATH` each, so they never share a lock):
    ```
    docker compose run --rm test bash bin/test                                              # interpreter, graphql 2.6
    GRAPHQL_ARMORY_ENGINE=next GRAPHQL_VERSION="~> 2.6.0" docker compose run --rm test bash bin/test
    GRAPHQL_VERSION="~> 2.4.0" docker compose run --rm test bash bin/test
    ```
    Always go through `bin/test`: calling `bundle exec rspec` directly skips `bundle install` and fails on new gems. Ruby is not installed on the host.
-3. **Independent verification before every merge, always.** See below. Record the verdict in the PR, and keep the full report in the maintainers' private notes, outside the repo (one report per verification: what was verified, how, verdict per requirement, blockers, advisories, what was done, what was not verified, key learnings).
-4. Close with a Risk line (`Risk: item N (reason)` or `Risk: none`) and tell the user how to verify it themselves.
+
+Record the verdict in the PR, and keep the full report in the maintainers' private notes, outside the repo (one report per verification: what was verified, how, verdict per requirement, blockers, advisories, what was done, what was not verified, key learnings). Close with a Risk line (`Risk: item N (reason)` or `Risk: none`) and tell the user how to verify it themselves.
 
 ## Independent verification (mandatory before every merge)
 
 A separate `general-purpose` agent, on the model its risk tier names (below), briefed with the template in `.github/VERIFICATION.md`. Read that file before verifying, before a design review, and when a finding goes to the backlog. It also holds these, the ones most often needed:
 
-- Security behavior gets a read-only design review before the first RED spec. Docs get their claims checked on `sonnet`, with no probe list.
+- One design review of the whole feature before any code, and one verification of the whole feature before its merge; never one per unit. The verifier gets the whole task log and design, and attacks the design decisions too. Docs get their claims checked on `sonnet`, with no probe list.
 - The verifier's model and probe configurations follow the change's risk: `opus` for security behavior, `sonnet` for everything else (table in `.github/VERIFICATION.md`).
 - Hard cap: one full verification and one recheck per PR. One batch fixes every blocker. The recheck reruns only those blockers' probes, on the configuration where they failed, then the suite once. What stays open becomes one decision for the user and issues with a reproduction that was run.
 - Matrix invariant (`spec/security/audit_runtime_matrix_spec.rb`): if a refused user gets the data, the audit must not say ok.
