@@ -286,3 +286,36 @@ RSpec.describe "GraphQL::Armory::Caching contracts" do
     end
   end
 end
+
+RSpec.describe "GraphQL::Armory::Caching shared contracts for parallel units" do
+  let(:caching) { GraphQL::Armory::Caching }
+
+  it "builds tags with a prefix per kind and a JSON-encoded viewer" do
+    expect(caching::Tags.custom("pricing")).to eq("tag:pricing")
+    expect(caching::Tags.type("Invoice")).to eq("type:Invoice")
+    expect(caching::Tags.viewer("User", 7)).to eq('viewer:["User",7]')
+    expect(caching::Tags.viewer("User", 7)).not_to eq(caching::Tags.viewer("AdminUser", 7))
+    expect(caching::Tags.viewer("User", "7")).not_to eq(caching::Tags.viewer("User", 7))
+    expect { caching::Tags.viewer("User", nil) }.to raise_error(ArgumentError)
+    expect { caching::Tags.custom("") }.to raise_error(ArgumentError)
+  end
+
+  it "wraps a context class once, and a wrapper not again" do
+    klass = Class.new(GraphQL::Query::Context)
+    wrapper = caching::Recorder::Context.wrap(klass)
+
+    expect(wrapper.superclass).to be(klass)
+    expect(caching::Recorder::Context.wrap(klass)).to be(wrapper)
+    expect(caching::Recorder::Context.wrap(wrapper)).to be(wrapper)
+  end
+
+  it "marks queries the guard built" do
+    schema = Class.new(GraphQL::Schema) { query(Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :ping, String }) }
+    context = GraphQL::Query.new(schema, "{ ping }").context
+
+    expect(caching::RecordKeys.guard_built?(context)).to be(false)
+    caching::RecordKeys.guard_built!(context)
+    expect(caching::RecordKeys.guard_built?(context)).to be(true)
+    expect(caching::RecordKeys.guard_built?({})).to be(false)
+  end
+end

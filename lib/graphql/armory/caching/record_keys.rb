@@ -21,6 +21,7 @@ module GraphQL
         RECORDER = :recorder
         RESULT = :result
         RESCUED = :rescued
+        GUARD_BUILT = :guard_built
 
         RECORD_NAMESPACE = :graphql_armory
         RECORD = :response_cache
@@ -53,6 +54,16 @@ module GraphQL
           context.namespace(CACHE)[RECORDER] = recorder
         end
 
+        # The guard built this query from the request's options (through `query_class`). The gate refuses any query
+        # without the mark as `:built_query`: one the app built itself, or a `Query::Partial`.
+        def guard_built!(context)
+          context.namespace(CACHE)[GUARD_BUILT] = true
+        end
+
+        def guard_built?(context)
+          namespaced?(context) && context.namespace(CACHE)[GUARD_BUILT] == true
+        end
+
         def rescued!(context)
           context.namespace(CACHE)[RESCUED] = true
         end
@@ -61,7 +72,8 @@ module GraphQL
           namespaced?(context) && context.namespace(CACHE)[RESCUED] == true
         end
 
-        # The Result the gate answered a hit with, so `query.result` answers it instead of running.
+        # The Result the gate answered a hit with, so `query.result` answers it instead of running. The gate sets it for
+        # every `Decision.hit`: the cached answer, or the Points limiter's refusal when the client is over budget.
         def hit_result!(context, result)
           context.namespace(CACHE)[RESULT] = result
         end

@@ -40,6 +40,7 @@ end
 
 require "graphql/armory/caching/errors"
 require "graphql/armory/caching/record_keys"
+require "graphql/armory/caching/tags"
 require "graphql/armory/caching/values/declaration"
 require "graphql/armory/caching/values/policy"
 require "graphql/armory/caching/values/key"
