@@ -263,6 +263,10 @@ use GraphQL::Armory::PersistedQueries, store: PERSISTED, strict: true, sinks: [c
 
 A signal holds only the reason. To know who sent the request, a sink that takes three arguments receives the query's context, as in [Telemetry](telemetry.md#who-asked). Do not strike on `:unknown_operation`: after a deploy it is a legitimate client build whose operations are not in the manifest yet. The example has not been run against a live detector.
 
+### With response caching
+
+[Response caching](response-caching.md) serves and stores answers only for persisted operations. The query that runs a stored operation is marked in a namespace of its context that the client cannot write (`context.namespace(:armory)[:persisted]`), unlike `operation_id`, which the client chooses. Nothing else is marked: not a raw query, whether `strict: false` or `armory_allow_raw_query: true` lets it run and even when it carries the text of a stored operation, not a refused request, and not a `GraphQL::Query` your app builds itself.
+
 ### Testing with persisted queries
 
 `PersistedQueries::Store::Substitute.new(*queries)` holds the given queries under their SHA-256, like an Apollo manifest, and records the ids it was asked for (`fetched`). `PersistedQueries::Controls::Operations`, `Query.example` and `Root.example` are a small schema and its operations to test against. The decision itself is `PersistedQueries::Gate`: `Gate.build(store:, strict:)` takes the same settings as `use`, and `gate.(context, query_text, document)` answers `[refusal, document]`. `Gate.new`, with nothing wired, refuses every request (`Store::Null`, strict).

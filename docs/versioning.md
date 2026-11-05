@@ -271,6 +271,10 @@ end
 
 The plugin decides the schema, never the data: when the data a client gets must differ per version, your resolvers decide it from this. Comparing with a label your list does not hold raises `UnknownVersionError`, so a typo fails loudly. It raises `ConfigurationError` for anything that is not a query's context.
 
+### With response caching
+
+The plugin's own read of `armory_version`, to decide the version, does not count as an input of the answer for [response caching](response-caching.md): the resolved version is part of the cache key. Your own code reading `context[:armory_version]` does count, since two raw values that resolve to the same version are still two different inputs, and a run that read it is not stored unless the key covers it. Read the version with `Versioning.version(context)` instead, which reads no context value.
+
 ### Dumping a version's schema
 
 ```ruby

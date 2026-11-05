@@ -54,15 +54,19 @@ module GraphQL
       end
 
       # Every sink gets the same frozen data, so one sink (or a subscriber) cannot change what the next one sees.
+      # Sinks run inside `Caching.neutral`: what a sink reads from the context (a request id to log) changes no answer,
+      # so response caching does not count it. The same key read by the app's own code still counts.
       def record(signal, context: nil, **data)
         return nil if @sinks.empty?
 
         data = data.to_h { |key, value| [key, value.is_a?(String) ? value.dup.freeze : value] }.freeze
         view = ContextView.new(context || {}) if @sinks.any? { |_sink, takes_context| takes_context }
-        @sinks.each do |sink, takes_context|
-          takes_context ? sink.call(signal, data, view) : sink.call(signal, data)
-        rescue StandardError => error
-          @on_sink_error.call(error, signal)
+        Caching.neutral(context) do
+          @sinks.each do |sink, takes_context|
+            takes_context ? sink.call(signal, data, view) : sink.call(signal, data)
+          rescue StandardError => error
+            @on_sink_error.call(error, signal)
+          end
         end
         nil
       end

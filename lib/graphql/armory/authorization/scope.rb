@@ -27,6 +27,8 @@ module GraphQL
             return items
           end
 
+          # Past the bypass the policy decides what is in the list (see Authorize#decide).
+          Caching::RecordKeys.viewer_dependent!(context)
           scoped = adapter.scope(adapter.actor(context), items, rule)
           telemetry.record(:scoped, context: context, action: rule.action)
           scoped

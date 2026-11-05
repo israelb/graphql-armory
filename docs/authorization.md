@@ -476,6 +476,10 @@ use GraphQL::Armory::Authorization, adapter: :pundit,
 
 Signals are `:allowed`, `:denied`, `:observed` (a rule under `observe:` would have refused; its data also holds the `reason`), `:bypassed` (an `authorize :none` rule ran) and `:scoped` (a list went through the user's scope). Data holds only `type`, `action` and `reason`, never record attributes. `GraphQL::Armory::Telemetry::Notifications` reports them to `ActiveSupport::Notifications`. Every signal, what to watch for and how to test it: [Telemetry](telemetry.md). A `sinks:` that is not an Array of callables raises `Telemetry::ConfigurationError` at boot.
 
+## With response caching
+
+A shared answer must not depend on who asked. Wherever a request makes the adapter consult a policy or ability, the query is marked as viewer-dependent (`context.namespace(:armory)[:viewer_dependent]`), and [response caching](response-caching.md) never stores it as an answer shared by every viewer: object and field rules, a scoped list, a `find_by:` or `loads:` lookup through the scope (even for an id that matches nothing), the check of a record an in-memory scope found, `visible_when:`, and a denial as much as an allowed check. An `authorize :none` bypass consults nothing and marks nothing, for an object or a list, so data behind bypasses alone can be shared. The adapter's read of the user from the context is recorded like any other context read, never exempted: an answer computed for a user the cache key does not identify is not stored.
+
 ## Guarantees and limits
 
 Covered by the black-box suite in `spec/security`, on both engines: user A cannot read user B's objects by root field, nested association or `loads:`; lists never contain foreign objects; uncovered types fail closed and show in the audit; a field hidden with `visible?` is absent from introspection and error suggestions (that is graphql-ruby's behaviour, pinned by a test).

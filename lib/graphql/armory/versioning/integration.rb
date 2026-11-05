@@ -809,7 +809,8 @@ module GraphQL
             profiles = schema.armory_versioning_profiles
             super(schema, query_string, **profiles.options(schema.armory_versioning, options))
 
-            decision = schema.armory_versioning.(context)
+            # Neutral for response caching: the resolved label is in its key. An app's own read of the raw value is not.
+            decision = Caching.neutral(context) { schema.armory_versioning.(context) }
             profiles.check(self, decision)
             store = context.namespace(:armory)
             return store[:version] = decision.version unless decision.refused?
