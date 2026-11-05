@@ -28,6 +28,20 @@ module GraphQL
         rescue StandardError
           raise InvalidError
         end
+
+        # It does not encrypt, so it seals and digests nothing (a cache entry it "sealed" could be forged by
+        # anyone), and opens nothing: in a chain, the encrypting members open what was sealed.
+        def self.seal(_bytes, aad:, purpose:)
+          raise ConfigurationError, "#{name} cannot seal: it does not encrypt (put an Encoder first in the chain)"
+        end
+
+        def self.open(_text, aad:, purpose:)
+          raise InvalidError
+        end
+
+        def self.mac(_bytes, purpose:)
+          raise ConfigurationError, "#{name} cannot digest: it has no key (put an Encoder first in the chain)"
+        end
       end
     end
   end
