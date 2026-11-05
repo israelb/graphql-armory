@@ -21,6 +21,16 @@ module GraphQL
             new(definitions, members, findings).(schema, schema.armory_versioning.own_checks)
           end
 
+          # The class or module `own_checks:` names for a `visible?` method: a class method's holder is the class, and an
+          # interface's `definition_methods` belong to the interface.
+          def self.holder_of(owner, method)
+            held = method.owner
+            owner.ancestors.find do |ancestor|
+              ancestor.singleton_class.equal?(held) ||
+                (!ancestor.is_a?(Class) && ancestor.const_defined?(:DefinitionMethods, false) && ancestor.const_get(:DefinitionMethods, false).equal?(held))
+            end || held
+          end
+
           def initialize(definitions = [], members = [], findings = Findings.new)
             @definitions = definitions
             @members = members
@@ -84,16 +94,12 @@ module GraphQL
             @found[holder] ||= ["#{name_of(holder)}#{separator}visible?", method]
           end
 
-          # A class method's holder is the class, and an interface's `definition_methods` belong to the interface.
-          def holder_of(owner, method)
-            held = method.owner
-            owner.ancestors.find do |ancestor|
-              ancestor.singleton_class.equal?(held) ||
-                (!ancestor.is_a?(Class) && ancestor.const_defined?(:DefinitionMethods, false) && ancestor.const_get(:DefinitionMethods, false).equal?(held))
-            end || held
-          end
+          def holder_of(owner, method) = self.class.holder_of(owner, method)
 
-          def name_of(holder)
+          def name_of(holder) = self.class.name_of(holder)
+
+          # How a report names a holder: a type by its GraphQL name, a schema or another class by its constant.
+          def self.name_of(holder)
             return holder.name || "Schema" if holder.is_a?(Class) && holder <= GraphQL::Schema
             return Integration.display_name(holder) if holder.respond_to?(:graphql_name)
 

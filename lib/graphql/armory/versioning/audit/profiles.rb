@@ -7,12 +7,14 @@ module GraphQL
         # `:profiles`: under `use ..., profiles: true`, graphql-ruby asks `visible?` once per version with the profile's
         # frozen Hash, never with a query's context. A check that needs the query's user cannot run there: Authorization's
         # `visible_when:` raises on every query that reaches it, and the app's own `visible?` would decide once for every
-        # user. Each is reported where it is declared. The audit cannot read whether an app's `visible?` reads the user.
+        # user. Each is reported where it is declared. The audit cannot read whether an app's `visible?` reads the user, so a
+        # `visible?` declared in `own_checks:` is not reported here: the declaration is the app's word, listed as `:own_check`.
         module Profiles
           def self.call(schema, findings)
             return findings unless schema.respond_to?(:armory_versioning_profiles) && schema.armory_versioning_profiles.enabled?
 
             found = {}
+            declared = schema.armory_versioning.own_checks
             Members.of(schema).each do |member|
               visible_when(member, findings)
               klass = member.is_a?(Module) ? member : member.class
@@ -21,7 +23,9 @@ module GraphQL
               own_methods(klass, method, separator, found)
             end
             own_methods(schema, schema.method(:visible?), ".", found)
-            found.each_value do |path, method|
+            found.each do |(holder, _), (path, method)|
+              next if declared.fetch(holder, {})[:visible?]
+
               findings.problem(:profiles, path, "defined by the app: under profiles: true graphql-ruby asks it once per version, with the " \
                                                 "profile's Hash instead of a query's context, so it decides for every user at once. Drop " \
                                                 "profiles: true, or make sure it reads nothing but the version", at: method)
@@ -48,8 +52,8 @@ module GraphQL
             while method
               file = method.source_location&.first
               if file && !file.start_with?(Location::GRAPHQL_RUBY_PATH, Location::ARMORY_PATH)
-                holder = klass.ancestors.find { |ancestor| ancestor.singleton_class == method.owner } || method.owner
-                found[[holder, separator]] ||= ["#{holder.name || holder.inspect}#{separator}visible?", method]
+                holder = OwnChecks.holder_of(klass, method)
+                found[[holder, separator]] ||= ["#{OwnChecks.name_of(holder)}#{separator}visible?", method]
               end
               method = method.super_method
             end

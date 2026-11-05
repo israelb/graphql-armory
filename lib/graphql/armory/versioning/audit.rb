@@ -9,6 +9,7 @@ module GraphQL
       #   report = GraphQL::Armory::Versioning::Audit.(AppSchema)
       #   report.ok?    # false when a query of some served version would be refused, or would see a member it should not
       #   puts report
+      #   GraphQL::Armory::Versioning::Audit.(AppSchema, strict: true)   # members only retired versions have fail it too
       #
       # Each member is asked with a context that names the version and `armory_full_schema: true`, so a check that hides it
       # from a user (Authorization's `visible_when:`) never hides a refusal. Nothing it does records a signal.
@@ -86,11 +87,12 @@ module GraphQL
           end
         end
 
-        def self.call(schema)
-          new.(schema)
+        def self.call(schema, strict: false)
+          new.(schema, strict: strict)
         end
 
-        def call(schema)
+        # `strict: true` makes `:retired_only` (a member only retired versions have) a problem instead of information.
+        def call(schema, strict: false)
           findings = Findings.new
           return findings.report unless installed?(schema, findings) && visibility?(schema, findings)
 
@@ -102,6 +104,8 @@ module GraphQL
           guarded(findings, "Schema") { OwnChecks.(schema, definitions, members, findings) }
           outside_latest(members, findings)
           guarded(findings, "Schema") { SubscriptionTriggers.(schema, findings) }
+          guarded(findings, "Schema") { Profiles.(schema, findings) }
+          guarded(findings, "Schema") { RetiredOnly.(schema, findings, strict: strict) }
           # A schema-level refusal fails every query, before any member is asked.
           schema.armory_versioning.versions.each_served { |version| walk(schema, version, definitions, members, findings) } unless refused
           findings.report
@@ -162,7 +166,10 @@ module GraphQL
         end
 
         def walk(schema, version, definitions, members, findings)
-          query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: { armory_full_schema: true, armory_version: version.label })
+          # Under `profiles: true`, the version's own profile, as its queries run: with named profiles and no `dynamic: true`,
+          # graphql-ruby refuses a query that names none.
+          profile = schema.armory_versioning_profiles.query_options(version)
+          query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: { armory_full_schema: true, armory_version: version.label }, **profile)
           context = query.context
           members.each do |member|
             # graphql-ruby never asks a member whose owner the version does not have.

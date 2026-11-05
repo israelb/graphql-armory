@@ -112,6 +112,82 @@ RSpec.describe "GraphQL::Armory::Versioning::Audit: profiles and retired-only me
     end
   end
 
+  # The whole audit, as `rake graphql_armory:versions:audit` runs it, on a schema whose Schema::Visibility has only the
+  # versions' named profiles: no `dynamic: true`, so a query that names no profile raises.
+  describe "Audit.() under profiles: true" do
+    def profiled(query_type, own_checks: {}, preload: false)
+      versions = labels
+      retired_labels = retired
+      Class.new(ArmoryEngine.base_schema) do
+        query(query_type)
+        use GraphQL::Armory::Versioning, versions: versions, retired: retired_labels, default: :latest, profiles: true, own_checks: own_checks
+        use GraphQL::Schema::Visibility, profiles: GraphQL::Armory::Versioning.profiles(self), preload: preload
+      end
+    end
+
+    def profiled_query
+      b = bases
+      thing = Class.new(b[:object]) { graphql_name "Thing"; field :x, String, null: true, removed: "2025-01-01" }
+      Class.new(b[:object]) do
+        graphql_name "Query"
+        field :thing, thing, null: true
+        field :legacy, String, null: true, removed: "2024-06-01"
+        field :total, Integer, null: true
+      end
+    end
+
+    [false, true].each do |preload|
+      it "walks every served version under its profile and reports what each serves (preload: #{preload})" do
+        report = audit.(profiled(profiled_query, preload: preload))
+
+        expect(rows(report)).to contain_exactly([:empty, "Thing", false], [:retired_only, "Query.legacy", true])
+        expect(report.problems.find { |problem| problem.kind == :empty }.message).to match(/2025-01-01.*no field/)
+      end
+    end
+
+    it "makes :retired_only a problem with strict: true, and keeps it information by default" do
+      b = bases
+      query = Class.new(b[:object]) do
+        graphql_name "Query"
+        field :legacy, String, null: true, removed: "2024-06-01"
+        field :total, Integer, null: true
+      end
+      schema = profiled(query)
+
+      expect(rows(audit.(schema))).to eq([[:retired_only, "Query.legacy", true]])
+      expect(audit.(schema).ok?).to be(true)
+      expect(rows(audit.(schema, strict: true))).to eq([[:retired_only, "Query.legacy", false]])
+      expect(audit.(schema, strict: true).ok?).to be(false)
+    end
+
+    def own_visible_query
+      b = bases
+      shown = Class.new(b[:object]) do
+        graphql_name "Shown"
+        def self.visible?(context) = super
+        field :x, String, null: true
+      end
+      [shown, Class.new(b[:object]) { graphql_name "Query"; field :shown, shown, null: true }]
+    end
+
+    it "reports an app's visible? as :profiles and :own_check until own_checks: declares it" do
+      _shown, query = own_visible_query
+
+      report = audit.(profiled(query))
+
+      expect(rows(report)).to contain_exactly([:profiles, "Shown.visible?", false], [:own_check, "Shown.visible?", false])
+    end
+
+    it "lists a visible? declared in own_checks: as information only: the declaration answers :profiles too" do
+      shown, query = own_visible_query
+
+      report = audit.(profiled(query, own_checks: { shown => { visible?: "reads only the version" } }))
+
+      expect(rows(report)).to eq([[:own_check, "Shown.visible?", true]])
+      expect(report.ok?).to be(true)
+    end
+  end
+
   describe "Audit::RetiredOnly" do
     def retired_query
       b = bases
