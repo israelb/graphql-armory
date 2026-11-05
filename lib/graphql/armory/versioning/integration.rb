@@ -564,28 +564,39 @@ module GraphQL
           checked = [schema.query, schema.mutation, schema.subscription, versioned_membership_count, late_bound_count, *schema.extra_types]
           return if schema.instance_variable_get(:@armory_schema_checked) == checked
 
+          schema_checks(schema).each(&:call)
+          schema.instance_variable_set(:@armory_schema_checked, checked)
+        end
+
+        # Each schema-level check on its own, in the order `check_schema` runs them: the audit runs every one and reports
+        # each refusal.
+        def self.schema_checks(schema)
           # Under `Schema::Visibility` such a type counts as referenced and its members are filtered.
           visibility = schema.respond_to?(:use_visibility_profile?) && schema.use_visibility_profile?
           abstract_loads = versioned_membership_count.positive? && !visibility
-          if abstract_loads || late_bound_count.positive?
-            types = definitions(schema)
-            refuse_abstract_loads(types) if abstract_loads
-            refuse_late_bound_twins(types, schema.directives.values) if late_bound_count.positive?
-          end
-          refuse_subscription_twins(schema)
+          types = nil
+          walked = -> { types ||= definitions(schema) }
+          checks = []
+          checks << -> { refuse_abstract_loads(walked.()) } if abstract_loads
+          checks << -> { refuse_late_bound_twins(walked.(), schema.directives.values) } if late_bound_count.positive?
+          checks << -> { refuse_subscription_twins(schema) }
           [schema.query, schema.mutation, schema.subscription].compact.each do |root|
-            next unless versioned_type?(root)
+            checks << lambda do
+              next unless versioned_type?(root)
 
-            raise ConfigurationError, "#{root.graphql_name}: a root type cannot have a lifecycle: a version without it would have no " \
-                                      "#{root.graphql_name} root. Version its fields instead"
+              raise ConfigurationError, "#{root.graphql_name}: a root type cannot have a lifecycle: a version without it would have no " \
+                                        "#{root.graphql_name} root. Version its fields instead"
+            end
           end
           schema.extra_types.each do |type|
-            next unless versioned_type?(type)
+            checks << lambda do
+              next unless versioned_type?(type)
 
-            raise ConfigurationError, "#{type.graphql_name}: a type with a lifecycle cannot be in extra_types: `__type` and the SDL " \
-                                      "read extra_types without asking visible?"
+              raise ConfigurationError, "#{type.graphql_name}: a type with a lifecycle cannot be in extra_types: `__type` and the SDL " \
+                                        "read extra_types without asking visible?"
+            end
           end
-          schema.instance_variable_set(:@armory_schema_checked, checked)
+          checks
         end
 
         # Twins: other definitions of a member's name on its own owner.

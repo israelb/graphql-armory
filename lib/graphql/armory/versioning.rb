@@ -95,10 +95,13 @@ module GraphQL
 end
 
 require "graphql/armory/definitions"
+require "graphql/armory/location"
 require "graphql/armory/versioning/versions"
 require "graphql/armory/versioning/lifecycle"
 require "graphql/armory/versioning/decision"
 require "graphql/armory/versioning/gate"
 require "graphql/armory/versioning/integration"
 require "graphql/armory/versioning/view"
+require "graphql/armory/versioning/audit"
+require "graphql/armory/versioning/audit/command"
 require "graphql/armory/versioning/controls"

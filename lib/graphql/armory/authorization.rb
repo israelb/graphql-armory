@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "graphql/armory/authorization/errors"
-require "graphql/armory/authorization/location"
+require "graphql/armory/location"
 require "graphql/armory/authorization/configuration"
 require "graphql/armory/authorization/rule"
 require "graphql/armory/authorization/memo"
@@ -30,6 +30,8 @@ module GraphQL
     module Authorization
       # Authorization's telemetry is the gem's: one Telemetry for every module.
       Telemetry = Armory::Telemetry
+      # So is Location, which Versioning's audit uses too.
+      Location = Armory::Location
     end
 
     # Deny-by-default authorization. The core (Authorize, Scope) knows nothing about

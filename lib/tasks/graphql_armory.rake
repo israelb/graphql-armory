@@ -15,4 +15,12 @@ namespace :graphql_armory do
     desc "Writes the audit's problems to a baseline file, or removes from it what is gone; it never adds to a file that exists"
     task :audit_baseline, [:schema, :baseline], &baseline_action
   end
+
+  namespace :versions do
+    versions_action = GraphQL::Armory::Versioning::Audit::Command::RAKE_ACTION
+    unless Rake::Task.task_defined?("graphql_armory:versions:audit") && Rake::Task["graphql_armory:versions:audit"].actions.include?(versions_action)
+      desc "Lists what a query of each served version would have refused, and members a version serves outside their lifecycle (exit 1 if any)"
+      task :audit, [:schema], &versions_action
+    end
+  end
 end

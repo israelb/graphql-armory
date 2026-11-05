@@ -30,7 +30,7 @@ Status: ✅ released, 🚧 in progress, ⬜ not started. Update this table in th
 | 5 | Stable (keyset) connections | ✅ | [docs/keyset-connections.md](docs/keyset-connections.md) | Released in 0.1.0.pre7 (prerelease). `Keyset.build(relation)` per resolver, ActiveRecord only, plain non-null columns of the relation's own table. Base64 cursors refused unless `plain_cursors: true`. No total count. `use` checks the cursor encoder when the schema loads, from 0.1.0.pre10. |
 | 6 | Subscriptions over Pusher / Ably | ⬜ | | Research not started. |
 | 7 | Response caching | ⬜ | | Research not started. |
-| 8 | API versioning | 🚧 | [docs/versioning.md](docs/versioning.md) | Unreleased. Versions per request (`context[:armory_version]`) with refusal codes and a required `default:` policy; `added:`/`removed:` on fields, arguments, enum values, types and memberships, and two definitions of one name to change its shape. The per-version audit, the diff and `deprecated:` are planned. |
+| 8 | API versioning | 🚧 | [docs/versioning.md](docs/versioning.md) | Unreleased. Versions per request (`context[:armory_version]`) with refusal codes and a required `default:` policy; `added:`/`removed:` on fields, arguments, enum values, types and memberships, and two definitions of one name to change its shape; an audit (`have_consistent_versions`) of what each served version would refuse or serve outside its lifecycle. The rest of the audit, the diff and `deprecated:` are planned. |
 | 9 | `@defer` / `@stream` | ⬜ | | Research not started. |
 | 10 | Dashboard | ⬜ | | Research not started. |
 
