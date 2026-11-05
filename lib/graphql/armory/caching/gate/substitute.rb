@@ -40,7 +40,14 @@ module GraphQL
 
           def call(queries, engine:)
             @seen << [queries, engine]
-            queries.map { @decisions.shift || Decision.pass(:unconfigured) }
+            queries.map do |query|
+              decision = @decisions.shift || Decision.pass(:unconfigured)
+              # Like the real gate: every hit's Result is set, so `query.result` answers it without running.
+              if decision.hit?
+                RecordKeys.hit_result!(query.context, GraphQL::Query::Result.new(query: query, values: { "data" => decision.entry.data }))
+              end
+              decision
+            end
           end
 
           def store(query, decision, result)

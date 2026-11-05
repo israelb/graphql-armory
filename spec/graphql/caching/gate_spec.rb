@@ -29,7 +29,8 @@ RSpec.describe "GraphQL::Armory::Caching::Gate" do
   # A query as the guard builds it: through the schema's query_class, marked guard-built and persisted.
   def build(operation: "names", persisted: true, **options)
     context = options.delete(:context) || caching::Controls::Context.example(operation: operation)
-    query = schema.query_class.new(schema, nil, context: context, **options)
+    # Through `schema.query_class`, PersistedQueries would look up the operation_id and mark the query persisted.
+    query = (persisted ? schema.query_class : GraphQL::Query).new(schema, nil, context: context, **options)
     caching::RecordKeys.guard_built!(query.context)
     caching::RecordKeys.persisted!(query.context) if persisted
     query
@@ -80,8 +81,55 @@ RSpec.describe "GraphQL::Armory::Caching::Gate" do
       expect { caching::Gate.new(on_store_error: "log") }.to raise_error(caching::ConfigurationError, /on_store_error/)
     end
 
-    it "leaves Gate.build to the integration, which wires the real dependencies" do
-      expect { caching::Gate.build(schema) }.to raise_error(NotImplementedError, /integration/)
+    it "builds from the checked use options, with the installer's digester" do
+      built = caching::Gate.build(schema, store: caching::MemoryStore.new, digester: digester, telemetry: telemetry, release: "r1",
+                                          own_checks: {}, sinks: [])
+
+      expect(built).to be_a(caching::Gate)
+      expect(built.instance_variable_get(:@digester)).to equal(digester)
+    end
+
+    it "refuses a max_ttl longer than the store keeps purge marks" do
+      expect do
+        caching::Gate.build(schema, store: caching::MemoryStore.new(max_ttl: 60), digester: digester, telemetry: telemetry, release: "r1", max_ttl: 3600)
+      end.to raise_error(caching::ConfigurationError, /max_ttl: 3600 exceeds the store's max_ttl: 60/)
+    end
+  end
+
+  describe "the app's context class" do
+    let(:app_context) do
+      Class.new(caching::Recorder::Substitute::Context) do
+        def tenant = @provided_values[:tenant]
+      end
+    end
+
+    it "runs uncached (:context_method) when it adds a public method not declared in context_methods:" do
+      schema.context_class(app_context)
+
+      expect(gate.([build], engine: :interpreter).first.reason).to eq(:context_method)
+      expect(store.calls).to be_empty
+      expect(signals(:cache_skipped).map { |data| data[:reason] }).to eq([:context_method])
+    end
+
+    it "is looked up when every added method is declared with a reason" do
+      schema.context_class(app_context)
+
+      expect(gate(context_methods: { tenant: "reads the request's tenant, which vary: holds" }).([build], engine: :interpreter).first).to be_miss
+    end
+  end
+
+  describe "the Points cost, per query" do
+    it "stores a miss without a cost when the charge reports no limiter for the query" do
+      unlimited = Class.new(caching::Charge::Substitute) { def limited?(_query = nil) = false }.new
+
+      expect(fill(gate(charge: unlimited, recorded_cost: ->(_query) {}))).to eq(:stored)
+    end
+
+    it "refuses a miss without a cost when the charge reports a limiter for the query" do
+      limited = Class.new(caching::Charge::Substitute) { def limited?(_query = nil) = true }.new
+
+      expect(fill(gate(charge: limited, recorded_cost: ->(_query) {}))).to eq(:cost_unknown)
+      expect(operations).not_to include(:write)
     end
   end
 

@@ -30,19 +30,32 @@ module GraphQL
 
         DEFAULT_ON_STORE_ERROR = ->(error, _query) { warn("graphql-armory cache store failed, query runs uncached: #{error.class}") }
 
-        # Wires the real dependencies from `use` options. Completed at integration (docs/response-caching.md 10, S12):
-        #
-        #   digester = encoder ? Digester.build(encoder:) : Digester.new
-        #   new(store:, walk: Walk.new(...), keyer: Keyer.build(release:, viewer:, viewer_id:, anonymous:, vary:, digester:),
-        #       codec: encoder ? Codec.build(encoder:) : Codec.new, charge: Charge.build(schema),
-        #       telemetry: Telemetry.build(sinks:, on_sink_error:), digester:,
-        #       max_ttl:, max_viewer_ttl:, max_entry_bytes:, viewer_key: viewer, vary_keys: <vary: values that are context keys>,
-        #       neutral_keys:, recorded_cost: <Points installed ? that query's recorded cost : nil>, extensions:, on_store_error:)
-        #
-        # The keyer's `call` must take `engine:` (see `#call`), or the engine is not in the key.
-        def self.build(schema, **_use_options)
-          raise NotImplementedError, "#{schema}: Gate.build is wired at integration (the real Walk, Keyer, Codec, Charge and store)"
+        # Wires the real dependencies from the checked `use` options (`Integration::Settings#to_h`). `digester:` is the
+        # one the installer built: `purge` digests tags with it, so the gate never builds its own. The options only the
+        # audit reads (`own_checks:`, `sinks:`, ...) are ignored here.
+        def self.build(schema, store:, digester:, telemetry:, release:, encoder: nil, viewer: nil, viewer_id: Viewer::DEFAULT_ID,
+                       anonymous: :uncacheable, anonymous_reason: nil, vary: {}, max_ttl: 3600, max_viewer_ttl: 300,
+                       max_entry_bytes: 262_144, neutral_keys: {}, context_methods: {}, extensions: false, on_store_error: nil, **_audit_only)
+          check_store_ttl(store, max_ttl)
+          keyer = Keyer.build(release: release, digester: digester, viewer: viewer, viewer_id: viewer_id, anonymous: anonymous,
+                              anonymous_reason: anonymous_reason, vary: vary)
+          new(store: store, walk: Walk.build, keyer: keyer, codec: encoder ? Codec.build(encoder: encoder) : Codec.new,
+              charge: Charge.build(schema), telemetry: telemetry, digester: digester, max_ttl: max_ttl, max_viewer_ttl: max_viewer_ttl,
+              max_entry_bytes: max_entry_bytes, viewer_key: keyer.viewer_key, vary_keys: keyer.vary_context_keys,
+              neutral_keys: neutral_keys, context_methods: context_methods, recorded_cost: ->(query) { Charge.recorded_cost(query) },
+              extensions: extensions, on_store_error: on_store_error)
         end
+
+        # A store prunes purge marks older than its own `max_ttl`: an entry living longer than that could outlive the
+        # mark that purged it and be served again.
+        def self.check_store_ttl(store, max_ttl)
+          return unless store.respond_to?(:max_ttl) && store.max_ttl.is_a?(Integer)
+          return if store.max_ttl >= max_ttl
+
+          raise ConfigurationError, "max_ttl: #{max_ttl} exceeds the store's max_ttl: #{store.max_ttl}, after which it prunes purge marks: " \
+                                    "build the store with max_ttl: #{max_ttl} or more"
+        end
+        private_class_method :check_store_ttl
 
         # - `store`, `walk`, `keyer`, `codec`, `charge`, `telemetry`, `digester`: the dependencies (Null by default).
         #   `codec` defaults to `Codec.new`, the plain JSON codec, read when the gate is built, never at load time.
@@ -51,8 +64,11 @@ module GraphQL
         # - `viewer_key`: the `viewer:` context key; it covers reads of that key in `:viewer` runs only.
         # - `vary_keys`: the `vary:` entries given as context keys; their whole value is in the key, so they cover.
         # - `neutral_keys`: the app's answer-neutral keys (`{ request_id: "logging only" }`, or an Array).
-        # - `recorded_cost`: nil when no Points limiter is installed; else a callable answering the Points the query's
-        #   run was charged (an Integer), or nil when it recorded none. With it, a miss without a cost is not stored
+        # - `context_methods`: the public methods the app's context class adds, each with a reason. A query whose
+        #   context class adds a method not named here runs uncached (`:context_method`): it reads unrecorded.
+        # - `recorded_cost`: a callable answering the Points the query's run was charged (an Integer), or nil when it
+        #   recorded none; nil (the default) means no Points limiter. When the charge reports a limiter for the query
+        #   (`charge.limited?(query)`, or always for a charge without `limited?`), a miss without a cost is not stored
         #   and an entry without a cost is never served: a hit would be free.
         # - `extensions`: true adds `"cache" => { "hit" => true, "age" => n }` to a hit's response.
         # - `on_store_error`: called with `(error, query)` when the store raises; the query runs uncached.
@@ -60,7 +76,8 @@ module GraphQL
         #   `store.now` when the store has one; without it, the store's own refusal of an expired write bounds the run.
         def initialize(store: Store::Null.new, walk: Walk::Null.new, keyer: Keyer::Null.new, codec: Codec.new, charge: Charge::Null.new,
                        telemetry: Telemetry.new, digester: Digester.new, max_ttl: 3600, max_viewer_ttl: 300, max_entry_bytes: 262_144,
-                       viewer_key: nil, vary_keys: [], neutral_keys: {}, recorded_cost: nil, extensions: false, on_store_error: nil, clock: nil)
+                       viewer_key: nil, vary_keys: [], neutral_keys: {}, context_methods: {}, recorded_cost: nil, extensions: false,
+                       on_store_error: nil, clock: nil)
           positive!(:max_ttl, max_ttl)
           positive!(:max_viewer_ttl, max_viewer_ttl)
           positive!(:max_entry_bytes, max_entry_bytes)
@@ -69,6 +86,9 @@ module GraphQL
 
           neutral = neutral_keys.is_a?(Hash) ? neutral_keys.keys : neutral_keys
           raise ConfigurationError, "neutral_keys: must be a Hash of context key => reason" unless neutral.is_a?(Array) && neutral.all? { |key| context_key?(key) }
+
+          declared = context_methods.is_a?(Hash) ? context_methods.keys : context_methods
+          raise ConfigurationError, "context_methods: must be a Hash of method name => reason" unless declared.is_a?(Array) && declared.all? { |name| context_key?(name) }
 
           callable!(:recorded_cost, recorded_cost)
           callable!(:on_store_error, on_store_error)
@@ -87,6 +107,9 @@ module GraphQL
           @max_viewer_ttl = max_viewer_ttl
           @max_entry_bytes = max_entry_bytes
           @recorded_cost = recorded_cost
+          @context_methods = declared.map(&:to_sym).freeze
+          @undeclared = {}.compare_by_identity
+          @undeclared_lock = Mutex.new
           @extensions = extensions
           @on_store_error = on_store_error || DEFAULT_ON_STORE_ERROR
           @clock = clock || (store.respond_to?(:now) ? -> { store.now } : nil)
@@ -119,8 +142,9 @@ module GraphQL
           return skip(query, reason, scope, context_key) if reason
 
           ttl = capped_ttl(decision.policy.ttl, scope)
-          cost = @recorded_cost&.call(query)
-          return skip(query, :cost_unknown, scope) if @recorded_cost && !(cost.is_a?(Integer) && cost >= 0)
+          costed = costed?(query)
+          cost = costed ? @recorded_cost.call(query) : nil
+          return skip(query, :cost_unknown, scope) if costed && !(cost.is_a?(Integer) && cost >= 0)
           return skip(query, :run_too_long, scope) if run_too_long?(lookup)
 
           tags = (decision.policy.tags.map { |tag| @digester.(tag) } + [key.viewer_tag].compact).uniq.sort
@@ -137,6 +161,7 @@ module GraphQL
         def decide(query, engine, mutation)
           reason = Admission.refusal(query, mutation_in_call: mutation)
           return pass(query, reason) if reason
+          return pass(query, :context_method) unless undeclared_methods(query.context.class).empty?
 
           policy = @walk.(query)
           return pass(query, refusal_reason(policy)) unless policy.is_a?(Policy) && policy.cacheable?
@@ -150,7 +175,7 @@ module GraphQL
           return Decision.pass(:store_failed) unless lookup
           return Decision.miss(key, policy, lookup) unless lookup.found?
 
-          entry, rejection = open(lookup, key)
+          entry, rejection = open(query, lookup, key)
           if rejection
             @signals.rejected(query, rejection)
             return Decision.miss(key, policy, lookup)
@@ -180,16 +205,16 @@ module GraphQL
         end
 
         # The entry, or the reason it must not be served. A poisoned blob is a miss, whatever the codec raised.
-        def open(lookup, key)
+        def open(query, lookup, key)
           entry = @codec.decode(lookup.blob, key.digest)
-          [entry, rejection(entry, lookup, key)]
+          [entry, rejection(query, entry, lookup, key)]
         rescue Entry::Rejected => rejected
           [nil, rejected.reason]
         rescue StandardError
           [nil, :format]
         end
 
-        def rejection(entry, lookup, key)
+        def rejection(query, entry, lookup, key)
           return :key unless entry.key == key.digest && entry.scope == key.scope
           # A lost meta record (another epoch), or a replica behind the entry's seq: everything older is purged.
           return :epoch unless entry.epoch == lookup.epoch && entry.seq <= lookup.seq
@@ -197,7 +222,7 @@ module GraphQL
           # The store keeps the tags beside the sealed blob only to read their marks; the sealed list is the truth.
           return :tags unless entry.tags == lookup.tags.uniq.sort
           return :purged if lookup.marks.any? { |_tag, mark| mark > entry.seq }
-          return :cost_unknown if @recorded_cost && entry.cost.nil?
+          return :cost_unknown if entry.cost.nil? && costed?(query)
 
           nil
         end
@@ -284,6 +309,22 @@ module GraphQL
             @on_store_error.call(error, query)
           rescue StandardError => handler_error
             warn("graphql-armory cache on_store_error raised, query runs uncached: #{handler_error.class}")
+          end
+        end
+
+        # Whether this query's hits must be charged a recorded cost. Looked up per query: Points may be `use`d after
+        # Caching, and a subclass may add its own limiter.
+        def costed?(query)
+          return false unless @recorded_cost
+
+          !@charge.respond_to?(:limited?) || @charge.limited?(query)
+        end
+
+        # The added public methods of a context class the app did not declare, memoized per class.
+        def undeclared_methods(klass)
+          @undeclared.fetch(klass) do
+            found = klass.is_a?(Class) && klass <= GraphQL::Query::Context ? ContextMethods.undeclared(klass, @context_methods) : []
+            @undeclared_lock.synchronize { @undeclared[klass] = found.freeze }
           end
         end
 

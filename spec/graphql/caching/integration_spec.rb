@@ -15,20 +15,7 @@ RSpec.describe "GraphQL::Armory::Caching integration" do
 
   # The real gate sets the hit's Result for every `Decision.hit` (`RecordKeys.hit_result!`); U0's Gate::Substitute
   # answers the decision only, so this one adds that line, as the gate does for a hit it answered.
-  let(:gate) do
-    Class.new(caching::Gate::Substitute) do
-      def call(queries, engine:)
-        super.each_with_index.map do |decision, index|
-          query = queries[index]
-          if decision.hit?
-            result = GraphQL::Query::Result.new(query: query, values: { "data" => decision.entry.data })
-            GraphQL::Armory::Caching::RecordKeys.hit_result!(query.context, result)
-          end
-          decision
-        end
-      end
-    end.new
-  end
+  let(:gate) { caching::Gate::Substitute.new }
 
   def schema_with(gate: self.gate, **options)
     caching::Controls::Schema.example(caching: { store: store, release: "r1", gate: gate, **options })
@@ -222,7 +209,11 @@ RSpec.describe "GraphQL::Armory::Caching integration" do
     end
 
     it "runs a hit uncached when the gate did not set its Result, and never stores it" do
-      plain = caching::Gate::Substitute.new
+      plain = Class.new(caching::Gate::Substitute) do
+        def call(queries, engine:)
+          super.tap { queries.each { |query| GraphQL::Armory::Caching::RecordKeys.hit_result!(query.context, nil) } }
+        end
+      end.new
       plain.decide(hit)
       result = run_multiplex(schema_with(gate: plain), [{ context: context("names") }]).first
 

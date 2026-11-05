@@ -29,4 +29,6 @@ end
 
 require "graphql/armory/caching/recorder/null"
 require "graphql/armory/caching/recorder/substitute"
+require "graphql/armory/caching/recorder/shared_writes"
+require "graphql/armory/caching/recorder/log"
 require "graphql/armory/caching/recorder/context"

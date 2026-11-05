@@ -281,8 +281,10 @@ RSpec.describe "GraphQL::Armory::Caching contracts" do
       expect(result.to_h["data"]["invoices"].map { |invoice| invoice["number"] }).to eq(%w[A-1 A-2])
     end
 
-    it "is not installed until U9 builds the installer" do
-      expect { caching::Controls::Schema.example(caching: { store: caching::Controls::Store.example }) }.to raise_error(NotImplementedError)
+    it "installs Caching with the real gate when given its options" do
+      schema = caching::Controls::Schema.example(caching: { store: caching::Controls::Store.example, release: "test" })
+
+      expect(schema.armory_caching.gate).to be_a(caching::Gate)
     end
   end
 end

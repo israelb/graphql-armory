@@ -24,7 +24,9 @@ RSpec.describe "GraphQL::Armory::Caching::Gate security" do
                       on_store_error: ->(error, query) { store_errors << [error.class, query] })
   end
 
-  def build(operation: "names", context: nil, mark: true, persisted: true, query_class: schema.query_class, **options)
+  # An unpersisted query is built with the base Query class: through `schema.query_class`, PersistedQueries would
+  # look up its operation_id and mark it persisted.
+  def build(operation: "names", context: nil, mark: true, persisted: true, query_class: persisted ? schema.query_class : GraphQL::Query, **options)
     context ||= caching::Controls::Context.example(operation: operation)
     query = query_class.new(schema, nil, context: context, **options)
     caching::RecordKeys.guard_built!(query.context) if mark
