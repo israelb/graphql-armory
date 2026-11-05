@@ -114,6 +114,8 @@ module GraphQL
 
         # The refusal for a query that costs `cost`, or nil to let it run.
         def call(query, cost)
+          return nil if Settings.delivery?(query)
+
           key = Caching.neutral(query.context) { Settings.key_for(@key, query) }
           return call_several(query, key, cost) if key.is_a?(Array)
 

@@ -94,6 +94,8 @@ module GraphQL
 
         # The refusal for a client with no milliseconds left, or nil to let the operation run (and be charged).
         def call(query)
+          return nil if Settings.delivery?(query)
+
           unless query.current_trace.is_a?(@trace)
             raise ConfigurationError, "this query runs with its own trace (context[:trace]), so Time could never charge it: remove context[:trace] or add trace_with to that trace"
           end

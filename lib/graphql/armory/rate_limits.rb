@@ -33,8 +33,17 @@ module GraphQL
         end
 
         def exempt?(reader, limit, query)
+          return true if delivery?(query)
+
           key = key_for(reader, query)
           key.is_a?(Array) ? limits_for(limit, key, query).empty? : limit_for(limit, key, query).nil?
+        end
+
+        # A subscription delivery is server work a trigger caused: no limiter charges it to the subscriber (the mark lives
+        # in a namespace no request can write; see Subscriptions.delivery?). Without the subscriptions module loaded,
+        # nothing can have marked it.
+        def delivery?(query)
+          defined?(Armory::Subscriptions.delivery?) ? Armory::Subscriptions.delivery?(query.context) : false
         end
 
         def several_keys?(keys)
