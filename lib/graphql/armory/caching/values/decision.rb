@@ -5,7 +5,7 @@ module GraphQL
     module Caching
       # What the gate decided for one query: answer it from `entry` (hit), run it and maybe store it under `key`
       # (miss, with the `policy` and the `lookup` it was decided on), or run it uncached (pass, with a `reason`).
-      Decision = Data.define(:kind, :entry, :key, :policy, :lookup, :reason) do
+      Decision = Struct.new(:kind, :entry, :key, :policy, :lookup, :reason, keyword_init: true) do
         def self.hit(entry)
           new(kind: :hit, entry: entry, key: nil, policy: nil, lookup: nil, reason: nil)
         end
@@ -33,6 +33,7 @@ module GraphQL
           end
 
           super
+          freeze
         end
 
         def hit? = kind == :hit

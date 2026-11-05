@@ -319,3 +319,16 @@ RSpec.describe "GraphQL::Armory::Caching shared contracts for parallel units" do
     expect(caching::RecordKeys.guard_built?({})).to be(false)
   end
 end
+
+RSpec.describe "GraphQL::Armory::Caching values on every supported Ruby" do
+  it "uses no Data classes (Ruby 3.1 has none) and freezes every value" do
+    caching = GraphQL::Armory::Caching
+    sources = Dir[File.expand_path("../../../lib/graphql/armory/caching/**/*.rb", __dir__)].map { |file| File.read(file) }
+
+    expect(sources.grep(/\bData\.define\b/)).to be_empty
+    expect(caching::Policy.refused(:x)).to be_frozen
+    expect(caching::Lookup.miss(seq: 0, epoch: "e", now: 0)).to be_frozen
+    expect(caching::Decision.pass(:x)).to be_frozen
+    expect { caching::Decision.pass(:x).reason = :y }.to raise_error(FrozenError)
+  end
+end

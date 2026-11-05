@@ -6,7 +6,7 @@ module GraphQL
       # What the walk concluded about an operation: cacheable for `ttl` seconds under `scope`, purgeable by `tags`
       # (custom tags and `type:<Name>` tags, in clear: they are digested before they reach a store), or refused with
       # a `reason` Symbol (`:undeclared_field`, `:directive`, ...).
-      Policy = Data.define(:cacheable, :ttl, :scope, :tags, :reason) do
+      Policy = Struct.new(:cacheable, :ttl, :scope, :tags, :reason, keyword_init: true) do
         def self.cacheable(ttl:, scope:, tags: [])
           new(cacheable: true, ttl: ttl, scope: scope, tags: tags, reason: nil)
         end
@@ -28,6 +28,7 @@ module GraphQL
           raise ArgumentError, "Policy tags: must be an Array of Strings" unless tags.is_a?(Array) && tags.all?(String)
 
           super(cacheable: cacheable, ttl: ttl, scope: scope, tags: tags.map { |tag| tag.dup.freeze }.uniq.sort.freeze, reason: reason)
+          freeze
         end
 
         def cacheable?

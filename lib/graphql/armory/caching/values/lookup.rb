@@ -6,7 +6,7 @@ module GraphQL
       # What one store round trip answered: the sealed entry (`blob`, nil on a miss), the keyed tag digests stored
       # beside it, the purge `marks` of those tags (digest => seq), the store's purge sequence `seq` and `epoch`, and
       # the store clock `now` in Integer milliseconds, which becomes the run's `lookup_at`.
-      Lookup = Data.define(:blob, :tags, :marks, :seq, :epoch, :now) do
+      Lookup = Struct.new(:blob, :tags, :marks, :seq, :epoch, :now, keyword_init: true) do
         def self.miss(seq:, epoch:, now:)
           new(blob: nil, tags: [], marks: {}, seq: seq, epoch: epoch, now: now)
         end
@@ -20,6 +20,7 @@ module GraphQL
           raise ArgumentError, "Lookup now: must be Integer milliseconds" unless now.is_a?(Integer) && now >= 0
 
           super(blob: blob&.dup&.freeze, tags: tags.map { |tag| tag.dup.freeze }.freeze, marks: marks.dup.freeze, seq: seq, epoch: epoch.dup.freeze, now: now)
+          freeze
         end
 
         def found?

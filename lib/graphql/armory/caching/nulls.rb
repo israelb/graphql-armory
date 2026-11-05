@@ -38,7 +38,7 @@ module GraphQL
       # The request's Key (unit U7): `keyer.(query, policy) -> Key | Policy.refused(reason)`. `Null` refuses everything.
       class Keyer
         class Null
-          def call(_query, _policy) = Policy.refused(:unconfigured)
+          def call(_query, _policy, **) = Policy.refused(:unconfigured)
         end
 
         class Substitute
