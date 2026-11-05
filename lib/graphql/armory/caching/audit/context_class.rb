@@ -88,8 +88,8 @@ module GraphQL
 
           def self.added(klass, app, settings, findings)
             declared = settings.context_methods.to_h { |name, reason| [name.to_sym, reason] }
-            known = GraphQL::Query::Context.public_instance_methods
-            names = app.flat_map { |mod| mod.public_instance_methods(false) }.uniq - known
+            # The gate's own rule, so the audit and the runtime never disagree on what counts.
+            names = ContextMethods.added(klass)
             names.each do |name|
               method = klass.instance_method(name)
               if declared.key?(name)
