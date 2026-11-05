@@ -634,6 +634,8 @@ RSpec.describe "Versioning audit 3a: verification probes" do
           field :secret, String, null: true, visible_when: :export
           field :status, status, null: true
         end
+        # Since 3b, a version with no implementer of Archivable or no field on Mutation is a problem: Memo and ping keep both.
+        memo = Class.new(b[:object]) { graphql_name "Memo"; authorize :read, model: ::Struct; implements arch; field :body, String, null: true }
         contract = Class.new(b[:object]) { graphql_name "Contract"; authorize :read, model: ::Struct; lifecycle added: "2025-01-01"; field :party, String, null: true }
         doc = Class.new(b[:union]) { graphql_name "Doc"; possible_types inv; possible_types contract, added: "2025-01-01" }
         payload_base = b[:object]
@@ -653,7 +655,7 @@ RSpec.describe "Versioning audit 3a: verification probes" do
           field :invoice, inv, null: true
           def resolve(**) = { invoice: nil }
         end
-        mutation = Class.new(b[:object]) { graphql_name "Mutation"; authorize :read, model: ::Struct; field :create_invoice, mutation: create }
+        mutation = Class.new(b[:object]) { graphql_name "Mutation"; authorize :read, model: ::Struct; field :ping, String, null: true; field :create_invoice, mutation: create }
         query = Class.new(b[:object]) do
           graphql_name "Query"
           authorize :read, model: ::Struct
@@ -664,6 +666,7 @@ RSpec.describe "Versioning audit 3a: verification probes" do
           end
           field :doc, doc, null: true
           field :archivable, arch, null: true
+          field :memo, memo, null: true
           field :contract, contract, null: true
         end
         schema = schema_over(query, vis, mutation_type: mutation, adapter: adapter)

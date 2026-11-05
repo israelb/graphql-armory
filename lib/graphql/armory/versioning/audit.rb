@@ -14,12 +14,14 @@ module GraphQL
       # from a user (Authorization's `visible_when:`) never hides a refusal. Nothing it does records a signal.
       class Audit
         # What the report does not check yet: it says so, so `ok?` never claims more than was checked.
-        NOT_CHECKED = "members hidden in a version because their type is, fields served by a parent or an interface " \
-                      "under the Warden, interfaces and unions left with no member, types with no visible field, your own " \
-                      "visible? methods, defaults of arguments without Base, and subscription triggers"
+        NOT_CHECKED = "fields served by a parent or an interface under the Warden, your own visible? methods, defaults of " \
+                      "arguments without Base, and subscription triggers"
 
-        # `location` is "path:line" where the app wrote what the problem is about, or nil.
-        Problem = Struct.new(:kind, :path, :message, :location) do
+        # `location` is "path:line" where the app wrote what the problem is about, or nil. `severity` is nil for a problem,
+        # or :information for something listed that changes nothing a client relies on: `ok?` ignores it.
+        Problem = Struct.new(:kind, :path, :message, :location, :severity) do
+          def information? = severity == :information
+
           def to_s
             "#{path} (#{kind}): #{message}"
           end
@@ -34,18 +36,23 @@ module GraphQL
           end
 
           def ok?
-            problems.empty?
+            problems.all?(&:information?)
           end
 
           def to_s
-            lines = if ok?
+            failing, information = problems.partition { |problem| !problem.information? }
+            lines = if failing.empty?
                       ["No problems."]
                     else
-                      ["#{problems.size} #{problems.size == 1 ? 'problem' : 'problems'}:",
-                       *problems.map { |problem| "  #{problem.location ? "#{problem} (at #{problem.location})" : problem}" }]
+                      ["#{failing.size} #{failing.size == 1 ? 'problem' : 'problems'}:", *failing.map { |problem| line(problem) }]
                     end
+            lines.push("", "Information:", *information.map { |problem| line(problem) }) unless information.empty?
             [*lines, "", "Not checked yet: #{NOT_CHECKED}."].join("\n") << "\n"
           end
+
+          private
+
+          def line(problem) = "  #{problem.location ? "#{problem} (at #{problem.location})" : problem}"
         end
 
         # Collects what one audit finds: one problem per kind and path (per message for the schema's own), the first kept.
@@ -54,17 +61,26 @@ module GraphQL
             @problems = {}
           end
 
-          def problem(kind, path, message, at: nil)
+          # A problem replaces information of the same kind and path found in another version.
+          def problem(kind, path, message, at: nil, severity: nil)
             key = path == "Schema" ? [kind, path, message] : [kind, path]
-            @problems[key] ||= Problem.new(kind, path, message, Location.of(at))
+            kept = @problems[key]
+            return kept if kept && (severity || !kept.information?)
+
+            @problems[key] = Problem.new(kind, path, message, Location.of(at), severity)
           end
 
-          def path?(path) = @problems.each_key.any? { |key| key[1] == path }
+          def information(kind, path, message, at: nil) = problem(kind, path, message, at: at, severity: :information)
 
-          def any? = !@problems.empty?
+          # Information never stands for a problem: a member listed as information is still asked in every version.
+          def path?(path) = failing.any? { |problem| problem.path == path }
+
+          def any? = failing.any?
 
           # Whether a refusal is one already reported: graphql-ruby's lookups ask a member again inside its owner's.
-          def explained?(message) = @problems.each_value.any? { |problem| message.start_with?("#{problem.path}: ") || message == problem.message }
+          def explained?(message) = failing.any? { |problem| message.start_with?("#{problem.path}: ") || message == problem.message }
+
+          def failing = @problems.each_value.reject(&:information?)
 
           def report
             Report.new(@problems.values.sort_by { |problem| [problem.path, problem.kind.to_s] })
@@ -160,6 +176,127 @@ module GraphQL
           end
           outside_lifecycle(view, version, findings)
           directive_arguments(types, view, version, findings)
+          missing_members(schema, types, view, version, definitions, findings)
+        end
+
+        # What a version leaves out without refusing anything: members hidden because their type is, and types left with
+        # no field, no member or no implementer.
+        def missing_members(schema, types, view, version, definitions, findings)
+          listed = begin
+            view.all_types.reject { |type| Armory::Definitions.introspection?(type) }
+          rescue StandardError
+            return # reported by outside_lifecycle
+          end
+          listed.each do |type|
+            guarded(findings, type) do
+              hidden_by_type(view, type, version, findings)
+              empty(schema, view, type, version, definitions, findings)
+            end
+          end
+          (guarded(findings, "Schema") { types.directives } || []).each do |directive|
+            guarded(findings, directive) { hidden_arguments(view, directive, version, findings) }
+          end
+          guarded(findings, "Schema") { unlisted_abstract(view, version, definitions, listed, findings) }
+        end
+
+        def hidden_by_type(view, type, version, findings)
+          hidden_arguments(view, type, version, findings) if type.kind.input_object?
+          return unless type.kind.fields?
+
+          live_fields(type, version).each do |field|
+            # A twin of the same name served in its place is versioning, not a hidden field.
+            next if view.field(type, field.graphql_name)
+
+            hidden = hidden_type(view, field.type.unwrap, version)
+            findings.information(:implicit, field.path, "#{label(version)} hides it because its type #{hidden.graphql_name} is not in that version", at: field) if hidden
+          end
+          view.fields(type).each { |field| hidden_arguments(view, field, version, findings) }
+        end
+
+        # A required argument hidden this way lets a client of the version call its owner without it.
+        def hidden_arguments(view, owner, version, findings)
+          served = view.arguments(owner)
+          owner.all_argument_definitions.each do |argument|
+            next if served.any? { |member| member.graphql_name == argument.graphql_name } || !Integration.lifecycle_of(argument).covers?(version)
+
+            hidden = if argument.loads
+                       argument.loads unless Integration.lifecycle_of(argument.loads).covers?(version)
+                     else
+                       hidden_type(view, argument.type.unwrap, version)
+                     end
+            next unless hidden
+
+            why = "#{label(version)} hides it because its type #{hidden.graphql_name} is not in that version"
+            if argument.type.non_null? && !argument.default_value?
+              findings.problem(:implicit, argument.path, "required, but #{why}: a client of #{label(version)} can use " \
+                                                         "#{path_of(owner)} without it", at: argument)
+            else
+              findings.information(:implicit, argument.path, why, at: argument)
+            end
+          end
+        end
+
+        # The type a version leaves out because of a lifecycle: its own, or, for an interface or a union, its members'.
+        def hidden_type(view, type, version)
+          return if view.visible?(type)
+
+          type if !Integration.lifecycle_of(type).covers?(version) || type.kind.abstract?
+        end
+
+        # The nearest definitions of each field name whose own lifecycle, owner and resolver live in the version, and, for an
+        # interface's field, whose membership does.
+        def live_fields(type, version)
+          Armory::Definitions.fields_at_every_level(type).select do |field|
+            !Armory::Definitions.shadowed?(type, field) && member_in?(type, field.owner, version) &&
+              [field, field.owner, field.resolver].compact.all? { |member| Integration.lifecycle_of(member).covers?(version) }
+          end
+        end
+
+        # An interface the type names with `implements` only counts where one of those memberships lives.
+        def member_in?(type, owner, version)
+          return true if owner.equal?(type) || !owner.respond_to?(:kind) || !owner.kind.interface? || !type.respond_to?(:interface_type_memberships)
+
+          named = type.ancestors.select { |ancestor| ancestor.respond_to?(:interface_type_memberships) }.flat_map(&:interface_type_memberships)
+                      .select { |membership| membership.respond_to?(:abstract_type) && membership.abstract_type.equal?(owner) }
+          named.empty? || named.any? { |membership| Integration.lifecycle_of(membership).covers?(version) }
+        end
+
+        def empty(schema, view, type, version, definitions, findings)
+          if type.kind.input_object?
+            if type.all_argument_definitions.any? && view.arguments(type).empty?
+              findings.problem(:empty, path_of(type), "#{label(version)} serves it with no input field: a schema with it is invalid", at: type)
+            end
+          elsif type.kind.fields? && !type.has_no_fields? && Armory::Definitions.fields_at_every_level(type).any? && view.fields(type).empty?
+            findings.problem(:empty, path_of(type), "#{label(version)} serves it with no field: a client can select only " \
+                                                    "__typename, and a schema with it is invalid", at: type)
+          end
+          # graphql 2.4's Schema::Visibility lists interfaces among an interface's possible types: only objects count.
+          return unless type.kind.abstract? && members?(type, definitions) && view.possible_types(type).none? { |member| member.kind.object? }
+
+          # Only Schema::Visibility serves an interface or a union with no member.
+          kind = type.kind.interface? ? :orphan_interface : :empty
+          findings.problem(kind, path_of(type), "#{label(version)} serves it with no #{type.kind.interface? ? 'implementer' : 'member'}: " \
+                                                "possibleTypes is empty, a fragment on any object fails, and data returned " \
+                                                "for it raises#{schema.use_visibility_profile? ? '' : ' (Warden)'}", at: type)
+        end
+
+        # The Warden hides an interface or a union with no member in the version, and every field that returns it.
+        def unlisted_abstract(view, version, definitions, listed, findings)
+          returned = listed.select { |type| type.kind.fields? }.flat_map { |type| live_fields(type, version) }.map { |field| field.type.unwrap }
+          returned.uniq.each do |type|
+            next unless type.kind.abstract? && !view.visible?(type) && Integration.lifecycle_of(type).covers?(version) && members?(type, definitions)
+
+            kind = type.kind.interface? ? :orphan_interface : :empty
+            findings.problem(kind, path_of(type), "#{label(version)} has no #{type.kind.interface? ? 'implementer' : 'member'} of it, " \
+                                                  "so graphql-ruby hides it and every field that returns it", at: type)
+          end
+        end
+
+        # An interface or a union with no member in any version is not versioning's doing.
+        def members?(type, definitions)
+          return type.type_memberships.any? if type.kind.union?
+
+          definitions.any? { |definition| definition.is_a?(Class) && definition.kind.object? && definition.ancestors.include?(type) }
         end
 
         # A base interface module brought in with `include` has no name of its own.

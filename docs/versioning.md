@@ -295,12 +295,14 @@ It asks each member with a context that names the version and `armory_full_schem
 | `:visibility` | Neither `Schema::Visibility` nor `Schema::Warden` is used |
 | `:refused` | A query of a served version would be refused: under `Schema` for the schema's own refusals (a root type or an `extra_types` type with a lifecycle, `AlwaysVisible`, a late-bound name with twins, an abstract load, subscription twins), otherwise at the member that refuses (overlapping twins, a default naming a member outside the version, shadowing, ...) |
 | `:duplicate` | Two definitions of one type name that one version both sees (type twins whose lifecycles overlap) |
-| `:empty` | An enum with no value in a served version |
+| `:empty` | A served version has an enum with no value, an object, interface or input object with no field (a client can select only `__typename`; a type with `has_no_fields(true)` is not reported), or a union with no member |
+| `:orphan_interface` | A served version has no object implementing an interface. The Warden hides the interface and every field that returns it; `Schema::Visibility` serves it with an empty `possibleTypes`, so a fragment on any object fails, and data returned for it raises |
+| `:implicit` | A served version hides a required argument or input field because its type is outside the version (for `loads:`, the loaded type): a client of that version can call the field without it, and the resolver runs with no value. An optional member or a field hidden this way is listed as information, and so is an argument with `required: :nullable` |
 | `:undeclared_version` | `added:` or `removed:` names a label that is not in `versions:` |
 | `:outside_lifecycle` | A served version lists a type, field, argument, enum value or membership outside its lifecycle: your own `visible?` answers before the plugin's, or graphql-ruby serves it without asking. A client of that version gets it |
 | `:unchecked` | Asking the member raised something else (an app `visible?` that needs a user, for example): it was not checked |
 
-`ok?` means: no query of a served version is refused, and no served version lists a member outside its lifecycle. It does not check yet, and the report says so: members hidden in a version because their type is, fields served by a parent or an interface under the Warden, interfaces and unions left with no member, types with no visible field, your own `visible?` methods, defaults of arguments without `Base`, and subscription triggers. A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
+`ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see or a type with nothing in it. Information (an optional member hidden because its type is, the natural way to version a field with its type) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: fields served by a parent or an interface under the Warden, your own `visible?` methods, defaults of arguments without `Base`, and subscription triggers. A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
 
 ### Testing with versioning
 
