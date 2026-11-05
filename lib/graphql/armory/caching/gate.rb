@@ -28,6 +28,10 @@ module GraphQL
           :set_sentry_transaction_name, :tracing_fallback_transaction_name
         ].freeze
 
+        # Covered keys graphql-ruby itself writes during a request: `Execution::Next.run_all` sets this marker after
+        # building each query. Its value is the engine, which is in the key, so that write never makes an answer stale.
+        WRITTEN_BY_ENGINE = %i[__graphql_execute_next].freeze
+
         DEFAULT_ON_STORE_ERROR = ->(error, _query) { warn("graphql-armory cache store failed, query runs uncached: #{error.class}") }
 
         # Wires the real dependencies from the checked `use` options (`Integration::Settings#to_h`). `digester:` is the
@@ -119,6 +123,7 @@ module GraphQL
             public: Set.new(always).freeze,
             viewer: Set.new(always + [viewer_key].compact).freeze
           }.freeze
+          @write_guarded = @covered.transform_values { |keys| (keys - WRITTEN_BY_ENGINE).freeze }.freeze
         end
 
         # One Decision per query, in order: hit (answered: `RecordKeys.hit_result` holds its Result), miss (run it,
@@ -269,7 +274,8 @@ module GraphQL
           return [:rescued] if RecordKeys.rescued?(query.context)
 
           recorder = RecordKeys.recorder(query.context) || Recorder::Null.new
-          checked = StoreCheck.recorder(recorder, @covered.fetch(decision.key.scope))
+          scope = decision.key.scope
+          checked = StoreCheck.recorder(recorder, @covered.fetch(scope), write_guarded: @write_guarded.fetch(scope))
           return checked if checked
           return [:policy_consulted] if decision.key.scope == :public && RecordKeys.viewer_dependent?(query.context)
 

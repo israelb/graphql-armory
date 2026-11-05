@@ -39,11 +39,12 @@ module GraphQL
 
           # The context reads and writes the recorder saw, against the keys the cache key covers. Answers
           # `[reason, key name]`, or nil. Only a Symbol key is named: the app's own key, never one a client chose.
-          def recorder(recorder, covered)
+          # `write_guarded` is the covered set a write must not touch (graphql-ruby's own writes left out).
+          def recorder(recorder, covered, write_guarded: covered)
             uncovered = recorder.uncovered(covered)
             return [:context_read, nameable(uncovered.first)] unless uncovered.empty?
 
-            written = recorder.forbidden_writes(covered)
+            written = recorder.forbidden_writes(write_guarded)
             return [:context_written, nameable(written.first)] unless written.empty?
 
             nil
