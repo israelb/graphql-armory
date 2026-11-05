@@ -11,6 +11,7 @@ module GraphQL
           groups = {}
           multiplex.queries.each do |query|
             next unless invalid?(query, limiter)
+            next if Settings.delivery?(query)
 
             # Who pays does not change any answer: the response cache does not count these reads (Caching.neutral).
             limits = Caching.neutral(query.context) { Settings.limits_for(limit, Array(Settings.key_for(reader, query)), query) }

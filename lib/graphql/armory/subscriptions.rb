@@ -24,12 +24,10 @@ require "graphql/armory/subscriptions/transport"
 require "graphql/armory/subscriptions/http"
 require "graphql/armory/subscriptions/controls"
 
-# Added when the units are integrated (each unit adds its own lines here, after this comment):
-#
-#   require "graphql/armory/subscriptions/core"          # U1: the GraphQL::Subscriptions subclass, `use`, `build`
-#   require "graphql/armory/subscriptions/audit"         # U1
-#   require "graphql/armory/subscriptions/webhook_app"   # U1
-require "graphql/armory/subscriptions/memory_store"  # U2
-require "graphql/armory/subscriptions/redis_store"   # U2
-require "graphql/armory/subscriptions/pusher"        # U3
-require "graphql/armory/subscriptions/ably"          # U4
+require "graphql/armory/subscriptions/core"
+require "graphql/armory/subscriptions/audit"
+require "graphql/armory/subscriptions/webhook_app"
+require "graphql/armory/subscriptions/memory_store"
+require "graphql/armory/subscriptions/redis_store"
+require "graphql/armory/subscriptions/pusher"
+require "graphql/armory/subscriptions/ably"
