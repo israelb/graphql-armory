@@ -30,7 +30,8 @@ module GraphQL
 
         # Covered keys graphql-ruby itself writes during a request: `Execution::Next.run_all` sets this marker after
         # building each query. Its value is the engine, which is in the key, so that write never makes an answer stale.
-        WRITTEN_BY_ENGINE = %i[__graphql_execute_next].freeze
+        ENGINE_MARKER = :__graphql_execute_next
+        WRITTEN_BY_ENGINE = [ENGINE_MARKER].freeze
 
         DEFAULT_ON_STORE_ERROR = ->(error, _query) { warn("graphql-armory cache store failed, query runs uncached: #{error.class}") }
 
@@ -156,7 +157,8 @@ module GraphQL
           entry = Entry.new(key: key.digest, data: values_of(result)["data"], stored_at: lookup.now, ttl: ttl, scope: scope,
                             seq: lookup.seq, epoch: lookup.epoch, tags: tags, cost: cost, copy: false)
           # Sealed at once: the run's answer is not copied, and the app's later changes to it never reach the store.
-          blob = @codec.encode(entry, key.digest)
+          blob = encode(query, entry, key, scope)
+          return blob if blob.is_a?(Symbol)
           return skip(query, :too_large, scope) if blob.bytesize > @max_entry_bytes
 
           write(query, key, blob, entry, scope)
@@ -278,6 +280,7 @@ module GraphQL
           scope = decision.key.scope
           checked = StoreCheck.recorder(recorder, @covered.fetch(scope), write_guarded: @write_guarded.fetch(scope))
           return checked if checked
+          return [:context_written, ENGINE_MARKER] unless engine_marker_kept?(query.context)
           return [:policy_consulted] if decision.key.scope == :public && RecordKeys.viewer_dependent?(query.context)
 
           nil
@@ -305,6 +308,14 @@ module GraphQL
           :store_failed
         end
 
+        # The sealed entry, or `:unencodable` when the answer cannot be written as JSON (invalid UTF-8, nesting too
+        # deep): the query already ran, and its answer is returned uncached.
+        def encode(query, entry, key, scope)
+          @codec.encode(entry, key.digest)
+        rescue JSON::GeneratorError, JSON::NestingError, EncodingError
+          skip(query, :unencodable, scope)
+        end
+
         def skip(query, reason, scope, key = nil)
           @signals.skipped(query, reason, scope: scope, key: key)
           reason
@@ -319,6 +330,13 @@ module GraphQL
           end
         end
 
+        # The engine marker's write is exempt only while it holds what `Execution::Next` writes (true) or nothing: any
+        # other value was written by the app, and could carry an input the key does not hold.
+        def engine_marker_kept?(context)
+          value = Caching.neutral(context) { context[ENGINE_MARKER] }
+          value.nil? || value == true
+        end
+
         # Whether this query's hits must be charged a recorded cost. Looked up per query: Points may be `use`d after
         # Caching, and a subclass may add its own limiter.
         def costed?(query)
@@ -327,12 +345,18 @@ module GraphQL
           !@charge.respond_to?(:limited?) || @charge.limited?(query)
         end
 
-        # The added public methods of a context class the app did not declare, memoized per class.
+        # The added public methods of a context class the app did not declare. Memoized per class with its methods'
+        # signature, so a method added after the class's first query is still counted.
         def undeclared_methods(klass)
-          @undeclared.fetch(klass) do
-            found = klass.is_a?(Class) && klass <= GraphQL::Query::Context ? ContextMethods.undeclared(klass, @context_methods) : []
-            @undeclared_lock.synchronize { @undeclared[klass] = found.freeze }
-          end
+          return [] unless klass.is_a?(Class) && klass <= GraphQL::Query::Context
+
+          signature = ContextMethods.signature(klass)
+          memo = @undeclared[klass]
+          return memo.last if memo && memo.first == signature
+
+          found = ContextMethods.undeclared(klass, @context_methods).freeze
+          @undeclared_lock.synchronize { @undeclared[klass] = [signature, found].freeze }
+          found
         end
 
         # Whether the keyer's `call` takes the engine: a keyword `engine:`, `**`, or `*arguments` (a Substitute).
