@@ -141,6 +141,148 @@ module GraphQL
           end
         end
 
+        # A schema that evolves from 2024-06-01 to 2025-01-01 with one change of each kind `Diff` classifies, under
+        # `Schema::Visibility` or the legacy Warden. `Evolution::BREAKING`, `DANGEROUS` and `SAFE` list what `Diff` answers.
+        #
+        # - Money changes shape (a type twin: `cents`, then `amount` and `currency`); Ref changes kind (a scalar, then an
+        #   object); Customer is renamed Client; Receipt leaves and Contract arrives (both in the Document union);
+        #   Archivable leaves, and with it Invoice's `archived`.
+        # - Invoice: `amount` removed; `note` String to String! (an output made stricter); `code` String! to String;
+        #   `label` deprecated; `tags` gains a required `after:` and an optional `last:`.
+        # - Status: VOID added, CANCELLED removed. InvoiceFilter: `code` removed, `since` added, a required `kind` added.
+        # - Query.invoices: `first:` default 10 to 20; `page:` Int! to Int; `limit:` Int to Int!.
+        module Evolution
+          FROM = "2024-06-01"
+          TO = "2025-01-01"
+
+          BREAKING = [
+            ["Archivable", "type removed"],
+            ["Customer", "type removed"],
+            ["Document", "member Receipt removed"],
+            ["Invoice", "no longer implements Archivable"],
+            ["Invoice.amount", "field removed"],
+            ["Invoice.archived", "field removed"],
+            ["Invoice.code", "type changed from String! to String"],
+            ["Invoice.tags.after", "required argument added"],
+            ["InvoiceFilter.code", "input field removed"],
+            ["InvoiceFilter.kind", "required input field added"],
+            ["Money.cents", "field removed"],
+            ["Query.customer", "type changed from Customer to Client"],
+            ["Query.invoices.limit", "type changed from Int to Int!"],
+            ["Receipt", "type removed"],
+            ["Ref", "kind changed from SCALAR to OBJECT"],
+            ["Status.CANCELLED", "value removed"],
+          ].freeze
+
+          DANGEROUS = [
+            ["Document", "member Contract added"],
+            ["Invoice.label", "deprecated: Use `number`"],
+            ["Invoice.note", "type changed from String to String!"],
+            ["Query.invoices.first", "default value changed from 10 to 20"],
+            ["Status.VOID", "value added"],
+          ].freeze
+
+          SAFE = [
+            ["Client", "type added"],
+            ["Contract", "type added"],
+            ["Invoice.tags.last", "argument added"],
+            ["InvoiceFilter.since", "input field added"],
+            ["Money.amount", "field added"],
+            ["Money.currency", "field added"],
+            ["Query.invoices.page", "type changed from Int! to Int"],
+          ].freeze
+
+          def self.example(visibility: :visibility, base: GraphQL::Schema)
+            base_argument = Argument.example
+            base_field = Class.new(GraphQL::Schema::Field) { include Versioning::Base; argument_class(base_argument) }
+            base_object = Class.new(GraphQL::Schema::Object) { include Versioning::Base; field_class(base_field) }
+            base_value = EnumValue.example
+            base_input = Class.new(GraphQL::Schema::InputObject) { include Versioning::Base; argument_class(base_argument) }
+
+            archivable = Module.new do
+              include GraphQL::Schema::Interface
+              include Versioning::Base
+              graphql_name "Archivable"
+              field_class(base_field)
+              lifecycle removed: TO
+              field :archived, GraphQL::Types::Boolean, null: false
+            end
+            money_v1 = Class.new(base_object) { graphql_name "Money"; lifecycle removed: TO; field :cents, Integer, null: false }
+            money_v2 = Class.new(base_object) do
+              graphql_name "Money"
+              lifecycle added: TO
+              field :amount, String, null: false
+              field :currency, String, null: false
+            end
+            status = Class.new(GraphQL::Schema::Enum) do
+              include Versioning::Base
+              graphql_name "Status"
+              enum_value_class(base_value)
+              value "PAID"
+              value "VOID", added: TO
+              value "CANCELLED", removed: TO
+            end
+            invoice = Class.new(base_object) do
+              graphql_name "Invoice"
+              implements archivable
+              field :number, String, null: false
+              field :total, money_v1, null: false, removed: TO
+              field :total, money_v2, null: false, added: TO
+              field :amount, Integer, null: false, removed: TO
+              field :note, String, null: true, removed: TO
+              field :note, String, null: false, added: TO
+              field :code, String, null: false, removed: TO
+              field :code, String, null: true, added: TO
+              field :label, String, null: true, removed: TO
+              field :label, String, null: true, added: TO, deprecation_reason: "Use `number`"
+              field :status, status, null: false
+              field :tags, [String], null: false do
+                argument :first, Integer, required: false
+                argument :after, String, required: true, added: TO
+                argument :last, Integer, required: false, added: TO
+              end
+            end
+            receipt = Class.new(base_object) { graphql_name "Receipt"; lifecycle removed: TO; field :number, String, null: false }
+            contract = Class.new(base_object) { graphql_name "Contract"; lifecycle added: TO; field :party, String, null: false }
+            document = Class.new(GraphQL::Schema::Union) do
+              graphql_name "Document"
+              possible_types invoice, receipt, contract
+            end
+            filter = Class.new(base_input) do
+              graphql_name "InvoiceFilter"
+              argument :status, status, required: false
+              argument :code, String, required: false, removed: TO
+              argument :since, String, required: false, added: TO
+              argument :kind, String, required: true, added: TO
+            end
+            ref_v1 = Class.new(GraphQL::Schema::Scalar) { include Versioning::Base; graphql_name "Ref"; lifecycle removed: TO }
+            ref_v2 = Class.new(base_object) { graphql_name "Ref"; lifecycle added: TO; field :id, String, null: false }
+            customer = Class.new(base_object) { graphql_name "Customer"; lifecycle removed: TO; field :name, String, null: false }
+            client = Class.new(base_object) { graphql_name "Client"; lifecycle added: TO; field :name, String, null: false }
+
+            query = Class.new(base_object) do
+              graphql_name "Query"
+              field :invoice, invoice, null: false
+              field :document, document, null: true
+              field :ref, ref_v1, null: true, removed: TO
+              field :ref, ref_v2, null: true, added: TO
+              field :customer, customer, null: true, removed: TO
+              field :customer, client, null: true, added: TO
+              field :invoices, [String], null: false do
+                argument :filter, filter, required: false
+                argument :first, Integer, required: false, default_value: 10, removed: TO
+                argument :first, Integer, required: false, default_value: 20, added: TO
+                argument :page, Integer, required: true, removed: TO
+                argument :page, Integer, required: false, added: TO
+                argument :limit, Integer, required: false, removed: TO
+                argument :limit, Integer, required: true, added: TO
+              end
+            end
+
+            Schema.example(visibility: visibility, query: query, base: base)
+          end
+        end
+
         # The schema over Query.example and Versions.example, under `Schema::Visibility` (`visibility: :visibility`) or the
         # legacy `Schema::Warden` (`visibility: :warden`).
         module Schema

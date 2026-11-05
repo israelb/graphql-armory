@@ -22,5 +22,17 @@ namespace :graphql_armory do
       desc "Lists what a query of each served version would have refused, and members a version serves outside their lifecycle (exit 1 if any)"
       task :audit, [:schema], &versions_action
     end
+
+    dump_action = GraphQL::Armory::Versioning::Dump::Command::RAKE_ACTION
+    unless Rake::Task.task_defined?("graphql_armory:versions:dump") && Rake::Task["graphql_armory:versions:dump"].actions.include?(dump_action)
+      desc "Writes each served version's SDL to <dir>/<label>.graphql, plus <dir>/latest.graphql (dir defaults to schema)"
+      task :dump, [:schema, :dir], &dump_action
+    end
+
+    diff_action = GraphQL::Armory::Versioning::Diff::Command::RAKE_ACTION
+    unless Rake::Task.task_defined?("graphql_armory:versions:diff") && Rake::Task["graphql_armory:versions:diff"].actions.include?(diff_action)
+      desc "Lists what changes between two served versions: breaking, dangerous and safe (exit 1 if anything breaks)"
+      task :diff, [:schema, :from, :to], &diff_action
+    end
   end
 end
