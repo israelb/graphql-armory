@@ -6,12 +6,12 @@
 
 Open-source extensions for [graphql-ruby](https://github.com/rmosolgo/graphql-ruby), built on its public extension points: no fork, no monkey patching. One gem, one module at a time; each module has its own page in [`docs/`](docs) with the problem it solves, how to use it, and its limits.
 
-> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre14`). The API may change before 1.0.
+> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre15`). The API may change before 1.0.
 
 ## Install
 
 ```ruby
-gem "graphql-armory", "~> 0.1.0.pre14"  # a prerelease: `gem install graphql-armory --pre`
+gem "graphql-armory", "~> 0.1.0.pre15"  # a prerelease: `gem install graphql-armory --pre`
 gem "pundit"      # or "cancancan", for the authorization module
 ```
 
