@@ -34,7 +34,7 @@ RSpec.describe "GraphQL::Armory::Caching contracts" do
       expect { caching::Key.new(digest: hex, scope: :public, viewer_tag: other_hex) }.to raise_error(ArgumentError)
     end
 
-    it "round-trips an Entry through JSON, frozen all the way down" do
+    it "round-trips an Entry through JSON; a built entry is frozen all the way down, a parsed one owns its fresh tree" do
       entry = caching::Entry.new(key: hex, data: { "products" => [{ "name" => "Lamp" }] }, stored_at: 5_000, ttl: 60,
                                  scope: :public, seq: 3, epoch: "e1", tags: [other_hex], cost: 4)
       parsed = caching::Entry.parse(entry.to_json_string)
@@ -42,7 +42,8 @@ RSpec.describe "GraphQL::Armory::Caching contracts" do
       expect(parsed.data).to eq(entry.data)
       expect([parsed.key, parsed.stored_at, parsed.ttl, parsed.scope, parsed.seq, parsed.epoch, parsed.tags, parsed.cost])
         .to eq([hex, 5_000, 60, :public, 3, "e1", [other_hex], 4])
-      expect(parsed.data["products"].first["name"]).to be_frozen
+      expect(entry.data["products"].first["name"]).to be_frozen
+      expect(parsed.data["products"].first).not_to be_frozen
       expect(parsed.expires_at).to eq(65_000)
       expect(parsed.expired?(65_000)).to be(true)
       expect(parsed.age(17_500)).to eq(12)

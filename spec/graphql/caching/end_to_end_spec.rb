@@ -21,6 +21,15 @@ RSpec.describe "GraphQL::Armory::Caching end to end" do
 
   def signals(name) = recorded.select { |signal, _| signal == name }.map(&:last)
 
+  it "answers a hit the app can change like a run's answer, without changing the next hit" do
+    run("names")
+    hit = run("names")
+    hit["data"]["products"].first["name"] = "Changed"
+
+    expect(run("names")["data"]["products"].first["name"]).not_to eq("Changed")
+    expect(signals(:cache_hit).size).to eq(2)
+  end
+
   it "stores a public answer on the first request and serves it on the second, unchanged" do
     first = run("names")
     second = run("names", viewer: caching::Controls::Viewer.example(id: 8))

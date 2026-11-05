@@ -154,7 +154,8 @@ module GraphQL
 
           tags = (decision.policy.tags.map { |tag| @digester.(tag) } + [key.viewer_tag].compact).uniq.sort
           entry = Entry.new(key: key.digest, data: values_of(result)["data"], stored_at: lookup.now, ttl: ttl, scope: scope,
-                            seq: lookup.seq, epoch: lookup.epoch, tags: tags, cost: cost)
+                            seq: lookup.seq, epoch: lookup.epoch, tags: tags, cost: cost, copy: false)
+          # Sealed at once: the run's answer is not copied, and the app's later changes to it never reach the store.
           blob = @codec.encode(entry, key.digest)
           return skip(query, :too_large, scope) if blob.bytesize > @max_entry_bytes
 

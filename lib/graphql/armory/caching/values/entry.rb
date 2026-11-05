@@ -32,7 +32,10 @@ module GraphQL
 
         attr_reader :key, :data, :stored_at, :ttl, :scope, :seq, :epoch, :tags, :cost
 
-        def initialize(key:, data:, stored_at:, ttl:, scope:, seq:, epoch:, tags:, cost: nil)
+        # `data` is copied and deep-frozen, unless `copy: false`: then it is used as given, for a tree nobody else
+        # holds or changes while the entry is in use (one `parse` just built, or a run's answer sealed at once). A
+        # hit answers the parsed tree itself, unfrozen like a run's, without copying it.
+        def initialize(key:, data:, stored_at:, ttl:, scope:, seq:, epoch:, tags:, cost: nil, copy: true)
           raise ArgumentError, "Entry key: must be 64 hex characters" unless key.is_a?(String) && Key::HEX.match?(key)
           raise ArgumentError, "Entry data: must be a Hash with String keys" unless data.is_a?(Hash) && data.keys.all?(String)
           raise ArgumentError, "Entry stored_at: must be Integer milliseconds" unless stored_at.is_a?(Integer) && stored_at >= 0
@@ -44,7 +47,7 @@ module GraphQL
           raise ArgumentError, "Entry cost: must be a non-negative Integer or nil" unless cost.nil? || (cost.is_a?(Integer) && cost >= 0)
 
           @key = key.dup.freeze
-          @data = deep_freeze(data)
+          @data = copy ? deep_freeze(data) : data
           @stored_at = stored_at
           @ttl = ttl
           @scope = scope
@@ -55,7 +58,8 @@ module GraphQL
           freeze
         end
 
-        # Parses what `to_json_string` wrote. Raises `Rejected` (:format) on anything else.
+        # Parses what `to_json_string` wrote. Raises `Rejected` (:format) on anything else. The data is the tree this
+        # parse built, owned by the entry, so it is not copied.
         def self.parse(string)
           raise Rejected, :format unless string.is_a?(String)
 
@@ -63,7 +67,7 @@ module GraphQL
           raise Rejected, :format unless hash.is_a?(Hash) && hash["v"] == FORMAT && SCOPES.key?(hash["scope"])
 
           new(key: hash["k"], data: hash["data"], stored_at: hash["at"], ttl: hash["ttl"], scope: SCOPES.fetch(hash["scope"]),
-              seq: hash["seq"], epoch: hash["epoch"], tags: hash["tags"], cost: hash["cost"])
+              seq: hash["seq"], epoch: hash["epoch"], tags: hash["tags"], cost: hash["cost"], copy: false)
         rescue JSON::ParserError, ArgumentError
           raise Rejected, :format
         end
