@@ -496,7 +496,7 @@ RSpec.describe "Versioning audit 3a: verification probes" do
         end
       end
 
-      it "security S31: Warden fallback to an interface's definition (documented as not checked)" do
+      it "security S31: Warden fallback to an interface's definition (reported as :fallback)" do
         b = bases
         named = Module.new { include b[:interface]; graphql_name "Totaled"; field :total, Integer, null: true }
         inv = Class.new(b[:object]) { graphql_name "Invoice"; implements named; field :total, Integer, null: true, removed: "2025-01-01" }
@@ -505,7 +505,8 @@ RSpec.describe "Versioning audit 3a: verification probes" do
         result = run(schema, "{ invoice { total } }", VA_NEWV, root: obj(invoice: obj(total: 7)))
         report = audit!(schema)
         warn "S31 #{vis}: new=#{result} ok?=#{report.ok?} #{report.problems.map(&:to_s)}"
-        expect(report.to_s).to include("under the Warden")
+        expect(kinds(report)).to include([:fallback, "Invoice.total"])
+        expect(report.ok?).to be(false)
       end
 
       it "security S32: a type outside its lifecycle reachable only by name" do

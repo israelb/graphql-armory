@@ -47,7 +47,9 @@ RSpec.describe "GraphQL::Armory::Versioning::Audit against a request" do
       type_membership_class(membership)
     end
     union = Class.new(GraphQL::Schema::Union) { include mod; type_membership_class(membership) }
-    { argument: argument, field: field, object: object, input: input, interface: interface, union: union }
+    value = Class.new(GraphQL::Schema::EnumValue) { include mod }
+    enum = Class.new(GraphQL::Schema::Enum) { include mod; enum_value_class(value) }
+    { argument: argument, field: field, object: object, input: input, interface: interface, union: union, enum: enum }
   end
 
   %i[warden visibility].each do |visibility|
@@ -176,6 +178,62 @@ RSpec.describe "GraphQL::Armory::Versioning::Audit against a request" do
           expected = visibility == :visibility ? { "__type" => { "possibleTypes" => [] } } : { "__type" => nil }
           expect(seen).to eq("data" => expected)
           expect(paths(audit(schema), :empty)).to eq(["Doc"])
+        end
+      end
+
+      describe ":fallback" do
+        it "reports an object's field hidden in a version while its interface's lives there" do
+          b = bases
+          totaled = Module.new { include b[:interface]; graphql_name "Totaled"; field :id, GraphQL::Types::ID, null: true; field :total, Integer, null: true }
+          invoice = Class.new(b[:object]) { graphql_name "Invoice"; implements totaled; field :total, Integer, null: true, removed: "2025-01-01" }
+          query = Class.new(b[:object]) { graphql_name "Query"; field :invoice, invoice, null: true }
+          schema = schema_over(query, visibility)
+
+          if visibility == :warden
+            # The Warden serves Totaled's definition where Invoice's own is removed.
+            expect(run(schema, "{ invoice { total } }", new, root: record(invoice: record(total: 7)))).to eq("data" => { "invoice" => { "total" => 7 } })
+          else
+            # Schema::Visibility drops the name: Invoice no longer has a field its interface declares.
+            fields = ->(name) { run(schema, %({ __type(name: "#{name}") { fields { name } } }), new).dig("data", "__type", "fields").map { |field| field["name"] } }
+            expect([fields.("Totaled"), fields.("Invoice")]).to eq([%w[id total], %w[id]])
+          end
+          report = audit(schema)
+          expect(paths(report, :fallback)).to eq(["Invoice.total"])
+          message = visibility == :warden ? /2025-01-01.*serves Totaled's definition/ : /Invoice no longer has total in 2025-01-01, which Totaled declares/
+          expect(found(report, :fallback).first.message).to match(message)
+          expect(report.ok?).to be(false)
+        end
+
+        it "reports an argument an object's field drops in a version while its interface's field takes it" do
+          b = bases
+          searchable = Module.new do
+            include b[:interface]
+            graphql_name "Searchable"
+            field :search, String, null: true do
+              argument :term, String, required: false
+              argument :page, Integer, required: false
+            end
+          end
+          catalog = Class.new(b[:object]) do
+            graphql_name "Catalog"
+            implements searchable
+            field :search, String, null: true do
+              argument :term, String, required: false
+              argument :page, Integer, required: false, removed: "2025-01-01"
+            end
+          end
+          query = Class.new(b[:object]) { graphql_name "Query"; field :catalog, catalog, null: true }
+          schema = schema_over(query, visibility)
+
+          arguments = lambda do |name|
+            fields = run(schema, %({ __type(name: "#{name}") { fields { args { name } } } }), new).dig("data", "__type", "fields")
+            fields.first["args"].map { |argument| argument["name"] }
+          end
+          expect([arguments.("Searchable"), arguments.("Catalog")]).to eq([%w[term page], %w[term]])
+          report = audit(schema)
+          expect(paths(report, :fallback)).to eq(["Catalog.search.page"])
+          expect(found(report, :fallback).first.message).to match(/2025-01-01.*Searchable\.search takes it/)
+          expect(report.ok?).to be(false)
         end
       end
 

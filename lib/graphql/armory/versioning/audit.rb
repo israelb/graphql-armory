@@ -14,8 +14,7 @@ module GraphQL
       # from a user (Authorization's `visible_when:`) never hides a refusal. Nothing it does records a signal.
       class Audit
         # What the report does not check yet: it says so, so `ok?` never claims more than was checked.
-        NOT_CHECKED = "fields served by a parent or an interface under the Warden, your own visible? methods, defaults of " \
-                      "arguments without Base, and subscription triggers"
+        NOT_CHECKED = "your own visible? methods, defaults of arguments without Base, and subscription triggers"
 
         # `location` is "path:line" where the app wrote what the problem is about, or nil. `severity` is nil for a problem,
         # or :information for something listed that changes nothing a client relies on: `ok?` ignores it.
@@ -197,6 +196,75 @@ module GraphQL
             guarded(findings, directive) { hidden_arguments(view, directive, version, findings) }
           end
           guarded(findings, "Schema") { unlisted_abstract(view, version, definitions, listed, findings) }
+          listed.each do |type|
+            next unless type.kind.fields?
+
+            guarded(findings, type) { fallbacks(view, type, version, findings) }
+            guarded(findings, type) { contract_arguments(view, type, version, findings) } if type.kind.object?
+          end
+        end
+
+        # A field whose nearest definition V hides while a farther one (a parent's or an interface's) lives in V: the Warden
+        # serves the farther one, `Schema::Visibility` drops the name. graphql-ruby walks the ancestors in order, interfaces
+        # before the superclass, skipping an interface whose membership V hides.
+        def fallbacks(view, type, version, findings)
+          levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) && member_in?(type, ancestor, version) }
+          levels.flat_map { |level| level.own_fields.keys }.uniq.each do |name|
+            defining = levels.select { |level| level.own_fields.key?(name) }
+            next if defining.size < 2
+
+            nearest = Array(defining.first.own_fields[name])
+            served = view.field(type, name)
+            next if nearest.any? { |field| field.equal?(served) } || nearest.any? { |field| live?(field, version) }
+
+            farther = defining.drop(1).flat_map { |level| Array(level.own_fields[name]) }.select { |field| live?(field, version) }
+            next if farther.empty?
+
+            path = "#{type.graphql_name}.#{name}"
+            hidden = Integration.display_name(defining.first)
+            if served
+              findings.problem(:fallback, path, "#{label(version)} hides #{hidden}'s definition, so the Warden serves " \
+                                                "#{Integration.display_name(served.owner)}'s definition instead, with its type, " \
+                                                "arguments and resolver", at: nearest.first)
+            else
+              interface = farther.map(&:owner).find { |owner| owner.respond_to?(:kind) && owner.kind.interface? && view.visible?(owner) }
+              why = if interface
+                      "which #{interface.graphql_name} declares: a schema with it is invalid"
+                    else
+                      "though #{Integration.display_name(farther.first.owner)}'s definition lives there: the Warden would serve that one"
+                    end
+              findings.problem(:fallback, path, "#{type.graphql_name} no longer has #{name} in #{label(version)}, #{why}", at: nearest.first)
+            end
+          end
+        end
+
+        # An argument of an interface's field that the object's own field hides in V: the object no longer takes what the
+        # interface declares. Only an argument the object defines and V hides is versioning's doing.
+        def contract_arguments(view, type, version, findings)
+          view.interfaces(type).each do |interface|
+            view.fields(interface).each do |declared|
+              field = view.field(type, declared.graphql_name)
+              next if field.nil? || field.equal?(declared)
+
+              taken = view.arguments(field).map(&:graphql_name)
+              view.arguments(declared).each do |argument|
+                name = argument.graphql_name
+                next if taken.include?(name)
+
+                hidden = field.all_argument_definitions.select { |own| own.graphql_name == name && !Integration.covers?(own, version) }
+                next if hidden.empty?
+
+                findings.problem(:fallback, "#{type.graphql_name}.#{field.graphql_name}.#{name}",
+                                 "#{label(version)} hides it on #{type.graphql_name}.#{field.graphql_name}, though " \
+                                 "#{interface.graphql_name}.#{declared.graphql_name} takes it: a schema with it is invalid", at: hidden.first)
+              end
+            end
+          end
+        end
+
+        # A field's own lifecycle, its owner's and its resolver's cover V.
+        def live?(field, version)
+          [field, field.owner, field.resolver].compact.all? { |member| Integration.lifecycle_of(member).covers?(version) }
         end
 
         def hidden_by_type(view, type, version, findings)
