@@ -3,17 +3,85 @@
 module GraphQL
   module Armory
     module Caching
-      # The operation's policy from its declarations (unit U3). `Null` refuses everything.
+      # Answers what it is told (`answer(value)`) to every call and records the arguments in `calls`.
+      module Answering
+        attr_reader :calls
+
+        def initialize(answer)
+          @answer = answer
+          @calls = []
+        end
+
+        def answer(value)
+          @answer = value
+        end
+
+        def call(*arguments)
+          @calls << arguments
+          @answer
+        end
+      end
+
+      # The operation's policy from its declarations (unit U3): `walk.(query) -> Policy`. `Null` refuses everything.
       class Walk
         class Null
           def call(_query) = Policy.refused(:unconfigured)
         end
+
+        class Substitute
+          include Answering
+
+          def initialize(policy = Policy.refused(:unconfigured)) = super
+        end
       end
 
-      # The request's Key (unit U7). `Null` refuses everything.
+      # The request's Key (unit U7): `keyer.(query, policy) -> Key | Policy.refused(reason)`. `Null` refuses everything.
       class Keyer
         class Null
           def call(_query, _policy) = Policy.refused(:unconfigured)
+        end
+
+        class Substitute
+          include Answering
+
+          def initialize(key = Policy.refused(:unconfigured)) = super
+        end
+      end
+
+      # Serializes and seals entries (unit U1): `codec.encode(entry, key_digest) -> String`,
+      # `codec.decode(string, key_digest) -> Entry`, raising `Entry::Rejected` with its reason.
+      class Codec
+        # Plain JSON with the key check, rejecting with the reason it is told (`reject_with(:decrypt)`); records `calls`.
+        class Substitute
+          attr_reader :calls
+
+          def initialize
+            @calls = []
+            @rejection = nil
+          end
+
+          def reject_with(reason)
+            @rejection = reason
+          end
+
+          def recover
+            @rejection = nil
+          end
+
+          def encode(entry, key_digest)
+            @calls << [:encode, key_digest]
+            entry.to_json_string
+          end
+
+          def decode(string, key_digest)
+            @calls << [:decode, key_digest]
+            raise Entry::Rejected, @rejection if @rejection
+
+            entry = Entry.parse(string)
+            raise Entry::Rejected, :key unless entry.key == key_digest
+
+            entry
+          end
         end
       end
 

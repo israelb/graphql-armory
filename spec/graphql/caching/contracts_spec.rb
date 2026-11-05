@@ -235,6 +235,23 @@ RSpec.describe "GraphQL::Armory::Caching contracts" do
       expect(caching::Charge::Null.new.(nil, 3)).to be_nil
     end
 
+    it "Walk, Keyer and Codec Substitutes answer what they are told" do
+      policy = caching::Policy.cacheable(ttl: 60, scope: :public)
+      key = caching::Key.new(digest: hex, scope: :public)
+      walk = caching::Walk::Substitute.new(policy)
+      keyer = caching::Keyer::Substitute.new(key)
+      codec = caching::Codec::Substitute.new
+      entry = caching::Entry.new(key: hex, data: {}, stored_at: 0, ttl: 60, scope: :public, seq: 0, epoch: "e", tags: [])
+
+      expect(walk.(:query)).to eq(policy)
+      expect(keyer.(:query, policy)).to eq(key)
+      expect(keyer.calls).to eq([[:query, policy]])
+      expect(codec.decode(codec.encode(entry, hex), hex).key).to eq(hex)
+      expect { codec.decode(codec.encode(entry, hex), other_hex) }.to raise_error(caching::Entry::Rejected) { |error| expect(error.reason).to eq(:key) }
+      codec.reject_with(:decrypt)
+      expect { codec.decode("x", hex) }.to raise_error(caching::Entry::Rejected) { |error| expect(error.reason).to eq(:decrypt) }
+    end
+
     it "Charge::Substitute and Gate::Substitute answer what they are told and record what they saw" do
       charge = caching::Charge::Substitute.new
       charge.refuse_with(:over_budget)
