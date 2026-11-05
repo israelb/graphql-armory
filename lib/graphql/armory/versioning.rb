@@ -78,9 +78,10 @@ module GraphQL
       end
 
       # `versions:` the labels, oldest first; `retired:` the oldest ones, no longer served; `default:` what a request with no
-      # version gets: `:latest`, a served label or `:refuse`. `sinks:` and `on_sink_error:` as in Telemetry.
-      def self.use(schema, versions:, default: Gate::UNSET, retired: [], sinks: [], on_sink_error: nil)
-        gate = Gate.build(versions: versions, default: default, retired: retired, sinks: sinks, on_sink_error: on_sink_error)
+      # version gets: `:latest`, a served label or `:refuse`. `sinks:` and `on_sink_error:` as in Telemetry. `own_checks:` names
+      # the app's own `visible?` methods the audit does not report, each with the reason it is kept.
+      def self.use(schema, versions:, default: Gate::UNSET, retired: [], sinks: [], on_sink_error: nil, own_checks: {})
+        gate = Gate.build(versions: versions, default: default, retired: retired, sinks: sinks, on_sink_error: on_sink_error, own_checks: own_checks)
 
         if schema.singleton_class.include?(Integration::Guard)
           raise ConfigurationError, "#{schema} already uses Versioning (here or in a parent schema): use it once"
@@ -103,5 +104,7 @@ require "graphql/armory/versioning/gate"
 require "graphql/armory/versioning/integration"
 require "graphql/armory/versioning/view"
 require "graphql/armory/versioning/audit"
+require "graphql/armory/versioning/audit/own_checks"
+require "graphql/armory/versioning/audit/subscription_triggers"
 require "graphql/armory/versioning/audit/command"
 require "graphql/armory/versioning/controls"

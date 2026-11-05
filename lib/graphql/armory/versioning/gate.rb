@@ -14,12 +14,15 @@ module GraphQL
         DATE = /\A\d{4}-\d{2}-\d{2}\z/
 
         # Validates `use`'s settings and wires the real list, policy and telemetry; `use` goes through here.
-        def self.build(versions:, default: UNSET, retired: [], sinks: [], on_sink_error: nil)
+        def self.build(versions:, default: UNSET, retired: [], sinks: [], on_sink_error: nil, own_checks: {})
           check_versions(versions)
           check_retired(versions, retired)
+          check_own_checks(own_checks)
           policy = default_policy(default, versions, retired)
+          declared = own_checks.to_h { |holder, methods| [holder, methods.to_h { |name, reason| [name, reason.dup.freeze] }.freeze] }.freeze
 
-          new(versions: Versions.new(versions, retired: retired), default: policy, telemetry: Telemetry.build(sinks: sinks, on_sink_error: on_sink_error))
+          new(versions: Versions.new(versions, retired: retired), default: policy, telemetry: Telemetry.build(sinks: sinks, on_sink_error: on_sink_error),
+              own_checks: declared)
         end
 
         def self.check_versions(versions)
@@ -42,6 +45,18 @@ module GraphQL
         end
         private_class_method :check_retired
 
+        # The app's own `visible?` methods the audit does not report: `{ Holder => { visible?: "the reason you keep it" } }`.
+        def self.check_own_checks(checks)
+          valid = checks.is_a?(Hash) && checks.all? do |holder, methods|
+            holder.is_a?(Module) && methods.is_a?(Hash) && !methods.empty? &&
+              methods.all? { |name, reason| name == :visible? && reason.is_a?(String) && !reason.strip.empty? }
+          end
+          return if valid
+
+          raise ConfigurationError, "own_checks: must map a class or module to { visible?: \"the reason you keep it\" }, got #{checks.inspect}"
+        end
+        private_class_method :check_own_checks
+
         def self.default_policy(default, versions, retired)
           case default
           when :latest then Default::Latest.new
@@ -60,13 +75,15 @@ module GraphQL
         private_class_method :default_policy
 
         # `new` is inert: it knows no version and refuses every request.
-        def initialize(versions: Versions::Null.new, default: Default::Refuse.new, telemetry: Telemetry.new)
+        def initialize(versions: Versions::Null.new, default: Default::Refuse.new, telemetry: Telemetry.new, own_checks: {})
           @versions = versions
           @default = default
           @telemetry = telemetry
+          @own_checks = own_checks
         end
 
-        attr_reader :versions
+        # The list, and `own_checks:`, for the audit.
+        attr_reader :versions, :own_checks
 
         # The decision for a request, recorded as one signal. `Lookup` calls it once per query.
         def call(context)
@@ -104,6 +121,8 @@ module GraphQL
           end
 
           def versions = Versions::Null.new
+
+          def own_checks = {}
 
           def call(context)
             @contexts << context
