@@ -332,6 +332,7 @@ module GraphQL
         # would ignore the keywords, apply them partly or fail halfway.
         module Implements
           def implements(*interfaces, added: nil, removed: nil, **options)
+            Integration.refuse_deprecated_membership(options, "implements")
             interfaces.each do |interface|
               name = Integration.late_bound_name(interface)
               Integration.mark_late_bound(self, name) if name
@@ -343,9 +344,18 @@ module GraphQL
           end
         end
 
+        # GraphQL cannot deprecate a membership, and graphql-ruby would keep the keyword without a word.
+        def self.refuse_deprecated_membership(options, method)
+          return unless options.key?(:deprecated) || options.key?(:deprecation_reason)
+
+          raise ConfigurationError, "#{method} cannot take deprecated: or deprecation_reason:: GraphQL has no deprecated " \
+                                    "membership. Use removed: instead"
+        end
+
         # The same for a union's `possible_types`. Called with no types, it is graphql-ruby's reader.
         module Members
           def possible_types(*types, added: nil, removed: nil, **options)
+            Integration.refuse_deprecated_membership(options, "possible_types")
             return super(*types, **options) if added.nil? && removed.nil?
 
             Integration.check_possible_types(self, types, added, removed)

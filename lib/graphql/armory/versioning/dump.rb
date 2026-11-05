@@ -33,7 +33,12 @@ module GraphQL
             return unless @path
 
             FileUtils.mkdir_p(@path)
-            File.join(@path, name).tap { |file| File.write(file, text) }
+            file = File.join(@path, name)
+            # A link would send the version's SDL wherever it points.
+            raise ConfigurationError, "#{file} is a symbolic link: the dump writes only plain files in its directory" if File.symlink?(file)
+
+            File.write(file, text)
+            file
           end
 
           # Records what it is asked to write (`written`, name => text) and answers the name; told to fail, it raises

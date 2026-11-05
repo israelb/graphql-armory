@@ -319,8 +319,11 @@ module GraphQL
         def names(missing) = missing.map { |choices| choices.first.path }.join(", ")
 
         # A field's own lifecycle, its owner's and its resolver's cover V.
+        # A definition whose own, owner's or resolver's lifecycle, or whose return type's, leaves the version out is not
+        # served there: graphql-ruby hides a field whose type it hides, and looks further for the name.
         def live?(field, version)
-          [field, field.owner, field.resolver].compact.all? { |member| Integration.lifecycle_of(member).covers?(version) }
+          [field, field.owner, field.resolver].compact.all? { |member| Integration.lifecycle_of(member).covers?(version) } &&
+            Integration.covers?(field, version)
         end
 
         def hidden_by_type(view, type, version, findings)
