@@ -6,12 +6,12 @@
 
 Open-source extensions for [graphql-ruby](https://github.com/rmosolgo/graphql-ruby), built on its public extension points: no fork, no monkey patching. One gem, one module at a time; each module has its own page in [`docs/`](docs) with the problem it solves, how to use it, and its limits.
 
-> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre12`). The API may change before 1.0.
+> **Status: early development.** Prereleases on RubyGems (`0.1.0.pre13`). The API may change before 1.0.
 
 ## Install
 
 ```ruby
-gem "graphql-armory", "~> 0.1.0.pre12"  # a prerelease: `gem install graphql-armory --pre`
+gem "graphql-armory", "~> 0.1.0.pre13"  # a prerelease: `gem install graphql-armory --pre`
 gem "pundit"      # or "cancancan", for the authorization module
 ```
 
@@ -30,7 +30,7 @@ Status: ✅ released, 🚧 in progress, ⬜ not started. Update this table in th
 | 5 | Stable (keyset) connections | ✅ | [docs/keyset-connections.md](docs/keyset-connections.md) | Released in 0.1.0.pre7 (prerelease). `Keyset.build(relation)` per resolver, ActiveRecord only, plain non-null columns of the relation's own table. Base64 cursors refused unless `plain_cursors: true`. No total count. `use` checks the cursor encoder when the schema loads, from 0.1.0.pre10. |
 | 6 | Subscriptions over Pusher / Ably | ⬜ | | Research not started. |
 | 7 | Response caching | ⬜ | | Research not started. |
-| 8 | API versioning | 🚧 | [docs/versioning.md](docs/versioning.md) | Unreleased. Versions per request (`context[:armory_version]`) with refusal codes and a required `default:` policy; `added:`/`removed:` on fields, arguments, enum values, types and memberships, and two definitions of one name to change its shape; `deprecated:` from one version on; an audit (`have_consistent_versions`, `rake graphql_armory:versions:audit`) of what each served version would refuse, serve outside its lifecycle or leave out; a diff of two versions (`have_no_breaking_changes`, `rake graphql_armory:versions:diff`) and a per-version SDL dump; and `profiles: true`, one `Schema::Visibility` profile per version (graphql 2.4.10 or later). |
+| 8 | API versioning | ✅ | [docs/versioning.md](docs/versioning.md) | Released in 0.1.0.pre13 (prerelease). Versions per request (`context[:armory_version]`) with refusal codes and a required `default:` policy; `added:`/`removed:` on fields, arguments, enum values, types and memberships, and two definitions of one name to change its shape; `deprecated:` from one version on; an audit (`have_consistent_versions`, `rake graphql_armory:versions:audit`) of what each served version would refuse, serve outside its lifecycle or leave out; a diff of two versions (`have_no_breaking_changes`, `rake graphql_armory:versions:diff`) and a per-version SDL dump; and `profiles: true`, one `Schema::Visibility` profile per version (graphql 2.4.10 or later). |
 | 9 | `@defer` / `@stream` | ⬜ | | Research not started. |
 | 10 | Dashboard | ⬜ | | Research not started. |
 
