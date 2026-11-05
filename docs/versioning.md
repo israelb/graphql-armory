@@ -118,7 +118,7 @@ class Types::InvoiceFilter < Types::BaseInputObject
 end
 ```
 
-A member lives from `added:` (the first version when absent) up to, not including, `removed:` (still here when absent). A member with neither lives in every version. Every field and enum value of a class that includes `Base` still reads the query's version when graphql-ruby asks whether it is visible; an argument reads it only when it, its default value or the type it `loads:` is versioned. `deprecation_reason:` is graphql-ruby's own and works as always: the member is deprecated in every version it exists in. Deprecating it only from a given version comes in a later part.
+A member lives from `added:` (the first version when absent) up to, not including, `removed:` (still here when absent). A member with neither lives in every version. Every field and enum value of a class that includes `Base` still reads the query's version when graphql-ruby asks whether it is visible; an argument reads it only when it, its default value or the type it `loads:` is versioned. `deprecation_reason:` is graphql-ruby's own and works as always: the member is deprecated in every version it exists in. To deprecate it from a given version on, use `deprecated:` (see "Deprecating").
 
 A versioned argument is the client's to omit in the versions it does not live in, so give its resolver keyword a Ruby default (`def tags(first: 10)`): graphql-ruby never applies the `default_value:` of an argument hidden in the query's version, and calls the resolver without it.
 
@@ -190,6 +190,37 @@ field :total, Types::MoneyV2, null: false, added: "2025-01-01"
 Each version sees one `Money`. Reference each twin by its class: a `GraphQL::Schema::LateBoundType` naming a type with twins raises `ConfigurationError`, since graphql-ruby binds the name to the first class registered with it in every version. Give both twins a common base without a lifecycle; never subclass one twin from the other (the subclass would be refused as wider than its parent). A `resolve_type` answers the twin of the query's version (see "Data outside the version"), and Authorization's audit judges each twin's rule.
 
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
+
+### Deprecating
+
+`deprecated:` with `deprecation_reason:` deprecates a member from one version on. Clients of earlier versions see it as it was, with no `@deprecated`; clients of that version and later ones see the reason in introspection, in the SDL, and in `includeDeprecated: false` lists, which leave it out. It works on fields (of objects, interfaces and mutation payloads), arguments (of fields, resolvers and mutations), input fields and enum values, and combines with `added:` and `removed:`:
+
+```ruby
+class Types::Invoice < Types::BaseObject
+  field :amount, Integer, null: false, deprecated: "2024-06-01", deprecation_reason: "Use `total`",
+                 removed: "2025-01-01"                  # plain up to 2024-06-01, deprecated in 2024-06-01, gone after
+  field :tags, [String], null: false do
+    argument :page, Integer, required: false, deprecated: "2025-01-01", deprecation_reason: "Use `after`"
+  end
+end
+
+class Types::Status < Types::BaseEnum
+  value "CANCELLED", deprecated: "2025-01-01", deprecation_reason: "Use `VOID`"
+end
+```
+
+graphql-ruby's `deprecation_reason` is the same in every version a definition lives in, so `deprecated: D` is written for you as the two definitions of the section above: one living up to `D` with no reason, and one from `D` with it. The `amount` field above is exactly:
+
+```ruby
+field :amount, Integer, null: false, removed: "2024-06-01"
+field :amount, Integer, null: false, added: "2024-06-01", removed: "2025-01-01", deprecation_reason: "Use `total`"
+```
+
+So everything said about two definitions applies: [Authorization](authorization.md)'s audit reads them as one member (a problem with both is listed once), each keeps the field's keywords (its rule, its `resolver:`), lookups with no query raise graphql-ruby's `DuplicateNamesError` on the name (see "Guarantees and limits"), and field definitions need graphql 2.4.9 or later, enum values 2.4.10 or later. A field's block runs once per definition, so the arguments it declares, with their own lifecycles, belong to both. An enum value's Ruby method (`Types::Status.cancelled`) is defined once, by the first definition.
+
+The class that defines the member writes the two definitions, so `deprecated:` needs `Base` in that class (the object, interface, input object, enum, resolver or mutation, or the field class for a field's arguments) as well as in the member's class. It is refused on a subscription's arguments: graphql-ruby's trigger reads them with no version, where two definitions raise.
+
+To test against it, `Versioning::Controls::Deprecations::Query.example(Bases.example)` is a query type with `deprecated:` on each member kind, deprecated from `2025-01-01`, and `Deprecations::Root.example` its root object.
 
 ### Labels
 
@@ -326,11 +357,13 @@ It asks each member with a context that names the version and `armory_full_schem
 
 `include GraphQL::Armory::Versioning::Base` goes in a field, argument or enum value class (a subclass of `GraphQL::Schema::Field`, `Argument` or `EnumValue`); anywhere else it raises `ArgumentError` in this part. It adds `added:` and `removed:` to `field`, `argument` and `value`, each a non-empty String: anything else, or the same label for both, raises `ConfigurationError` when the member is defined. A label `versions:` does not hold, or a `removed:` before its `added:`, raises `ConfigurationError`, naming the member, every time a query asks about it: types load before `use`, so it cannot be checked earlier. `member.armory_lifecycle.to_h` answers `{ added:, removed: }`.
 
+`deprecated:` (a non-empty String naming a version) goes with `deprecation_reason:` on `field` in an object, interface, resolver or mutation class, on `argument` in a field, input object, resolver or mutation class, and on `value` in an enum class, when that class includes `Base`. It defines the member twice, as `removed: D` with no reason and `added: D` with the reason, each keeping the other keywords; the enum value's second definition gets `value_method: false`. It raises `ConfigurationError` when the member is defined: without `deprecation_reason:`, with the label of `added:` or `removed:`, in a class without `Base` (the member's class reports it), on the arguments of a `GraphQL::Schema::Subscription` class, and on a `resolver:` (or `mutation:`, `subscription:`) field whose resolver class has its own `deprecation_reason`, which graphql-ruby would give the field in every version. A `deprecated:` outside `added:`..`removed:` in `versions:` raises the first time a query asks, like any lifecycle out of order.
+
 `include GraphQL::Armory::Versioning::Base` in an object, interface (after `include GraphQL::Schema::Interface`), union, enum, scalar, input object, resolver or mutation class adds the class method `lifecycle added:, removed:`, with the same rules; `Type.armory_lifecycle.to_h` answers it, inherited as described in "How to use it". `GraphQL::Armory::Versioning.types(schema, label, context: {})` answers a `Versioning::View`; `View.new` with nothing answers nothing.
 
 These raise `ConfigurationError` when a query of the schema is built (a `GraphQL::Query` built by hand included), and from `Versioning.types`; a root or `extra_types` changed later is checked again:
 
-- Two definitions of one argument name or enum value on a subscription field's arguments, or in an input object or enum they take: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise.
+- Two definitions of one argument name or enum value on a subscription field's arguments, or in an input object or enum they take: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise. `deprecated:` makes two definitions, so it is refused there too.
 
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.

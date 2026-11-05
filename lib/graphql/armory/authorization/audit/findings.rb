@@ -12,8 +12,13 @@ module GraphQL
           end
 
           # `at:` is what the problem is about (a type, a field, an argument or a method), for its file and line.
+          # Versioning's `deprecated:` writes two definitions of a member from one line: a problem the second one repeats
+          # is listed once.
           def problem(kind, path, message, at: nil)
-            @problems << Report::Problem.new(kind, path, message, Location.of(at))
+            problem = Report::Problem.new(kind, path, message, Location.of(at))
+            return if at.respond_to?(:armory_deprecated_of) && at.armory_deprecated_of && @problems.include?(problem)
+
+            @problems << problem
           end
 
           def problem?(kind, path = nil)
