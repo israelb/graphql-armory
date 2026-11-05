@@ -608,6 +608,7 @@ module GraphQL
           types = nil
           walked = -> { types ||= definitions(schema) }
           checks = []
+          checks << -> { refuse_late_base(walked.(), schema.directives.values) }
           checks << -> { refuse_abstract_loads(walked.()) } if abstract_loads
           checks << -> { refuse_late_bound_twins(walked.(), schema.directives.values) } if late_bound_count.positive?
           checks << -> { refuse_subscription_twins(schema) }
@@ -756,9 +757,51 @@ module GraphQL
           directive.subclasses.reduce(directive.locations) { |locations, subclass| locations | directive_locations(subclass) }
         end
 
+        # A member built before its class included `Base` has none (`refuse_late_base` refuses the schema); the audit reads it
+        # as living everywhere, which is what it could declare, so it reports that refusal instead of failing.
         def self.lifecycle_of(member)
-          member.respond_to?(:armory_lifecycle) ? member.armory_lifecycle : Lifecycle::EVERYWHERE
+          (member.armory_lifecycle if member.respond_to?(:armory_lifecycle)) || Lifecycle::EVERYWHERE
         end
+
+        # A type and everything versioned under it: its fields at every level, their arguments (or an input object's),
+        # an enum's values and its type memberships.
+        def self.members_of(type)
+          members = [type, *Armory::Definitions.fields_at_every_level(type), *arguments_in(type)]
+          members.concat(type.all_enum_value_definitions) if type.kind.enum?
+          members.concat(type.type_memberships) if type.kind.union?
+          members.concat(type.interface_type_memberships.select { |membership| membership.respond_to?(:visible?) }) if type.respond_to?(:interface_type_memberships)
+          members
+        end
+
+        LATE_BASE_LISTED = 5
+
+        # A field, argument, enum value or membership built before its class included `Base` has no lifecycle: its
+        # `visible?` would fail on every query. Refused with the members and what to do.
+        def self.refuse_late_base(types, directives)
+          members = types.flat_map { |type| members_of(type) } + directives.flat_map(&:all_argument_definitions)
+          late = members.uniq.select do |member|
+            (member.is_a?(Member) || member.is_a?(Membership)) && !member.instance_variable_defined?(:@armory_lifecycle)
+          end
+          return if late.empty?
+
+          names = late.first(LATE_BASE_LISTED).map { |member| late_base_name(member) }
+          names << "and #{late.size - LATE_BASE_LISTED} more" if late.size > LATE_BASE_LISTED
+          first = late_base_name(late.first, located: false)
+          raise ConfigurationError, "#{names.join(", ")}: the class of #{first} included GraphQL::Armory::Versioning::Base after #{first} " \
+                                    "was defined, so it has no lifecycle and every query would fail. include Base in the class before " \
+                                    "defining any field, argument or enum value with it (your base field, argument and enum value classes)"
+        end
+
+        def self.late_base_name(member, located: true)
+          name = if member.is_a?(Membership)
+                   "#{member.abstract_type.graphql_name} membership of #{member.object_type.graphql_name}"
+                 else
+                   member.path
+                 end
+          location = located && Location.of(member)
+          location ? "#{name} (#{location})" : name
+        end
+        private_class_method :late_base_name
 
         def self.versioned_type?(type) = !Lifecycle::EVERYWHERE.equal?(lifecycle_of(type))
 

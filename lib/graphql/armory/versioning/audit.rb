@@ -98,7 +98,7 @@ module GraphQL
 
           refused = schema_refusals(schema, findings)
           definitions = Integration.definitions(schema)
-          members = definitions.flat_map { |type| members_of(type) }.uniq
+          members = definitions.flat_map { |type| Integration.members_of(type) }.uniq
           members.concat(schema.directives.values.flat_map(&:all_argument_definitions))
           undeclared(schema, members, findings)
           guarded(findings, "Schema") { OwnChecks.(schema, definitions, members, findings) }
@@ -140,14 +140,6 @@ module GraphQL
             findings.problem(:refused, "Schema", error.message)
             true
           end.positive?
-        end
-
-        def members_of(type)
-          members = [type, *Armory::Definitions.fields_at_every_level(type), *Integration.arguments_in(type)]
-          members.concat(type.all_enum_value_definitions) if type.kind.enum?
-          members.concat(type.type_memberships) if type.kind.union?
-          members.concat(type.interface_type_memberships.select { |membership| membership.respond_to?(:visible?) }) if type.respond_to?(:interface_type_memberships)
-          members
         end
 
         # A label no version has fails the member's check whenever it is asked: reported even for a member no query asks.
