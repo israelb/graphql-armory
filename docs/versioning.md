@@ -339,6 +339,74 @@ It asks each member with a context that names the version and `armory_full_schem
 
 `ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see, a type with nothing in it, or a field or argument that another definition of its name serves or that an interface still declares; no `visible?` of yours answers before the plugin's undeclared; no default names a value or input field its version does not have; and no subscription trigger breaks on an argument that differs between versions. Information (an optional member hidden because its type is, the natural way to version a field with its type, a declared `visible?`, a subscription field outside the `default:` version) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: whether a type's field or argument in a version has a type its interface's definition allows (covariance). A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
 
+### Evolving a version
+
+A change reaches clients in four steps. Each one is a new label at the end of `versions:` (or a lifecycle that names one you already have), and older clients keep what they had until their version is retired:
+
+1. **Add.** Give the new member `added: "2025-01-01"`. Older versions never see it.
+2. **Deprecate.** `deprecation_reason:` labels the member in every version it lives in; `deprecated:` labels it from one version on (see "Deprecating"). Clients still get it.
+3. **Remove.** Give it `removed: "2025-06-01"`: clients of the versions before keep it, and only a client that moves to 2025-06-01 loses it. To change a member's shape instead, give it a twin (see "How to use it").
+4. **Retire.** Once no client asks for the oldest versions (`:version_served` for them reaches zero), move them to `retired:`. A member whose `removed:` is the oldest served version or earlier is now served nowhere: delete it, and delete a label from `versions:` once nothing names it.
+
+Two tools show what each step changes. The dump writes each served version's SDL to a file, so a pull request shows every version's schema change line by line:
+
+```sh
+bin/rake "graphql_armory:versions:dump[AppSchema,schema]"   # schema/2024-06-01.graphql, schema/2025-01-01.graphql, schema/latest.graphql
+```
+
+```ruby
+GraphQL::Armory::Versioning::Dump.(AppSchema, "schema")      # the paths it wrote
+```
+
+Commit the directory, and in CI run the dump and then `git diff --exit-code schema/` to fail a build whose dumps are out of date. Each file is `to_definition(context: { armory_version: label, armory_full_schema: true })`, so Authorization's `visible_when:` hides nothing from it; `latest.graphql` is the latest version's. Retired versions are not written, and the file of a version you retire stays until you delete it. Every SDL is printed before the first file is written. A label becomes a file name, so the dump refuses (`ConfigurationError`, writing nothing) a label with a slash, a backslash or a NUL, one that starts with a dot, `latest` in any case, and two labels that differ only by case.
+
+The diff says what changes between two served versions for a client built against the first:
+
+```ruby
+result = GraphQL::Armory::Versioning::Diff.(AppSchema, from: "2024-06-01", to: "2025-01-01")
+result.breaking?    # true when a client of 2024-06-01 can break on 2025-01-01
+puts result
+```
+
+```sh
+bin/rake "graphql_armory:versions:diff[AppSchema,2024-06-01,2025-01-01]"   # prints it; exit 1 when something breaks
+```
+
+```ruby
+# spec/graphql/versions_spec.rb, for a version line that should only grow
+require "graphql/armory/versioning/rspec"
+
+RSpec.describe AppSchema do
+  it { is_expected.to have_no_breaking_changes(from: "2024-06-01", to: "2025-01-01") }
+end
+```
+
+```
+From 2024-06-01 to 2025-01-01:
+
+Breaking (2):
+  Invoice.amount: field removed
+  Query.invoices.limit: type changed from Int to Int!
+
+Dangerous (1):
+  Status.VOID: value added
+
+Safe (1):
+  Invoice.tags: field added
+```
+
+| Bucket | What it lists |
+|---|---|
+| Breaking: a query that worked against `from` can fail against `to` | A type, field, argument, input field, enum value or union member removed; a required argument or input field added (non-null with no default), or a default removed from a non-null one; a type changed (see nullability below); an interface no longer implemented; a type's kind changed (a scalar that became an object) |
+| Dangerous: queries still validate, but a client may meet something it does not expect | An enum value, union member or implemented interface added; a deprecation added; a default value added, changed or removed; an output made non-null |
+| Safe | A type, field, optional argument or optional input field added; an input made nullable; a deprecation removed or its reason changed; a description changed |
+
+Nullability follows the GraphQL spec's rules for each direction. An output that becomes nullable (`String!` to `String`) is breaking: the client gets a `null` it never handled. An output that becomes non-null (`String` to `String!`) is dangerous: two fields with one response name must have the same shape to merge, so a query selecting it beside a nullable field of the same name on another type stops validating. An input that becomes non-null (`Int` to `Int!`) is breaking; one that becomes nullable (`Int!` to `Int`) is safe, since a `Int!` variable is still allowed where `Int` is expected. The same rules apply inside lists.
+
+Types are compared by name, as a client sees them. A renamed type is a type removed, a type added, and each field or argument that used it changed, all breaking for the old name's clients. Type twins with one name are compared field by field, and field, argument and enum value twins by their type, default and deprecation, so a twin that changes nothing a client sees lists nothing. Each version is read through `Versioning.types` with `armory_full_schema: true`; pass `context:` when your own `visible?` methods need a user. Directives are not compared. A built-in scalar (`Int`, `Float`, ...) that no member of the newer version uses is listed as a type removed, since a query declaring a variable of that type would no longer validate. Two definitions of one name that one version both sees raise graphql-ruby's `DuplicateNamesError`, as in a query: run the audit first.
+
+`Versioning::Controls::Evolution.example(visibility:)` is a schema with one change of each kind from 2024-06-01 to 2025-01-01, and `Evolution::BREAKING`, `DANGEROUS` and `SAFE` list what the diff answers for it.
+
 ### Testing with versioning
 
 `Versioning::Controls` holds a small schema to test against: `Controls::Versions.example` (`2024-01-15` retired, `2024-06-01` and `2025-01-01` served), `Controls::Schema.example(visibility: :visibility | :warden, default:, base:, sinks:)` with a field of each lifecycle, `Controls::Root.example(resolved)` that records what resolved, and `Controls::Context.example(version:)`. For the other members: `Controls::Argument.example` and `Controls::EnumValue.example` (base classes with `Base`), `Controls::Status.example` and `Controls::InvoiceFilter.example` (an enum and an input object with a value or field of each lifecycle), `Controls::MembersQuery.example` (`invoices(filter:, first:, page:)` and `status`) and `Controls::MembersRoot.example(resolved, status:)`. The decision itself is `Versioning::Gate`: `Gate.build(versions:, default:, retired:)` takes `use`'s settings, `gate.(context)` answers a `Decision` and records its signal, and `gate.resolve(label)` answers it recording nothing. `Gate.new`, with nothing wired, refuses every request. `Gate::Substitute` answers the decision you tell it (`answer(decision)`) and records the contexts and labels it was asked about.
@@ -386,6 +454,15 @@ These raise `ConfigurationError`, naming the member, the first time a query asks
 - A `default_value:` that names an input field or enum value the query's version does not have, by its own lifecycle or its type's. Introspection would print it, and the field would run without it. Use a default that every version of the argument has. An enum value renamed across versions with the same Ruby `value:` counts as one: the default is fine in every version where either name lives. The check runs only on argument classes that include `Base`: an argument class without it can still print, in an older version's SDL, a default naming a value added later; the audit reports it (`:default_value`).
 - A versioned argument or enum value with the same name as one its parent class defines (an input object, enum, resolver or mutation subclass, or a field's own argument over its resolver's). graphql-ruby serves the parent's definition where the local one is hidden. Version the parent's definition, or rename it.
 - On a directive used in the SDL (any location such as `FIELD_DEFINITION` or `OBJECT`, on the directive or on a subclass of it), an argument with a lifecycle, or one whose type reaches a versioned type, enum value or input field: the SDL prints applied directive arguments as the latest version sees them, without asking `visible?`. Arguments of directives used only in queries (`FIELD`, `QUERY` and the rest) can be versioned and can use versioned enums; graphql-ruby's built-in directives cannot be versioned.
+
+`GraphQL::Armory::Versioning::Diff.(schema, from:, to:, context: {})` is `Diff.build(schema, context:).(from:, to:)` and answers a `Diff::Result`: `changes`, `breaking`, `dangerous` and `safe` (each a list of `Diff::Change` with `bucket`, `path` and `message`, breaking first, sorted by path), `breaking?`, `from`, `to`, and `to_s`. A label `versions:` does not hold raises `UnknownVersionError`; a retired one, or a schema that never installed the plugin, `ConfigurationError`. `Diff.new` has no schema and raises `ConfigurationError` instead of answering no changes; `Diff.new(reader)` reads each version through `reader.view(label)`. `Diff::Reader::Substitute` answers the views it is told (`answer(label, view)`) and records `labels`; `Diff::Substitute.new(result)` answers `result` and records `calls`.
+
+`GraphQL::Armory::Versioning::Dump.(schema, dir, context: {})` is `Dump.build(dir).(schema, context:)` and answers the paths it wrote: each served version oldest first, then `latest.graphql`. It creates `dir` when missing. An empty `dir` raises `ConfigurationError`. `Dump.new` writes nothing and answers `[]`; `Dump.new(directory)` writes through `directory.write(name, text)`. `Dump::Directory::Substitute` records `written` (file name => SDL) and, told `fail_with(error)`, raises it.
+
+Rake tasks (Rails loads them; elsewhere `load "tasks/graphql_armory.rake"` from the gem):
+
+- `graphql_armory:versions:dump[Schema,dir]`: writes the files (`dir` defaults to `schema`) and prints each path; exit 1 on a missing or unknown schema or a `ConfigurationError`.
+- `graphql_armory:versions:diff[Schema,from,to]`: prints the diff; exit 1 when something breaks, on a missing argument, an unknown schema or a version it cannot compare.
 
 Context key: `armory_version` (a String naming a served version).
 
