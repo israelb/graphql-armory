@@ -58,7 +58,10 @@ module GraphQL
           ::Kernel.instance_method(:class).bind_call(subject).name
         end
 
+        # A bypass never gets here. The query is marked before the adapter is asked, so an adapter that raises still
+        # leaves it marked: response caching never stores what a policy decided as an answer shared by every viewer.
         def decide(subject, rule, context)
+          Caching::RecordKeys.viewer_dependent!(context)
           answer = adapter.authorized?(adapter.actor(context), subject, rule)
 
           case answer

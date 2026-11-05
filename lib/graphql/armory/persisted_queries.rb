@@ -197,7 +197,14 @@ module GraphQL
           refusal, document = schema.armory_persisted_queries.(options[:context], text, options[:document])
 
           return super if refusal.nil? && document.nil?
-          return super(schema, nil, **options, query: nil, document: document) if refusal.nil?
+
+          if refusal.nil?
+            super(schema, nil, **options, query: nil, document: document)
+            # Only here, the stored operation: in a namespace the client cannot write, unlike `operation_id`. Response
+            # caching serves and stores answers only for queries with this mark.
+            Caching::RecordKeys.persisted!(context)
+            return
+          end
 
           # A refused request fails validation with the refusal as its only error, so neither engine runs it. Its
           # text is never parsed; a document the app built itself is kept, for `Schema.validate`, which validates it

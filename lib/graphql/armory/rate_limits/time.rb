@@ -15,6 +15,9 @@ module GraphQL
       # that spends the last milliseconds finishes, and the next is refused. Soft mode (the default) charges and
       # records but refuses nothing. What happened is in `context[:rate_limit_time]`. An invalid query, which no analyzer
       # sees, takes its share of the time too.
+      #
+      # A response the response cache answers runs nothing, so Time does not bound it: only Points charges a hit. The
+      # key, limit and exemption lookups and the limiter's own records go through `Caching.neutral`.
       class Time
         CONTEXT_KEY = :rate_limit_time
         NAMESPACE = :graphql_armory
@@ -86,7 +89,7 @@ module GraphQL
 
         # Whether this query's client has no limit to charge.
         def exempt?(query)
-          Settings.exempt?(@key, @limit, query)
+          Caching.neutral(query.context) { Settings.exempt?(@key, @limit, query) }
         end
 
         # The refusal for a client with no milliseconds left, or nil to let the operation run (and be charged).
@@ -95,10 +98,10 @@ module GraphQL
             raise ConfigurationError, "this query runs with its own trace (context[:trace]), so Time could never charge it: remove context[:trace] or add trace_with to that trace"
           end
 
-          key = Settings.key_for(@key, query)
+          key = Caching.neutral(query.context) { Settings.key_for(@key, query) }
           return call_several(query, key) if key.is_a?(Array)
 
-          limit = Settings.limit_for(@limit, key, query)
+          limit = Caching.neutral(query.context) { Settings.limit_for(@limit, key, query) }
           if limit.nil?
             record(query, key: key, limit: nil, remaining: nil, limited: false)
             return nil
@@ -108,7 +111,7 @@ module GraphQL
             @store.take(self.class.bucket_key(key), cost: 0, limit: limit, window: @window, force: false)
           rescue StandardError => error
             # Fail open, and still measure: the charge may find the store back.
-            query.context[CONTEXT_KEY] = nil
+            Caching.neutral(query.context) { query.context[CONTEXT_KEY] = nil }
             @on_store_error.call(error, query)
             owe(query, key, limit)
             return nil
@@ -220,7 +223,7 @@ module GraphQL
         # Reads every balance. A refusal charges none, as with one key; otherwise every key owes the whole time. A key whose
         # store fails at the read still owes it, and the others still decide.
         def call_several(query, keys)
-          limits = Settings.limits_for(@limit, keys, query)
+          limits = Caching.neutral(query.context) { Settings.limits_for(@limit, keys, query) }
           if limits.empty?
             record(query, key: keys.first, limit: nil, remaining: nil, limited: false, keys: [])
             return nil
@@ -236,7 +239,7 @@ module GraphQL
             { key: key, limit: limit, remaining: Settings.checked(answer, :take, "the Integer milliseconds left").last }
           end
           if budgets.empty?
-            query.context[CONTEXT_KEY] = nil
+            Caching.neutral(query.context) { query.context[CONTEXT_KEY] = nil }
             first, *rest = limits.to_a
             owe(query, first[0], first[1], others: rest.to_h)
             return nil
@@ -263,7 +266,7 @@ module GraphQL
             remaining = info[:remaining]
           end
           query.context.namespace(NAMESPACE)[:time] = info
-          query.context[CONTEXT_KEY] = info
+          Caching.neutral(query.context) { query.context[CONTEXT_KEY] = info }
           debt[:extension]&.merge!("limit" => info[:limit], "remaining" => remaining, "elapsed" => cost, "resetIn" => Points.reset_in(info))
         end
 
@@ -274,10 +277,12 @@ module GraphQL
           charges[self] = { key: key, limit: limit, info: info, extension: extension, others: others }
         end
 
+        # The limiter's write is not the query's: a resolver that reads the record reads an input of its answer.
         def record(query, **info)
           info = base_record(**info)
           query.context.namespace(NAMESPACE)[:time] = info
-          query.context[CONTEXT_KEY] = info
+          Caching.neutral(query.context) { query.context[CONTEXT_KEY] = info }
+          info
         end
 
         # `elapsed` is nil until the operation ends and is charged; it stays nil for a refused one.

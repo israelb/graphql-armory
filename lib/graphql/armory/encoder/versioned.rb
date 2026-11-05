@@ -39,7 +39,43 @@ module GraphQL
           [nil, nil]
         end
 
+        # Seals with the newest encoder, so a rotated key is used at once.
+        def seal(bytes, aad:, purpose:)
+          newest(:seal).seal(bytes, aad: aad, purpose: purpose)
+        end
+
+        # Opens with whichever encoder sealed the value: values sealed before a rotation keep opening while the old
+        # encoder stays in the chain. Members that cannot open (Legacy, a custom ID encoder) are skipped.
+        def open(text, aad:, purpose:)
+          Encoder.check_sealing(purpose: purpose, aad: aad)
+          encoders.each do |encoder|
+            next unless encoder.respond_to?(:open)
+
+            bytes = encoder.open(text, aad: aad, purpose: purpose)
+            return bytes if bytes.is_a?(String)
+          rescue ConfigurationError, ArgumentError
+            raise
+          rescue StandardError
+            next
+          end
+          raise InvalidError
+        end
+
+        # Digests with the newest encoder: rotating the key changes every digest (response cache keys and tags), so
+        # entries stored under the old key are no longer found.
+        def mac(bytes, purpose:)
+          newest(:mac).mac(bytes, purpose: purpose)
+        end
+
         private
+
+        def newest(operation)
+          encoder = encoders.first
+          return encoder if encoder.respond_to?(operation)
+
+          verb = operation == :seal ? "seal" : "digest"
+          raise ConfigurationError, "#{encoder.inspect} cannot #{verb}: put an Encoder first in the chain"
+        end
 
         # Fails at boot for a member that would otherwise refuse every value at request time.
         def check(encoder)

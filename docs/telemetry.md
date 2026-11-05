@@ -114,6 +114,10 @@ end
 
 The sink reads the context through a view that answers `[]`, `fetch`, `dig` and `key?`, and cannot write to it, so a sink cannot change who the query runs as. An object held in the context is your own, and a sink can still change that. The view is empty when the query has none. A sink that takes two arguments, `*arguments` or a defaulted third never receives it, so a sink that logs what it gets does not start logging tokens. What you read from the context is yours to keep out of logs.
 
+### With response caching
+
+Sinks run inside `GraphQL::Armory::Caching.neutral`: what a sink reads from the context, such as a request id to log, does not count as an input of the answer, so it never keeps [response caching](response-caching.md) from storing one. The same key read by your own resolvers still counts, and so does a read through a view a sink kept and reads after it returned. Your own tracers and loggers can read the same way with `Caching.neutral(context) { ... }`; keep it to reads that cannot change `data`.
+
 ### What to watch for
 
 | You see | It usually means | What to do |
@@ -124,6 +128,8 @@ The sink reads the context through a view that answers `[]`, `fetch`, `dig` and 
 | `operation_refused` with `reason: :raw_query` from one client | A client sending raw queries to a strict endpoint: a probe, or a client not migrated yet. Strict mode refuses before validating, so a detector that counts validation errors does not see it | Count it as a strike. See [Counting probes in strict mode](persisted-queries.md#counting-probes-in-strict-mode) |
 | `raw_query_run` while you are in `strict: false` | Traffic that does not use persisted queries yet | When it reaches zero, turn on `strict: true` |
 | `denied` rising for one `type` | A new or changed policy for that type | Compare with the release; the [audit](authorization.md#the-audit) lists the types and actions the rules cover |
+| `cache_skipped` with `reason: :context_read` | A run read a context key the cache key does not hold, so its answer was not stored. The signal's `key` names it | Put the input in `vary:` if it changes the answer, or in `neutral_keys:` if it never does. See [Inputs you must declare](response-caching.md#inputs-you-must-declare) |
+| `cache_entry_rejected` rising, or `cache_store_failed` | A store entry that fails a check (`:decrypt` after a key rotation or a foreign writer, `:epoch` after a reset), or a store that raises | A few after a deploy or rotation are normal. A burst of `:decrypt` with no rotation means something else writes the store, or another app shares its prefix. On `cache_store_failed` the queries ran uncached |
 
 ## Signals
 
@@ -166,6 +172,19 @@ The reasons of `:id_refused`:
 
 `:raw_query_allowed` is your audit trail of who uses the escape hatch (staff, development).
 
+### Response caching
+
+| Signal | When | Data |
+|---|---|---|
+| `:cache_hit` | An answer was served from the store | `scope` |
+| `:cache_stored` | A miss ran and its answer was stored | `scope`, `ttl` |
+| `:cache_skipped` | A query was not cacheable, or a miss was not stored | `reason`; `key` only for `:context_read` and `:context_written` |
+| `:cache_entry_rejected` | A stored entry failed a check and the query ran | `reason`: `:format`, `:key`, `:decrypt`, `:expired`, `:epoch`, `:tags`, `:purged` or `:cost_unknown` |
+| `:cache_store_failed` | The store raised, so the query ran uncached | `operation`: `:lookup`, `:write` or `:purge`; `error`: the error's class name |
+| `:cache_purged` | `Caching.purge` succeeded | `kind`: `:all`, `:viewer`, `:tag` or `:type`; `type` for `:type` |
+
+The reasons of `:cache_skipped` are listed in [Response caching](response-caching.md#reasons). `key` is a name your own code gave a context key, never something a client sent, and the signal never holds the tag or the viewer of a purge. What the cache did for one query is also in `context[:response_cache]` (`{ status:, reason:, scope:, ttl:, age: }`), for your controller or log.
+
 ### Rate limiting
 
 Rate limiting takes `sinks:` for one signal, when its store fails:
@@ -194,6 +213,7 @@ A signal has a reason and, where it helps, the name of a type or an action. It *
 
 - an ID, an operation id or a query, which the client chose;
 - a rate limit key, a user id or a record attribute;
+- a cache key, a purge tag, a variable's value or the viewer an answer was stored for;
 - the exception message of a decryption failure.
 
 For IDs and persisted queries a test pins it (`spec/security/telemetry_signals_spec.rb`): a forged ID and an attacker-chosen operation id are sent, and neither appears in anything recorded. Keep it that way in your own sinks: add the request id or the user from *your* request context if you need them, as your logger already does.
@@ -224,7 +244,7 @@ use GraphQL::Armory::PersistedQueries, store: store, sinks: [->(signal, data) { 
 
 ## Reference
 
-- `sinks:` is an option of `use GraphQL::Armory::Authorization`, `use GraphQL::Armory::IDs`, `use GraphQL::Armory::PersistedQueries` and the rate limiters. An Array of callables taking `(signal, data)` or `(signal, data, context)`, called in order; default `[]`.
+- `sinks:` is an option of `use GraphQL::Armory::Authorization`, `use GraphQL::Armory::IDs`, `use GraphQL::Armory::PersistedQueries`, `use GraphQL::Armory::Caching` and the rate limiters. An Array of callables taking `(signal, data)` or `(signal, data, context)`, called in order; default `[]`.
 - `on_sink_error:` is an option of the same modules except the rate limiters. A callable `(error, signal)` called when a sink raises; by default it warns with the signal and the error's class. Raise from it to fail the request closed.
 - A sink that could never be called (`->(a) {}`, four required arguments, a required keyword) raises `Telemetry::ConfigurationError` at boot.
 - `Telemetry.new(sinks: [], on_sink_error: nil)`, `Telemetry.build(sinks: [], on_sink_error: nil)`, `telemetry.record(signal, context: nil, **data)` (answers nil; `data` reaches the sinks frozen).
