@@ -501,7 +501,7 @@ From the key:
 | `:variables` | A declared variable's value is not JSON | |
 | `:vary_value` | A `vary:` value of a type the key cannot hold | Return a String, Integer, Symbol, Float, true, false, nil, Array or Hash |
 | `:version` | Versioning refused the version | |
-| `:schema_unprintable` | `to_definition` raised while printing the schema for the key: graphql 2.4 with json 3.x on a schema that prints a deprecation reason or a string default, or a `visible?` of yours that raises on the full-schema context. Remembered for the life of the process | Use a graphql version that prints it; make `visible?` answer for `armory_full_schema: true` |
+| `:schema_unprintable` | `to_definition` raised while printing the schema for the key: graphql 2.4 or 2.5 with json 3.x on a schema that prints a deprecation reason or a string default, or a `visible?` of yours that raises on the full-schema context. Remembered for the life of the process | Use a graphql version that prints it; make `visible?` answer for `armory_full_schema: true` |
 | `:unencodable` | The answer cannot be written as JSON (invalid UTF-8 in a string, nesting deeper than JSON allows) | |
 | `:operation` | No operation could be selected | |
 | `:key_scope` | The key's scope differs from the declarations' | Should not happen: report it |
@@ -578,7 +578,7 @@ Limits:
 - **Declared-context methods and overrides are your word.** `context_methods:`, `neutral_keys:`, `own_checks:` and `cache_safe` are listed by the audit, which does not read what your code does.
 - **The walk is conservative:** `@skip` and `@include` branches both count, and an inherited field keeps its declaring class's declaration.
 - **The audit's `ok?` covers only refusals through Authorization's chokepoints,** as above.
-- **A schema that fails to print once runs uncached until the process restarts** (`:schema_unprintable`): graphql 2.4 with json 3.x, or a `visible?` that raises on the full-schema context.
+- **A schema that fails to print once runs uncached until the process restarts** (`:schema_unprintable`): graphql 2.4 or 2.5 with json 3.x, or a `visible?` that raises on the full-schema context.
 - **The store holds the purge marks.** Someone who can write to the store can delete a mark and make a purged entry a hit again; entries cannot be forged or moved, but a purge is only as durable as the store. Keep the cache's Redis apart and its credentials as tight as the database's.
 - **`Execution::Next`** is supported from graphql 2.6.2, as for the other modules.
 - **Redis durability.** See [Stores](#stores).

@@ -19,7 +19,7 @@ module GraphQL
       # (no operation selected), `:variables` (a declared variable's value is not JSON), `:viewer_unconfigured` and
       # `:anonymous` (a `:viewer` policy with no `viewer:` key, or an anonymous request under `anonymous: :uncacheable`),
       # `:vary_value` (a `vary:` value of a type the key cannot hold), `:version` (a refused version), `:schema_unprintable`
-      # (graphql-ruby cannot print the schema: graphql 2.4 with json 3.x). A principal the key
+      # (graphql-ruby cannot print the schema: graphql before 2.6 with json 3.x). A principal the key
       # cannot name (an anonymous class, a bad id) raises `ConfigurationError`: that is the app's setup, not the client's.
       #
       # The engine comes from the caller (the gate is told it per `multiplex` call): a query does not know it before it runs.

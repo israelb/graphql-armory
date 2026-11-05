@@ -39,7 +39,7 @@ RSpec.describe GraphQL::Armory::Caching::Keyer do
   end
 
   describe "a schema graphql-ruby cannot print" do
-    # graphql 2.4 with json 3.x raises from `to_definition` on a deprecation reason: the request runs uncached.
+    # graphql before 2.6 with json 3.x raises from `to_definition` on a deprecation reason: the request runs uncached.
     let(:unprintable) do
       Class.new(caching::Controls::Schema.example) do
         def self.printed = (@printed ||= 0)
@@ -215,14 +215,10 @@ RSpec.describe GraphQL::Armory::Caching::Keyer do
     let(:vschema) { versioning::Controls::Schema.example }
     let(:text) { "query Q { invoice { number } }" }
 
-    # graphql 2.4 with json 3.x calls JSON.generate(quirks_mode:) when printing a deprecation reason, so its own
-    # to_definition raises on Versioning's example schema: the environment, not the keyer.
+    # graphql before 2.6 with json 3.x calls JSON.generate(quirks_mode:) when printing a String, so its own
+    # to_definition raises on Versioning's example schema (a deprecation reason): the environment, not the keyer.
     before do
-      vschema.to_definition(context: { armory_full_schema: true, armory_version: "2024-06-01" })
-    rescue ArgumentError => e
-      raise unless e.message.include?("quirks_mode") && Gem::Version.new(GraphQL::VERSION) < Gem::Version.new("2.5")
-
-      skip "graphql #{GraphQL::VERSION} cannot print this schema with json #{JSON::VERSION} (quirks_mode)"
+      skip "graphql #{GraphQL::VERSION} cannot print a String with json #{JSON::VERSION} (quirks_mode)" unless ArmoryJsonPrinting.prints_strings?
     end
 
     it "is computed on the first request that needs it, once per version, and differs per version" do

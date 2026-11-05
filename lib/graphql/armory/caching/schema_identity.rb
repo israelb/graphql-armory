@@ -26,7 +26,7 @@ module GraphQL
         # `computed` keeps the latest computations only.
         RECORDED = 100
 
-        # graphql-ruby could not print the schema (graphql 2.4 with json 3.x raises on a deprecation reason). The
+        # graphql-ruby could not print the schema (graphql before 2.6 with json 3.x raises on a deprecation reason). The
         # failure is memoized like a digest: the schema is not printed again on every request.
         class Unprintable < StandardError; end
         UNPRINTABLE = :unprintable
