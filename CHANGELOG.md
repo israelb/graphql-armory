@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0.pre15 (2026-11-05)
+
+A fix for [API versioning](docs/versioning.md): a schema whose field, argument, enum value or membership class included `Versioning::Base` after members were defined with it now fails with a `ConfigurationError` that names those members, instead of a `NoMethodError` on every query and in the audit. Anyone adopting versioning in an existing schema should upgrade.
 
 ### Fixed
 
