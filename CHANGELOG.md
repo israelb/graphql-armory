@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0.pre14 (2026-11-05)
+
+This release adds [response caching](docs/response-caching.md) and [subscriptions over hosted pub/sub](docs/subscriptions.md). The cache answers a repeated persisted operation from a store, and stores an answer only when nothing it could not see took part in it, with an audit that finds unsafe declarations before production. Subscriptions run graphql-ruby subscriptions over Pusher, Ably or any transport of the same shape, with each update delivered as its own subscriber, never broadcast, and ended when the subscriber loses access. Upgrade if you need either; nothing existing changes for a schema that does not install them, except that rate limiting no longer charges subscription deliveries.
 
 ### Added
 
