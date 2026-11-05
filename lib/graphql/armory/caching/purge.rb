@@ -3,7 +3,7 @@
 module GraphQL
   module Armory
     module Caching
-      # Purges answers by the keyed digests of their tags (docs/response-caching.md 4.5):
+      # Purges answers by the keyed digests of their tags (docs/response-caching.md "Purging"):
       #
       #   Purge.(AppSchema, all: true)                 # everything: the store replaces its epoch
       #   Purge.(AppSchema, viewer: user)              # a principal's answers, by the [class, id] the key uses
@@ -69,7 +69,7 @@ module GraphQL
           Tags.type(type.graphql_name)
         end
 
-        # The same [class name, id] the key's viewer component uses (design 4.3), so a principal's answers are reached.
+        # The same [class name, id] the key's viewer component uses, so a principal's answers are reached.
         def viewer_tag(principal)
           return Tags::ANONYMOUS if principal == :anonymous
           raise ArgumentError, "viewer: takes a principal or :anonymous, got #{principal.inspect}" if principal.is_a?(Symbol)

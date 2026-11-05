@@ -3,7 +3,7 @@
 module GraphQL
   module Armory
     module Caching
-      # Charges a hit the Points its run cost (design 4.6). A hit runs no analyzer, so the gate calls this instead: it
+      # Charges a hit the Points its run cost. A hit runs no analyzer, so the gate calls this instead: it
       # calls `Points#charge_cached` on every Points limiter of the query's schema, found through `query_analyzers` and
       # the `armory_limiter` reader Points defines on its analyzer. Time does not bound hits, and Concurrency takes no
       # slot for one.

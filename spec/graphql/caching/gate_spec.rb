@@ -3,7 +3,7 @@
 require "spec_helper"
 require "graphql/armory/caching/gate"
 
-# The per-request flow of the response cache (docs/response-caching.md "What is cached and when"), against U0's
+# The per-request flow of the response cache (docs/response-caching.md "What is cached and when"), against the
 # Substitutes: what the gate decides for each query, what it stores after a miss ran, and what it reports.
 RSpec.describe "GraphQL::Armory::Caching::Gate" do
   let(:caching) { GraphQL::Armory::Caching }

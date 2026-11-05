@@ -9,7 +9,7 @@ module GraphQL
   module Armory
     module Caching
       # Decides, per `multiplex` call, which queries are answered from the store, which run and may be stored, and
-      # which run uncached (docs/response-caching.md 4.2):
+      # which run uncached (docs/response-caching.md "What is cached and when"):
       #
       #   decisions = gate.(queries, engine: :interpreter)   # one Decision per query, in order
       #   gate.store(query, decision, result)                # after a miss ran: :stored, or the reason it was not

@@ -5,7 +5,7 @@ module GraphQL
     module Caching
       # Records which context keys a query read and wrote, from its context's construction on, so the gate refuses to
       # store an answer that depended on a key the cache key does not hold. A tripwire, not a proof: it sees only
-      # reads through the context's public methods (docs/response-caching.md, limit 1).
+      # reads through the context's public methods (docs/response-caching.md "Inputs you must declare").
       #
       # Each query's recorder lives in `context.namespace(:armory_cache)[:recorder]` (`RecordKeys.recorder`). Every
       # recorder answers:

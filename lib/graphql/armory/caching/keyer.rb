@@ -3,7 +3,7 @@
 module GraphQL
   module Armory
     module Caching
-      # Builds a request's `Key` (design 4.3): a keyed digest over the canonical JSON of every input the answer may depend
+      # Builds a request's `Key`: a keyed digest over the canonical JSON of every input the answer may depend
       # on that graphql-ruby can see, so no component is ever in clear and none can forge a separator:
       #
       #   ["armory-cache/2", release, schema name, schema digest, engine, document digest, selected operation name,

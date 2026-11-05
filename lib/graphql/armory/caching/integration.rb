@@ -3,7 +3,7 @@
 module GraphQL
   module Armory
     module Caching
-      # graphql-ruby's hooks, through its public extension points only (docs/response-caching.md 2.1-2.3, 4.2, 8.4):
+      # graphql-ruby's hooks, through its public extension points only (docs/response-caching.md "Installing"):
       #
       # - `Guard`, prepended on the schema's singleton class: `multiplex` and `multiplex_next` (every request sent through
       #   `execute`, `execute_next`, `multiplex` and `multiplex_next`), `context_class`, `query_class` and `rescue_from`.

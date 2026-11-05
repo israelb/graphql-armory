@@ -4,7 +4,7 @@ module GraphQL
   module Armory
     module Caching
       module Integration
-        # The installer behind `use GraphQL::Armory::Caching` (docs/response-caching.md 4.1): checks every option at boot,
+        # The installer behind `use GraphQL::Armory::Caching` (docs/response-caching.md "Installing"): checks every option at boot,
         # refuses a second `use` in one hierarchy and a `rescue_from` registered before it, builds the gate, and prepends
         # the guard. PersistedQueries is checked at the first request, not here: the two `use` lines may come in either
         # order.
@@ -31,10 +31,10 @@ module GraphQL
             schema.query_class(schema.query_class)
           end
 
-          # The seam the integration wires to the real gate (unit U8): `Gate.build(schema, **settings.to_h)`, which
+          # The seam the integration wires to the real gate: `Gate.build(schema, **settings.to_h)`, which
           # receives the checked options plus the one `digester:` and `telemetry:` every part shares.
           def self.build_gate(schema, settings)
-            raise NotImplementedError, "#{schema}: Caching::Gate.build is wired at integration (unit U8)" unless Gate.respond_to?(:build)
+            raise NotImplementedError, "#{schema}: Caching::Gate.build is not defined" unless Gate.respond_to?(:build)
 
             Gate.build(schema, **settings.to_h)
           end

@@ -15,7 +15,7 @@ module GraphQL
       class Digester
         PURPOSE = "cache-digest"
 
-        # `encoder.mac(bytes, purpose:)` answers the raw 32-byte HMAC (Encoder, unit U1).
+        # `encoder.mac(bytes, purpose:)` answers the raw 32-byte HMAC (an Encoder).
         def self.build(encoder:)
           raise ConfigurationError, "encoder: must answer mac(bytes, purpose:) (an Encoder subclass)" unless encoder.respond_to?(:mac)
 

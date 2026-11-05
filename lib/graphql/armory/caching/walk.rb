@@ -3,7 +3,7 @@
 module GraphQL
   module Armory
     module Caching
-      # The operation's policy from its declarations (design 3.2): `walk.(query) -> Policy`.
+      # The operation's policy from its declarations: `walk.(query) -> Policy`.
       #
       #   policy = Walk.(query)
       #   policy.cacheable?   # every selected field is declared, and nothing refuses the operation

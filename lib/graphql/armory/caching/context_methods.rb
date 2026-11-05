@@ -5,7 +5,7 @@ module GraphQL
     module Caching
       # The public methods an app's context class adds to `GraphQL::Query::Context`. The recorder sees reads through the
       # context's own methods only; an added method such as `def current_user = @provided_values[:current_user]` reads
-      # the provided Hash without being recorded (docs/response-caching.md, limit 2). So the installer refuses every
+      # the provided Hash without being recorded (docs/response-caching.md "Inputs you must declare"). So the installer refuses every
       # added method the app did not declare in `context_methods:` with a reason.
       #
       #   ContextMethods.added(AppContext)                                   # => [:current_user, :tenant]

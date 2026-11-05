@@ -4,7 +4,7 @@ module GraphQL
   module Armory
     module Caching
       class Gate
-        # The rows of "Never cached" that are known before a query runs (docs/response-caching.md 3.3). A query that
+        # The rows of "Never cached" that are known before a query runs (docs/response-caching.md "What is cached and when"). A query that
         # matches one is never looked up: it runs uncached, with the row's reason.
         module Admission
           # Per-request options that make a query uncacheable. `max_depth:` and `max_complexity:` are key components.

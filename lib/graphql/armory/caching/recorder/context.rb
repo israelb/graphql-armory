@@ -7,7 +7,7 @@ module GraphQL
     module Caching
       module Recorder
         # The context class `use` wraps around the schema's own: it records every read and write from construction on
-        # (docs/response-caching.md 4.4), into a `Log` stored with `RecordKeys.recorder!`.
+        # (docs/response-caching.md "Inputs you must declare"), into a `Log` stored with `RecordKeys.recorder!`.
         #
         # `Recorder::Context.wrap(klass) -> Class` answers a subclass of `klass` that records, the same class for the
         # same `klass` every time (thread-safe), and `klass` itself when it is already a wrapper. A subclass of a wrapper

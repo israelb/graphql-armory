@@ -22,7 +22,7 @@ module GraphQL
         end
       end
 
-      # The operation's policy from its declarations (unit U3): `walk.(query) -> Policy`. `Null` refuses everything.
+      # The operation's policy from its declarations: `walk.(query) -> Policy`. `Null` refuses everything.
       class Walk
         class Null
           def call(_query) = Policy.refused(:unconfigured)
@@ -35,7 +35,7 @@ module GraphQL
         end
       end
 
-      # The request's Key (unit U7): `keyer.(query, policy) -> Key | Policy.refused(reason)`. `Null` refuses everything.
+      # The request's Key: `keyer.(query, policy) -> Key | Policy.refused(reason)`. `Null` refuses everything.
       class Keyer
         class Null
           def call(_query, _policy, **) = Policy.refused(:unconfigured)
@@ -48,7 +48,7 @@ module GraphQL
         end
       end
 
-      # Serializes and seals entries (unit U1): `codec.encode(entry, key_digest) -> String`,
+      # Serializes and seals entries: `codec.encode(entry, key_digest) -> String`,
       # `codec.decode(string, key_digest) -> Entry`, raising `Entry::Rejected` with its reason.
       class Codec
         # Plain JSON with the key check, rejecting with the reason it is told (`reject_with(:decrypt)`); records `calls`.
@@ -85,7 +85,7 @@ module GraphQL
         end
       end
 
-      # Charges a hit the Points its run cost (unit U6): `charge.(query, cost)` answers nil (charged) or the
+      # Charges a hit the Points its run cost: `charge.(query, cost)` answers nil (charged) or the
       # limiter's refusal.
       class Charge
         # Charges nothing: for schemas without a Points limiter.

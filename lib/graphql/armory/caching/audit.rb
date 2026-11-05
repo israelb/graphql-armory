@@ -24,7 +24,7 @@ module GraphQL
       # It walks every type the roots, the orphan types and `schema.types` reach, hidden or not, so every version of a
       # Versioning schema is read at once. It never runs at boot or during a request. Its `ok?` covers only what
       # Authorization's chokepoints decide: an answer that depends on something they do not see (`Current.user`, a
-      # thread-local tenant) passes it (docs/response-caching.md, limit 15).
+      # thread-local tenant) passes it (docs/response-caching.md "Guarantees and limits").
       class Audit
         OWN_CHECKS = %i[visible? authorized? scope_items authorized_new wrap].freeze
 

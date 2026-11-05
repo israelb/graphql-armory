@@ -4,7 +4,7 @@ module GraphQL
   module Armory
     module Caching
       class Gate
-        # What a miss's run must show before its answer is stored (docs/response-caching.md 4.2 step 8). Each check
+        # What a miss's run must show before its answer is stored (docs/response-caching.md "What is cached and when"). Each check
         # answers nil (it holds) or a reason; the gate stores only when every one holds.
         module StoreCheck
           # The only response extension a stored run may carry: the limiters' own, which is never stored.

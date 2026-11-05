@@ -5,7 +5,7 @@ module GraphQL
     module Caching
       class Gate
         # What the gate reports for each query: one signal through Telemetry, and the controller's record
-        # `{ status:, reason:, scope:, ttl:, age: }` in `context[:response_cache]` (docs/response-caching.md 6.1).
+        # `{ status:, reason:, scope:, ttl:, age: }` in `context[:response_cache]` (docs/response-caching.md "Signals").
         #
         # No signal and no record holds a key, a viewer, a variable, a document, an operation id or name, or a tag:
         # only reasons, scopes, TTLs, ages, the store operation and an error's class name.
