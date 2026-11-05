@@ -1520,3 +1520,261 @@ RSpec.describe "audit against runtime, for a resolver with no Base under a cover
     end
   end
 end
+
+# The invariant for response caching: if user B, whom the policy refuses, gets user A's answer, the cache audit must not
+# say ok. Each cell crosses where the declaration lives, its scope and the Authorization shape on the path; A (an admin
+# of account A) runs the operation first, then B (account B, no admin) runs it. "B gets A's answer" means B's response
+# differs from what B's own run answers on an empty store. The engine is the configuration the suite runs on.
+class ArmoryCacheNote < ActiveRecord::Base
+  self.table_name = "invoices"
+end
+
+# The matrix's Pundit policy refuses an anonymous request, so the same policy answers the anonymous cells.
+class ArmoryCacheNotePolicy
+  def initialize(user, record)
+    @user = user
+    @record = record
+  end
+
+  def read? = !@user.nil? && @record.account_id == @user.account_id
+  def manage? = @user&.admin? == true
+  def export? = @user&.admin? == true
+
+  class Scope
+    def initialize(user, scope)
+      @user = user
+      @scope = scope
+    end
+
+    def resolve = @user ? @scope.where(account_id: @user.account_id) : @scope.none
+  end
+end
+
+RSpec.describe "audit against runtime, for response caching" do
+  let(:caching) { GraphQL::Armory::Caching }
+  let!(:world) { Dummy::World.build }
+  let(:allowed) { world.carol }
+  let(:refused) { world.bob }
+
+  legacy = GraphQL::Armory::Caching::Controls::Schema::NEXT_FIELD_OPTIONS
+
+  define_method(:legacy) { legacy }
+
+  def bases
+    auth = GraphQL::Armory::Authorization::Base
+    cache = GraphQL::Armory::Caching::Base
+    argument = Class.new(GraphQL::Schema::Argument) { include auth }
+    field = Class.new(GraphQL::Schema::Field) do
+      include auth
+      include cache
+      argument_class(argument)
+    end
+    object = Class.new(GraphQL::Schema::Object) do
+      include auth
+      include cache
+      field_class(field)
+      default_action :read
+    end
+    { field: field, object: object }
+  end
+
+  # `Note`, with its Authorization `rule` and `fields`, the cache declaration living at `location`. Every field reads
+  # the record, except `ownerName`, which reads a thread-local "current user" the way `Current.user` does.
+  def note_type(location, declaration, rule:, fields:)
+    b = bases
+    options = legacy
+    own = location == :field ? { cache: declaration } : {}
+    define = lambda do |holder|
+      fields.each { |name, extra| holder.field(name, String, null: true, **(name == :owner_name ? options : {}), **extra, **own) }
+    end
+    reader = proc { define_method(:owner_name) { Thread.current[:armory_cache_matrix_user]&.name } }
+    case location
+    when :field, :type
+      Class.new(b[:object]) do
+        graphql_name "Note"
+        instance_exec(&rule)
+        cache_fields(**declaration) if location == :type
+        define.(self)
+        class_eval(&reader)
+      end
+    when :interface
+      interface = Module.new do
+        include GraphQL::Schema::Interface
+        include GraphQL::Armory::Caching::Base
+        graphql_name "Noted"
+        field_class b[:field]
+        cache_fields(**declaration)
+        define.(self)
+      end
+      Class.new(b[:object]) do
+        graphql_name "Note"
+        instance_exec(&rule)
+        implements interface
+        class_eval(&reader)
+      end
+    when :parent
+      parent = Class.new(b[:object]) do
+        graphql_name "NoteBase"
+        instance_exec(&rule)
+        cache_fields(**declaration)
+        define.(self)
+        class_eval(&reader)
+      end
+      Class.new(parent) do
+        graphql_name "Note"
+        instance_exec(&rule)
+      end
+    end
+  end
+
+  def schema_for(location, scope, shape, store:)
+    declaration = { ttl: 60, scope: %i[public public_marker].include?(scope) ? :public : :viewer, reason: "matrix cell" }
+    note = note_type(location, declaration, rule: shape.fetch(:rule), fields: shape.fetch(:fields))
+    options = legacy
+    root = shape.fetch(:root, :note)
+    # Only the root field the cell selects, so the audit judges that cell and nothing else.
+    query = Class.new(bases[:object]) do
+      graphql_name "Query"
+      authorize :none, reason: "root type"
+      cache_fields(**declaration)
+      case root
+      when :note
+        field :note, note, authorize: :none, reason: "root field", **options
+        define_method(:note) { ArmoryCacheNote.find_by!(number: "A-1") }
+      when :notes
+        field :notes, [note], null: false, authorize: :none, reason: "root field", **options
+        define_method(:notes) { ArmoryCacheNote.where(number: %w[A-1 A-2]).order(:id) }
+      when :note_by_id
+        field :note_by_id, note, authorize: :none, reason: "looked up through the scope", find_by: :id, **options do
+          argument :id, GraphQL::Types::ID
+        end
+      when :note_by_ref
+        field :note_by_ref, note, authorize: :none, reason: "loaded through the scope", **options do
+          argument :note_id, GraphQL::Types::ID, loads: note
+        end
+        define_method(:note_by_ref) { |note:| note }
+      end
+    end
+    caching_options = case scope
+                      when :public, :viewer then { viewer: :current_user }
+                      when :public_marker then { neutral_keys: { current_user: "matrix: only the policy marker stands" } }
+                      when :shared then { viewer: :current_user, anonymous: :shared, anonymous_reason: "matrix: anonymous answers" }
+                      end
+    manifest = GraphQL::Armory::PersistedQueries::Manifest.new({ "op" => shape.fetch(:document) }, digest: false)
+    # observe: serves what it would refuse only while a sink listens for the :observed signal.
+    listening = ->(_signal, _data) {}
+    Class.new(ArmoryEngine.base_schema) do
+      query(query)
+      use GraphQL::Armory::Authorization, adapter: :pundit, sinks: [listening]
+      use GraphQL::Armory::PersistedQueries, store: manifest, strict: true
+      use GraphQL::Armory::Caching, store: store, release: "matrix", **caching_options
+    end
+  end
+
+  # The response (without extensions) and the cache's record for the controller. `user` nil is an anonymous request.
+  def answer(schema, user, shape)
+    variables = shape[:variables] ? shape[:variables].(world) : {}
+    context = { operation_id: "op" }
+    context[:current_user] = user if user
+    Thread.current[:armory_cache_matrix_user] = user
+    result = execute_query(schema, nil, context: context, variables: variables)
+    [result.to_h.except("extensions"), result.context[:response_cache]]
+  ensure
+    Thread.current[:armory_cache_matrix_user] = nil
+  end
+
+  public_note = proc { authorize :none, reason: "public", covers_fields: true, model: ArmoryCacheNote }
+  read_rule = proc { authorize :read, model: ArmoryCacheNote }
+  by_id = ->(world) { { "id" => world.a1.id.to_s } }
+  shapes = {
+    "no rule (authorize :none)" => { rule: public_note, fields: { number: {} }, document: "query Op { note { number } }" },
+    "a type rule" => { rule: read_rule, fields: { number: {} }, document: "query Op { note { number } }" },
+    "a field rule" => { rule: public_note, fields: { number: {}, internal_notes: { authorize: :manage } },
+                        document: "query Op { note { internalNotes } }" },
+    "visible_when:" => { rule: public_note, fields: { number: {}, internal_notes: { authorize: :none, reason: "public", visible_when: :export } },
+                         document: "query Op { note { internalNotes } }" },
+    "observe:" => { rule: public_note, fields: { number: {}, internal_notes: { authorize: :manage, observe: "matrix rollout" } },
+                    document: "query Op { note { internalNotes } }" },
+    "a scoped list" => { rule: read_rule, fields: { number: {} }, root: :notes, document: "query Op { notes { number } }" },
+    # A bypassed type has no scope to look the record up in, so these lookups need the type's rule.
+    "loads:" => { rule: read_rule, fields: { number: {} }, root: :note_by_ref, variables: by_id,
+                  document: "query Op($id: ID!) { noteByRef(noteId: $id) { number } }" },
+    "find_by:" => { rule: read_rule, fields: { number: {} }, root: :note_by_id, variables: by_id,
+                    document: "query Op($id: ID!) { noteById(id: $id) { number } }" }
+  }
+  locations = { field: "on the field", type: "as the type's default", interface: "on an interface field", parent: "on a parent class's field" }
+  scopes = {
+    public: ":public",
+    public_marker: ":public, the actor's key declared neutral (the policy marker alone)",
+    viewer: ":viewer",
+    shared: ":viewer, anonymous: :shared, B anonymous"
+  }
+
+  locations.each do |location, where|
+    scopes.each do |scope, scope_name|
+      shapes.each do |shape_name, shape|
+        # visible_when: needs a type that includes Authorization's Base, never an interface (docs/authorization.md).
+        next if location == :interface && shape_name == "visible_when:"
+
+        describe "#{shape_name}, declared #{scope_name} #{where}" do
+          let(:schema) { schema_for(location, scope, shape, store: caching::MemoryStore.new) }
+          let(:refused_user) { scope == :shared ? nil : refused }
+          let(:own) { answer(schema_for(location, scope, shape, store: caching::MemoryStore.new), refused_user, shape).first }
+          let(:runs) { [answer(schema, allowed, shape), answer(schema, refused_user, shape)] }
+          let(:leaked) { runs.last.first != own }
+
+          it "never serves A's answer to B with the cache audit ok" do
+            expect(leaked && caching::Audit.(schema).ok?).to eq(false)
+          end
+
+          it "never serves A's answer to B, through the marker and the recorder" do
+            expect(leaked).to eq(false)
+          end
+
+          if shape_name.start_with?("no rule")
+            it "is a cell with no refusal: B's own run answers what A's does#{", and B is served A's entry" if scope != :shared}" do
+              expect(runs.first.first).to eq(own)
+              expect(runs.last.last[:status]).to eq(%i[public public_marker].include?(scope) ? :hit : :stored)
+            end
+          elsif shape_name == "observe:"
+            it "is a cell where B's own run already serves the data observe: would refuse" do
+              expect(own).to eq(runs.first.first)
+            end
+          else
+            it "is a cell where the policy refuses B: A gets the data, B's own run does not" do
+              expect(runs.first.first.to_s).to include("A-1")
+              expect(own.to_s).not_to include("A-1")
+            end
+          end
+
+          expected = if shape_name.start_with?("no rule") || %i[viewer shared].include?(scope) then [:stored, nil]
+                     elsif scope == :public then %i[skipped context_read]
+                     else %i[skipped policy_consulted]
+                     end
+          it "records which check refused to store A's answer (#{expected.compact.join(", ")})" do
+            record = runs.first.last
+            expect([record[:status], record[:reason]]).to eq(expected)
+          end
+        end
+      end
+    end
+  end
+
+  # Documented limit 15: the audit and the marker cover refusals through Authorization's chokepoints only. A bypassed
+  # type whose resolver reads `Current.user` passes both, so its `:public` declaration serves A's answer to B. This
+  # cell pins the leak, so a change that silently fixes or widens it shows here.
+  it "serves A's answer to B when a :public resolver under authorize :none reads Current.user, with the audit ok and the reason listed" do
+    shape = { rule: public_note, fields: { owner_name: {} }, document: "query Op { note { ownerName } }" }
+    schema = schema_for(:type, :public, shape, store: caching::MemoryStore.new)
+    first = answer(schema, allowed, shape)
+    second = answer(schema, refused, shape)
+    report = caching::Audit.(schema)
+
+    expect(first.first.dig("data", "note", "ownerName")).to eq("carol")
+    expect(second.first.dig("data", "note", "ownerName")).to eq("carol")
+    expect(second.last[:status]).to eq(:hit)
+    expect(report.problems.map { |problem| [problem.kind, problem.path] }).to eq([])
+    expect(report).to be_ok
+    expect(report.declarations.map { |declared| [declared.kind, declared.path, declared.reason] }).to include([:public, "Note", "matrix cell"])
+  end
+end
