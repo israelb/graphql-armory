@@ -114,6 +114,10 @@ end
 
 The sink reads the context through a view that answers `[]`, `fetch`, `dig` and `key?`, and cannot write to it, so a sink cannot change who the query runs as. An object held in the context is your own, and a sink can still change that. The view is empty when the query has none. A sink that takes two arguments, `*arguments` or a defaulted third never receives it, so a sink that logs what it gets does not start logging tokens. What you read from the context is yours to keep out of logs.
 
+### With response caching
+
+Sinks run inside `GraphQL::Armory::Caching.neutral`: what a sink reads from the context, such as a request id to log, does not count as an input of the answer, so it never keeps [response caching](response-caching.md) from storing one. The same key read by your own resolvers still counts, and so does a read through a view a sink kept and reads after it returned. Your own tracers and loggers can read the same way with `Caching.neutral(context) { ... }`; keep it to reads that cannot change `data`.
+
 ### What to watch for
 
 | You see | It usually means | What to do |
