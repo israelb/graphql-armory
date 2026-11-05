@@ -77,12 +77,31 @@ module GraphQL
           query.document.to_query_string
         end
 
+        # The client's variables as plain JSON, never through graphql-ruby's Serialize: before graphql 2.6.11 its
+        # `dump` leaves a client's `__gid__`/`__sym__` keys unescaped, and its `load` would then locate or convert them
+        # at delivery. Variables that do not come back the same from JSON (other than String keys) are refused.
         def dump_variables(query)
           variables = query.provided_variables
           variables = variables.to_unsafe_h if variables.respond_to?(:to_unsafe_h)
-          serialize(variables || {})
+          variables ||= {}
+          raise RefusedError.new("the variables are not a Hash", reason: :variables) unless variables.is_a?(Hash)
+
+          text = JSON.generate(variables)
+          raise RefusedError.new("the variables do not round-trip through JSON", reason: :variables) unless JSON.parse(text) == string_keys(variables)
+
+          text
+        rescue RefusedError
+          raise
         rescue StandardError
           raise RefusedError.new("the variables cannot be stored", reason: :variables)
+        end
+
+        def string_keys(value)
+          case value
+          when Hash then value.to_h { |key, item| [key.to_s, string_keys(item)] }
+          when Array then value.map { |item| string_keys(item) }
+          else value
+          end
         end
 
         # graphql-ruby's own encoding, so its `load` reads it back. graphql before 2.5 passes `quirks_mode:` to

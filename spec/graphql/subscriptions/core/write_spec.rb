@@ -51,6 +51,22 @@ RSpec.describe "GraphQL::Armory::Subscriptions::Core#write_subscription" do
     expect(record.document).to eq(controls::Schema.example.armory_controls[:manifest].fetch("message-posted").document.to_query_string)
   end
 
+  it "stores the variables as plain JSON, a client's graphql-ruby reserved keys left as sent" do
+    variables = { "roomId" => "5", "extra" => { "__gid__" => "gid://app/Invoice/42", "__sym__" => "admin" } }
+    record = record_of(backend.channel_for(subscribe(posted, variables: variables)))
+
+    expect(record.variables).to eq(JSON.generate(variables))
+    expect(JSON.parse(record.variables)).to eq(variables)
+  end
+
+  it "refuses variables that do not come back the same from JSON, storing nothing" do
+    result = subscribe(posted, variables: { "roomId" => "5", "extra" => Object.new })
+
+    expect(codes(result)).to eq(["SUBSCRIPTION_REFUSED"])
+    expect([store.records, backend.channel_for(result)]).to eq([{}, nil])
+    expect(signals(:subscription_refused)).to eq([{ reason: :variables }])
+  end
+
   it "stores the version Versioning decided, not the raw armory_version" do
     record = record_of(subscribed(posted, armory_version: "2024-06-01"))
 

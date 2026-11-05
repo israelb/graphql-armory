@@ -133,7 +133,7 @@ module GraphQL
         # Built through the schema's query class, so Versioning, PersistedQueries and Authorization decide it like a
         # request; then marked as a delivery (a namespace exists only after `Query.new`, and no request can write it).
         def delivery_query(record, digest, values, object)
-          options = { variables: GraphQL::Subscriptions::Serialize.load(record.variables), operation_name: record.operation_name, context: values,
+          options = { variables: JSON.parse(record.variables), operation_name: record.operation_name, context: values,
                       subscription_topic: record.graphql_topic(digest), root_value: object, validate: true }
           options[:visibility_profile] = record.visibility_profile.to_sym if record.visibility_profile
           query = @schema.query_class.new(@schema, record.document, **options)

@@ -10,7 +10,7 @@ module GraphQL
       #   id                  the server-made id: 32 random bytes, urlsafe base64 (also the transport's channel id)
       #   document            the query string
       #   operation_name      String or nil
-      #   variables           `GraphQL::Subscriptions::Serialize.dump` of the variables (a JSON String)
+      #   variables           the client's variables as plain JSON (a String), never graphql-ruby's Serialize format
       #   operation_id        the persisted operation's id, or nil
       #   raw_query           whether the request ran with `armory_allow_raw_query: true`
       #   version             the label Versioning decided for the request, or nil
@@ -56,7 +56,7 @@ module GraphQL
           raise ArgumentError, "Record id: must be 22 to 128 urlsafe base64 characters" unless id.is_a?(String) && ID.match?(id)
           raise ArgumentError, "Record document: must be a non-empty String" unless text?(document)
           raise ArgumentError, "Record operation_name: must be a non-empty String or nil" unless operation_name.nil? || text?(operation_name)
-          raise ArgumentError, "Record variables: must be the String Serialize.dump answered" unless variables.is_a?(String)
+          raise ArgumentError, "Record variables: must be a JSON String" unless variables.is_a?(String)
           raise ArgumentError, "Record operation_id: must be a non-empty String or nil" unless operation_id.nil? || text?(operation_id)
           raise ArgumentError, "Record raw_query: must be true or false" unless raw_query == true || raw_query == false
           raise ArgumentError, "Record version: must be a non-empty String or nil" unless version.nil? || text?(version)
