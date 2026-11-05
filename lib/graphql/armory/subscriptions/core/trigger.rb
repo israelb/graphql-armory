@@ -41,11 +41,9 @@ module GraphQL
         private
 
         # A query built without the schema's query class, so PersistedQueries counts nothing (it is never run) and
-        # Versioning decides it from `version:` alone. Marked as a trigger lookup in `namespace(:armory)`.
+        # Versioning decides it from `version:` alone.
         def lookup_query(version)
-          lookup = GraphQL::Query.new(@schema, "{ __typename }", validate: false, context: version ? { armory_version: version } : {})
-          lookup.context.namespace(:armory)[:subscription_trigger] = true
-          lookup
+          GraphQL::Query.new(@schema, "{ __typename }", validate: false, context: version ? { armory_version: version } : {})
         end
 
         def trigger_field(lookup, name)
