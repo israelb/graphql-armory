@@ -18,7 +18,7 @@ You declare, on fields and types, whether an answer may be cached, for how long 
 - **Everything graphql-ruby can see the answer depend on is in the key, or the answer is not stored.** The key holds the schema, the document, the declared variables, the version, the engine and, for per-viewer answers, the principal's class and id. While the run that would fill the cache executes, the context records every key it reads. A read the key does not hold, and a policy consulted for an answer meant for everyone, keep the answer out of the store.
 - **Per viewer or public.** `scope: :viewer` (the default) answers only the principal it was computed for. `scope: :public` answers everyone, and it needs a `reason:` that [the audit](#the-audit) lists.
 - **A hit costs what the run cost.** The client is charged the [Points](rate-limiting.md#cached-responses) the run was charged, so a hit is neither a bypass of the budget nor a way to learn that someone else asked first.
-- **Purges that stick.** `Caching.purge` by tag, type, viewer or everything, and a run that started before a purge cannot undo it, even across processes and a store reset.
+- **Purges that stick.** `Caching.purge` by tag, type, viewer or everything, and a run that started before a purge cannot undo it (unless someone deletes the purge marks from the store itself), even across processes and a store reset.
 - **Fails open to computing, never to serving.** A broken, slow, poisoned, forged or reset entry is a miss and the query runs.
 - **Both engines.** It hooks `multiplex` and `multiplex_next`, so it works on the interpreter and on `Execution::Next` (graphql 2.6.2 or later).
 
@@ -170,7 +170,7 @@ vary: { locale: -> { I18n.locale }, tenant: -> { Current.tenant&.id } }
 
 - the `viewer:` key, for `:viewer` answers only;
 - each `vary:` entry given as a context key (`vary: { locale: :locale }`): its whole value is in the key. A `vary:` callable covers nothing;
-- graphql-ruby's own machinery keys, and `neutral_keys:`.
+- graphql-ruby's own machinery keys, and `neutral_keys:`. These are covered whatever is stored under them: do not keep your own values under graphql-ruby's keys (`:visibility_profile`, `:current_field`, `:current_path`, ...).
 
 Any other key, or a whole-context read, and the answer is not stored (`:cache_skipped`, `reason: :context_read`, with the key's name).
 
@@ -182,7 +182,7 @@ Any other key, or a whole-context read, and the answer is not stored (`:cache_sk
 
 **Neutral readers.** Tracers, loggers and limiters read the context for reasons that do not change the answer. Wrap such code in `GraphQL::Armory::Caching.neutral(context) { ... }`: its reads are not recorded, in that code only (the same key read by a resolver still counts). It answers the block's value. Keep it to reads that cannot change `data`. A value written inside it and read afterwards still counts as read. The gem's own limiters, Versioning's decision and [Telemetry](telemetry.md#with-response-caching)'s sinks already read this way.
 
-**Your own context class.** Methods your `context_class` adds (`def current_user = @provided_values[:current_user]`) read the context without being recorded. Declare each public one in `context_methods:` with a reason, or queries on that context run uncached (`:context_method`):
+**Your own context class.** Methods your `context_class` adds (`def current_user = @provided_values[:current_user]`) read the context without being recorded. Declare each public one in `context_methods:` with a reason, or queries on that context run uncached (`:context_method`). This counts methods added later, and methods reopened onto `GraphQL::Query::Context` itself or added by a module prepended to or included in it (by another gem, too); only graphql-ruby's own methods and this gem's are left out. Private methods are not counted: a resolver that calls one with `send` reads unrecorded.
 
 ```ruby
 use GraphQL::Armory::Caching, ..., context_methods: { current_user: "reads context[:current_user], the viewer: key" }
@@ -501,7 +501,8 @@ From the key:
 | `:variables` | A declared variable's value is not JSON | |
 | `:vary_value` | A `vary:` value of a type the key cannot hold | Return a String, Integer, Symbol, Float, true, false, nil, Array or Hash |
 | `:version` | Versioning refused the version | |
-| `:schema_unprintable` | graphql-ruby cannot print the schema: graphql 2.4 with json 3.x, on a schema that prints a deprecation reason or a string default | Use a graphql version that prints it |
+| `:schema_unprintable` | `to_definition` raised while printing the schema for the key: graphql 2.4 with json 3.x on a schema that prints a deprecation reason or a string default, or a `visible?` of yours that raises on the full-schema context. Remembered for the life of the process | Use a graphql version that prints it; make `visible?` answer for `armory_full_schema: true` |
+| `:unencodable` | The answer cannot be written as JSON (invalid UTF-8 in a string, nesting deeper than JSON allows) | |
 | `:operation` | No operation could be selected | |
 | `:key_scope` | The key's scope differs from the declarations' | Should not happen: report it |
 
@@ -567,7 +568,8 @@ Limits:
 
 - **Staleness up to the TTL, unless purged.** A revoked permission keeps serving the cached answer to that same viewer until it expires or `purge(viewer:)` runs; data someone hid keeps showing to other viewers. See [Purging](#purging).
 - **A hit runs nothing.** No resolver side effects (audit logs in resolvers, analytics), no graphql-ruby tracing, no multiplex analyzer, no Authorization signal, no `Time` charge and no `Concurrency` slot. The cache's own signals stand in. A multiplex-wide analyzer sees only the misses.
-- **A hit's `data` is deep-frozen.** An app that changes `result["data"]` after a hit raises `FrozenError`; a miss's data is mutable.
+- **A hit's `data` is a fresh copy** read from the store, mutable like a run's; changing it changes nothing stored.
+- **Raw variables are not seen.** A resolver that reads `context.query.provided_variables` (or `query.variables`) for a variable the operation does not declare reads an input the key does not hold.
 - **Timing.** A hit is faster than a miss. For a `:public` answer that shows someone asked the same question within the TTL; for a `:viewer` answer, only the viewer's own history.
 - **Cache flooding.** Each distinct value of a declared variable is an entry, so someone can fill the store and evict other entries. The persisted operations, the declared variables, `max_entry_bytes` and the TTLs bound it; a Redis of its own keeps it from reaching other data.
 - **No stampede protection.** N concurrent misses on one key run N times and each writes; every write is a valid answer.
@@ -576,7 +578,8 @@ Limits:
 - **Declared-context methods and overrides are your word.** `context_methods:`, `neutral_keys:`, `own_checks:` and `cache_safe` are listed by the audit, which does not read what your code does.
 - **The walk is conservative:** `@skip` and `@include` branches both count, and an inherited field keeps its declaring class's declaration.
 - **The audit's `ok?` covers only refusals through Authorization's chokepoints,** as above.
-- **On graphql 2.4 with json 3.x,** a schema graphql-ruby cannot print runs uncached (`:schema_unprintable`).
+- **A schema that fails to print once runs uncached until the process restarts** (`:schema_unprintable`): graphql 2.4 with json 3.x, or a `visible?` that raises on the full-schema context.
+- **The store holds the purge marks.** Someone who can write to the store can delete a mark and make a purged entry a hit again; entries cannot be forged or moved, but a purge is only as durable as the store. Keep the cache's Redis apart and its credentials as tight as the database's.
 - **`Execution::Next`** is supported from graphql 2.6.2, as for the other modules.
 - **Redis durability.** See [Stores](#stores).
 - **Cursors** from the encrypted cursor encoder never repeat across clients, so "next page" requests rarely hit.
