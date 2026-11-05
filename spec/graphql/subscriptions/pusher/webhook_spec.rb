@@ -61,6 +61,14 @@ RSpec.describe "GraphQL::Armory::Subscriptions::Pusher#webhook" do
     expect(transport.webhook(rack_env(fresh))).to eq([:ok, [channel]])
   end
 
+  it "refuses an event dated more than 5 minutes in the future and accepts one just inside" do
+    ahead = webhook_body([channel], time_ms: (now * 1000) + (5 * 60 * 1000) + 1)
+    edge = webhook_body([channel], time_ms: (now * 1000) + (5 * 60 * 1000))
+
+    expect(transport.webhook(rack_env(ahead))).to eq([:refused, :stale])
+    expect(transport.webhook(rack_env(edge))).to eq([:ok, [channel]])
+  end
+
   it "refuses a signed body that is not a webhook" do
     ["not json", "[]", '{"events":[]}', '{"time_ms":"x","events":[]}', %({"time_ms":#{now * 1000},"events":{}})].each do |body|
       expect(transport.webhook(rack_env(body))).to eq([:refused, :malformed])

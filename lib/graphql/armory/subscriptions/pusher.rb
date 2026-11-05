@@ -90,9 +90,9 @@ module GraphQL
 
         def authorize_viewer(_viewer_digest) = nil
 
-        # Verifies a Pusher webhook (Rack env): size, X-Pusher-Key, X-Pusher-Signature (constant time), age. Answers
-        # `[:ok, channels]` for the `channel_vacated` events on channels this transport named, `[:refused, reason]`
-        # otherwise.
+        # Verifies a Pusher webhook (Rack env): size, X-Pusher-Key, X-Pusher-Signature (constant time), age (at most 5
+        # minutes old or ahead, else `:stale`). Answers `[:ok, channels]` for the `channel_vacated` events on channels
+        # this transport named, `[:refused, reason]` otherwise.
         def webhook(env)
           return [:refused, :not_configured] unless configured?
 
@@ -179,7 +179,7 @@ module GraphQL
           time_ms = data.is_a?(Hash) ? data["time_ms"] : nil
           events = data["events"] if data.is_a?(Hash)
           return [:refused, :malformed] unless time_ms.is_a?(Integer) && events.is_a?(Array)
-          return [:refused, :stale] if (now.to_f * 1000) - time_ms > WEBHOOK_MAX_AGE_MS
+          return [:refused, :stale] if ((now.to_f * 1000) - time_ms).abs > WEBHOOK_MAX_AGE_MS
 
           channels = events.select { |event| event.is_a?(Hash) && event["name"] == "channel_vacated" }.map { |event| event["channel"] }
           [:ok, channels.select { |channel| id_from(channel) }.uniq]
