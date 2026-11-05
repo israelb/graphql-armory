@@ -12,8 +12,8 @@ module GraphQL
           multiplex.queries.each do |query|
             next unless invalid?(query, limiter)
 
-            key = Settings.key_for(reader, query)
-            limits = Settings.limits_for(limit, Array(key), query)
+            # Who pays does not change any answer: the response cache does not count these reads (Caching.neutral).
+            limits = Caching.neutral(query.context) { Settings.limits_for(limit, Array(Settings.key_for(reader, query)), query) }
             (groups[limits] ||= []) << query unless limits.empty?
           rescue StandardError => error
             report(handler, error, query)

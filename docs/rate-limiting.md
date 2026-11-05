@@ -223,6 +223,8 @@ Soft mode (the default), per-key limits (`limit: ->(key, query) { ... }`) and `o
 
 To test it, inject a clock: `Time` takes `clock:` (a callable answering seconds), and `RateLimits::Clock::Substitute` is one your test moves. `Controls::Time.example(clock, seconds: 0.25)` is a root for `Controls::Query.example` whose every field takes that long on the clock.
 
+`Time` does not bound answers served from the [response cache](response-caching.md): a hit runs nothing, so it has no time to charge. Only `Points` charges a hit (see [Cached responses](#cached-responses)). If you rely on `Time` alone to bound expensive reads, cached reads are outside it.
+
 ### Rolling it out
 
 1. Install it in soft mode (leave out `soft:`). Queries run as before; each one records what it cost.
@@ -251,6 +253,17 @@ end
 - **Fails open.** When Redis is down or slow, the client raises, the query runs, and `on_store_error` is called: make that hook alert. With `sinks:`, the failure is also recorded as `:rate_limit_store_failed`. Set the client's timeouts (for example `Redis.new(url: ..., timeout: 0.2)`) so a slow Redis cannot slow every request.
 
 The gem does not depend on the redis gem: add it to your Gemfile. A single `Redis` client is safe to share between threads.
+
+### Cached responses
+
+With the [response cache](response-caching.md), a query can be answered from the cache without running. A hit runs no analyzer, so without help it would be free: a bypass of the budget, and an oracle, since a client that sees its budget not move learns that someone else asked the same question first. So the cache charges each hit through `Points`:
+
+- **A hit costs the `Points` its run cost.** When a run is stored, the cost it was charged goes with it, read from that query's own record (`result.context.namespace(:graphql_armory)[:points]`), never from `context[:rate_limit_points]`, which queries of a multiplex share. A hit is charged that cost by every `Points` limiter of the schema, exactly as a run: the same keys (one or several), limits, soft mode and store. `context[:rate_limit_points]`, the `rateLimit` extension and `Points.headers(result)` read as they would for a run.
+- **Over budget, the hit is refused with the run's own refusal.** The client gets the same `RATE_LIMITED` error a run would get, and nothing from the cache. In soft mode the hit is charged, recorded `limited: true` and served. A store that fails lets the hit through and calls `on_store_error`, as for a run. A `key:` or `limit:` callable that raises an `ExecutionError` refuses the hit with `RATE_LIMIT_NOT_CHARGED` in hard mode (or with the `AnalysisError` it raised), and serves it with `charged: false` in soft mode, as for a run.
+- **A run that recorded no cost is not stored** when a `Points` limiter is installed (a store that failed, a limiter that could not charge): a hit could not be charged for it.
+- **`Time` does not bound hits**, and **`Concurrency` takes no slot** for one: a hit runs nothing.
+
+The limiters read the context to name and limit the client (`key:`, `limit:`, `rate_limit_key`) inside `Caching.neutral`, so those reads do not keep an answer out of the cache: who is charged does not change the answer. A resolver that reads the same keys is still seen. The limiters' own records (`context[:rate_limit_points]` and the others) are not writes of the query either, so a resolver that returns them is seen as reading an input the cache key does not hold, and its answer is not stored.
 
 ### Testing your limits
 
@@ -347,6 +360,7 @@ Invalid settings raise `RateLimits::ConfigurationError` at boot.
 - The time is wall-clock, so it grows when the server is loaded: the same query costs a client more on a busy server. Choose `limit` with that in mind, and start in soft mode.
 - A query run with its own trace (`context: { trace: ... }`) cannot be charged, so it raises `ConfigurationError`, as with `Concurrency`.
 - When the store fails, operations run unlimited and `on_store_error` is called; a failed charge never raises into the query (unless your hook does).
+- An answer served from the response cache runs nothing and is not charged by `Time`: only `Points` charges a hit ([Cached responses](#cached-responses)).
 
 ### Clients that change identity
 

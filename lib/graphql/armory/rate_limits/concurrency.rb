@@ -14,6 +14,9 @@ module GraphQL
       # releases every slot its multiplex took when the multiplex ends, even when it raises. A slot a crashed
       # process never released expires after `stale_after` seconds. Soft mode (the default) records but refuses
       # nothing. What happened is in `context[:rate_limit_concurrency]`.
+      #
+      # A response the response cache answers runs nothing and takes no slot. The key, limit and exemption lookups and
+      # the limiter's own record go through `Caching.neutral`.
       class Concurrency
         CONTEXT_KEY = :rate_limit_concurrency
         NAMESPACE = :graphql_armory
@@ -54,7 +57,7 @@ module GraphQL
 
         # Whether this query's client has no limit to charge.
         def exempt?(query)
-          Settings.exempt?(@key, @limit, query)
+          Caching.neutral(query.context) { Settings.exempt?(@key, @limit, query) }
         end
 
         # Takes a slot for the query: the refusal when none is free, or nil to let it run.
@@ -63,10 +66,10 @@ module GraphQL
             raise ConfigurationError, "this query runs with its own trace (context[:trace]), so Concurrency could never release its slot: remove context[:trace] or add trace_with to that trace"
           end
 
-          key = Settings.key_for(@key, query)
+          key = Caching.neutral(query.context) { Settings.key_for(@key, query) }
           return call_several(query, key) if key.is_a?(Array)
 
-          limit = Settings.limit_for(@limit, key, query)
+          limit = Caching.neutral(query.context) { Settings.limit_for(@limit, key, query) }
           if limit.nil?
             record(query, key: key, limit: nil, active: nil, limited: false)
             return nil
@@ -116,7 +119,7 @@ module GraphQL
         # listed as it is taken, so a raise later on still lets `Release` give it back. A key whose store fails is left out,
         # and the others still decide.
         def call_several(query, keys)
-          limits = Settings.limits_for(@limit, keys, query)
+          limits = Caching.neutral(query.context) { Settings.limits_for(@limit, keys, query) }
           if limits.empty?
             record(query, key: keys.first, limit: nil, active: nil, limited: false, keys: [])
             return nil
@@ -158,8 +161,10 @@ module GraphQL
           refusal(full[:limit], full[:active])
         end
 
+        # The limiter's write is not the query's: a resolver that reads the record reads an input of its answer.
         def record(query, **info)
-          query.context[CONTEXT_KEY] = { **info.slice(:key, :limit, :active), soft: @soft, limited: info[:limited], **info.slice(:keys) }
+          record = { **info.slice(:key, :limit, :active), soft: @soft, limited: info[:limited], **info.slice(:keys) }
+          Caching.neutral(query.context) { query.context[CONTEXT_KEY] = record }
         end
 
         def refusal(limit, active)
