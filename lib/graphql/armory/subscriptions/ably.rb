@@ -94,7 +94,8 @@ module GraphQL
           @publisher.call(messages)
         end
 
-        # A signed TokenRequest for the channels of `viewer_digest` only. The core matched the viewer first.
+        # A signed TokenRequest for the channels of `viewer_digest` only, with that digest as its clientId. The core
+        # matched the viewer first.
         def authorize_viewer(viewer_digest)
           return nil unless @tokens && viewer_digest.is_a?(String) && DIGEST.match?(viewer_digest)
 

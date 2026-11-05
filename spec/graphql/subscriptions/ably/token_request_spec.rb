@@ -8,25 +8,33 @@ RSpec.describe "GraphQL::Armory::Subscriptions::Ably#authorize_viewer" do
   let(:request) { ably.authorize_viewer(digest) }
   let(:capability) { %({"graphql:#{digest}:*":["presence","subscribe"]}) }
 
-  # https://ably.com/docs/api/token-request-spec : the signing text is keyName, ttl (ms), capability, clientId
-  # (empty when omitted), timestamp (ms) and nonce, each followed by a newline; mac = base64(HMAC-SHA256(secret, text)).
-  let(:signing_text) { "appId.keyId\n3600000\n#{capability}\n\n#{AblyHelper::NOW_MS}\nfixed-nonce-0123456789\n" }
+  # https://ably.com/docs/api/token-request-spec : the signing text is keyName, ttl (ms), capability, clientId,
+  # timestamp (ms) and nonce, each followed by a newline; mac = base64(HMAC-SHA256(secret, text)).
+  let(:signing_text) { "appId.keyId\n3600000\n#{capability}\n#{digest}\n#{AblyHelper::NOW_MS}\nfixed-nonce-0123456789\n" }
 
-  it "answers a TokenRequest Ably's token endpoint accepts: the documented fields, no clientId" do
+  it "answers a TokenRequest Ably's token endpoint accepts: the documented fields, the viewer digest as clientId" do
     expect(request).to eq(
       "keyName" => "appId.keyId",
       "ttl" => 3_600_000,
       "capability" => capability,
+      "clientId" => digest,
       "timestamp" => AblyHelper::NOW_MS,
       "nonce" => "fixed-nonce-0123456789",
       "mac" => base64_hmac(AblyHelper::KEY_SECRET, signing_text)
     )
-    expect(request).not_to include("clientId")
+  end
+
+  it "names an anonymous viewer \"anonymous\" as its clientId, signed the same way" do
+    anonymous = ably.authorize_viewer(subscriptions::Record::ANONYMOUS)
+    text = "appId.keyId\n3600000\n{\"graphql:anonymous:*\":[\"presence\",\"subscribe\"]}\nanonymous\n#{AblyHelper::NOW_MS}\nfixed-nonce-0123456789\n"
+
+    expect(anonymous["clientId"]).to eq("anonymous")
+    expect(anonymous["mac"]).to eq(base64_hmac(AblyHelper::KEY_SECRET, text))
   end
 
   it "signs with the key secret over the newline-joined fields (a mac computed here from the documented text)" do
     fixed = ably.authorize_viewer("a" * 64)
-    text = "appId.keyId\n3600000\n{\"graphql:#{"a" * 64}:*\":[\"presence\",\"subscribe\"]}\n\n1800000000000\nfixed-nonce-0123456789\n"
+    text = "appId.keyId\n3600000\n{\"graphql:#{"a" * 64}:*\":[\"presence\",\"subscribe\"]}\n#{"a" * 64}\n1800000000000\nfixed-nonce-0123456789\n"
 
     expect(fixed["mac"]).to eq(base64_hmac(AblyHelper::KEY_SECRET, text))
     expect(fixed["mac"]).not_to eq(base64_hmac("other-secret", text))
