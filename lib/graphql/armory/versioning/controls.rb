@@ -141,6 +141,104 @@ module GraphQL
           end
         end
 
+        # `deprecated:` on every member kind, each deprecated from `FROM`: an interface's field, an object's field with
+        # arguments of their own lifecycles in its block, a field argument, an input-object field, a resolver's argument, a
+        # `resolver:` field and an enum value.
+        module Deprecations
+          FROM = "2025-01-01"
+
+          # Base classes with `Base` for every owner and member kind; with `authorization: true`, Authorization's `Base` too.
+          module Bases
+            def self.example(authorization: false)
+              mods = [Versioning::Base]
+              mods << Armory::Authorization::Base if authorization
+              argument = Class.new(GraphQL::Schema::Argument) { mods.each { |mod| include mod } }
+              field = Class.new(GraphQL::Schema::Field) { mods.each { |mod| include mod }; argument_class(argument) }
+              value = Class.new(GraphQL::Schema::EnumValue) { include Versioning::Base }
+              {
+                argument: argument, field: field,
+                object: Class.new(GraphQL::Schema::Object) { mods.each { |mod| include mod }; field_class(field) },
+                # Named as an app's `Types::BaseInterface` is: some walkers read the name of every interface an interface includes.
+                interface: Module.new { include GraphQL::Schema::Interface; include Versioning::Base; graphql_name "BaseInterface"; field_class(field) },
+                input: Class.new(GraphQL::Schema::InputObject) { mods.each { |mod| include mod }; argument_class(argument) },
+                enum: Class.new(GraphQL::Schema::Enum) { include Versioning::Base; enum_value_class(value) },
+                resolver: Class.new(GraphQL::Schema::Resolver) { include Versioning::Base; argument_class(argument) },
+                subscription: Class.new(GraphQL::Schema::Subscription) { include Versioning::Base; argument_class(argument); field_class(field) }
+              }
+            end
+          end
+
+          # The query type. Objects declare an Authorization rule when their base has Authorization's `Base`.
+          module Query
+            def self.example(bases = Bases.example)
+              from = FROM
+              open = ->(type) { type.authorize(:none, reason: "test data", covers_fields: true) if type.respond_to?(:authorize) }
+              status = Class.new(bases[:enum]) do
+                graphql_name "Status"
+                value "PAID", value: :paid
+                value "CANCELLED", value: :cancelled, deprecated: from, deprecation_reason: "Use `VOID`"
+              end
+              filter = Class.new(bases[:input]) do
+                graphql_name "InvoiceFilter"
+                argument :code, String, required: false, deprecated: from, deprecation_reason: "Use `number`"
+                argument :number, String, required: false
+              end
+              priced = Module.new do
+                include bases[:interface]
+                graphql_name "Priced"
+                field :amount, Integer, null: true, deprecated: from, deprecation_reason: "Use `total`"
+              end
+              invoice = Class.new(bases[:object]) do
+                graphql_name "Invoice"
+                open.(self)
+                implements priced
+                field :total, Integer, null: true
+                field :tags, [String], null: true, deprecated: from, deprecation_reason: "Use `labels`" do
+                  argument :first, Integer, required: false, added: from
+                  argument :page, Integer, required: false, removed: from
+                end
+              end
+              lookup = Class.new(bases[:resolver]) do
+                graphql_name "Lookup"
+                type [String], null: false
+                argument :code, String, required: false, deprecated: from, deprecation_reason: "Use `number`"
+                argument :number, String, required: false
+                define_method(:resolve) { |**arguments| arguments.map { |name, item| "#{name}=#{item}" }.sort }
+              end
+              Class.new(bases[:object]) do
+                graphql_name "Query"
+                open.(self)
+                field :invoice, invoice, null: false
+                field :invoices, [String], null: false do
+                  argument :filter, filter, required: false
+                  argument :page, Integer, required: false, deprecated: from, deprecation_reason: "Use `cursor`"
+                end
+                field :lookup, resolver: lookup
+                field :find, resolver: lookup, deprecated: from, deprecation_reason: "Use `lookup`"
+                field :status, status, null: false
+              end
+            end
+          end
+
+          # The root object for Query.example: `tags` and `invoices` answer their arguments as `name=value` Strings
+          # (`filter.key=value` for the filter's fields); `status` answers CANCELLED.
+          module Root
+            def self.example
+              strings = ->(arguments) { arguments.compact.flat_map { |name, item| item.is_a?(Hash) ? item.map { |key, inner| "#{name}.#{key}=#{inner}" } : ["#{name}=#{item}"] } }
+              invoice = Class.new do
+                define_method(:total) { 100 }
+                define_method(:amount) { 100 }
+                define_method(:tags) { |first: nil, page: nil| strings.(first: first, page: page) }
+              end.new
+              Class.new do
+                define_method(:invoice) { invoice }
+                define_method(:invoices) { |filter: nil, page: nil| strings.(filter: filter&.to_h, page: page) }
+                define_method(:status) { :cancelled }
+              end.new
+            end
+          end
+        end
+
         # The schema over Query.example and Versions.example, under `Schema::Visibility` (`visibility: :visibility`) or the
         # legacy `Schema::Warden` (`visibility: :warden`).
         module Schema
