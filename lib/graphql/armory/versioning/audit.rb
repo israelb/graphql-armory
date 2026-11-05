@@ -61,19 +61,26 @@ module GraphQL
             @problems = {}
           end
 
+          # A problem replaces information of the same kind and path found in another version.
           def problem(kind, path, message, at: nil, severity: nil)
             key = path == "Schema" ? [kind, path, message] : [kind, path]
-            @problems[key] ||= Problem.new(kind, path, message, Location.of(at), severity)
+            kept = @problems[key]
+            return kept if kept && (severity || !kept.information?)
+
+            @problems[key] = Problem.new(kind, path, message, Location.of(at), severity)
           end
 
           def information(kind, path, message, at: nil) = problem(kind, path, message, at: at, severity: :information)
 
-          def path?(path) = @problems.each_key.any? { |key| key[1] == path }
+          # Information never stands for a problem: a member listed as information is still asked in every version.
+          def path?(path) = failing.any? { |problem| problem.path == path }
 
-          def any? = !@problems.empty?
+          def any? = failing.any?
 
           # Whether a refusal is one already reported: graphql-ruby's lookups ask a member again inside its owner's.
-          def explained?(message) = @problems.each_value.any? { |problem| message.start_with?("#{problem.path}: ") || message == problem.message }
+          def explained?(message) = failing.any? { |problem| message.start_with?("#{problem.path}: ") || message == problem.message }
+
+          def failing = @problems.each_value.reject(&:information?)
 
           def report
             Report.new(@problems.values.sort_by { |problem| [problem.path, problem.kind.to_s] })
@@ -197,7 +204,8 @@ module GraphQL
           return unless type.kind.fields?
 
           live_fields(type, version).each do |field|
-            next if view.field(type, field.graphql_name).equal?(field)
+            # A twin of the same name served in its place is versioning, not a hidden field.
+            next if view.field(type, field.graphql_name)
 
             hidden = hidden_type(view, field.type.unwrap, version)
             findings.information(:implicit, field.path, "#{label(version)} hides it because its type #{hidden.graphql_name} is not in that version", at: field) if hidden
@@ -209,7 +217,7 @@ module GraphQL
         def hidden_arguments(view, owner, version, findings)
           served = view.arguments(owner)
           owner.all_argument_definitions.each do |argument|
-            next if served.any? { |member| member.equal?(argument) } || !Integration.lifecycle_of(argument).covers?(version)
+            next if served.any? { |member| member.graphql_name == argument.graphql_name } || !Integration.lifecycle_of(argument).covers?(version)
 
             hidden = if argument.loads
                        argument.loads unless Integration.lifecycle_of(argument.loads).covers?(version)
@@ -235,12 +243,22 @@ module GraphQL
           type if !Integration.lifecycle_of(type).covers?(version) || type.kind.abstract?
         end
 
-        # The nearest definitions of each field name whose own lifecycle, owner and resolver live in the version.
+        # The nearest definitions of each field name whose own lifecycle, owner and resolver live in the version, and, for an
+        # interface's field, whose membership does.
         def live_fields(type, version)
           Armory::Definitions.fields_at_every_level(type).select do |field|
-            !Armory::Definitions.shadowed?(type, field) &&
+            !Armory::Definitions.shadowed?(type, field) && member_in?(type, field.owner, version) &&
               [field, field.owner, field.resolver].compact.all? { |member| Integration.lifecycle_of(member).covers?(version) }
           end
+        end
+
+        # An interface the type names with `implements` only counts where one of those memberships lives.
+        def member_in?(type, owner, version)
+          return true if owner.equal?(type) || !owner.respond_to?(:kind) || !owner.kind.interface? || !type.respond_to?(:interface_type_memberships)
+
+          named = type.ancestors.select { |ancestor| ancestor.respond_to?(:interface_type_memberships) }.flat_map(&:interface_type_memberships)
+                      .select { |membership| membership.respond_to?(:abstract_type) && membership.abstract_type.equal?(owner) }
+          named.empty? || named.any? { |membership| Integration.lifecycle_of(membership).covers?(version) }
         end
 
         def empty(schema, view, type, version, definitions, findings)
@@ -252,7 +270,8 @@ module GraphQL
             findings.problem(:empty, path_of(type), "#{label(version)} serves it with no field: a client can select only " \
                                                     "__typename, and a schema with it is invalid", at: type)
           end
-          return unless type.kind.abstract? && members?(type, definitions) && view.possible_types(type).empty?
+          # graphql 2.4's Schema::Visibility lists interfaces among an interface's possible types: only objects count.
+          return unless type.kind.abstract? && members?(type, definitions) && view.possible_types(type).none? { |member| member.kind.object? }
 
           # Only Schema::Visibility serves an interface or a union with no member.
           kind = type.kind.interface? ? :orphan_interface : :empty
