@@ -92,6 +92,12 @@ module GraphQL
           keys.uniq.freeze
         end
 
+        # The `viewer:` context key (nil when none is configured): covered for `:viewer` policies only.
+        def viewer_key = @viewer.key
+
+        # The `vary:` entries given as context keys, sorted by name: each is covered for every policy. Callables are not.
+        def vary_context_keys = @vary.context_keys.freeze
+
         # The keyed digest of a principal's purge tag (or of every anonymous request, `:anonymous`): what `Key#viewer_tag`
         # holds for that principal, so a purge finds its entries.
         def viewer_tag_for(principal)

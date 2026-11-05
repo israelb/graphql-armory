@@ -270,6 +270,16 @@ RSpec.describe GraphQL::Armory::Caching::Keyer do
       expect(built.covered_keys(public_policy)).to eq([:locale])
       expect(keyer(viewer: nil).covered_keys(viewer_policy)).to eq([])
     end
+
+    it "exposes the viewer: key and the vary: context keys for the gate's settings" do
+      built = keyer(vary: { tenant: -> { "acme" }, locale: :locale, region: "region" })
+
+      expect(built.viewer_key).to eq(:current_user)
+      expect(built.vary_context_keys).to eq([:locale, "region"])
+      expect(keyer(viewer: nil).viewer_key).to be_nil
+      expect(described_class.new.viewer_key).to be_nil
+      expect(described_class.new.vary_context_keys).to eq([])
+    end
   end
 
   describe "#viewer_tag_for" do
