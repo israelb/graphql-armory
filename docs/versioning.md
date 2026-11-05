@@ -2,8 +2,6 @@
 
 Each client gets the schema it was built against, and fields can arrive and leave without breaking older clients.
 
-> **In progress.** This first part versions **fields** (`added:`, `removed:`) and decides each request's version. Arguments, enum values, input fields, types, the per-version audit, the diff and the `deprecated:` keyword come in the next parts, and are not available yet.
-
 ## The problem
 
 A public GraphQL API has clients you do not control: mobile builds that stay in the stores for months, partners who integrated once. graphql-ruby gives you one tool for change, `deprecation_reason:`, and it only labels a field:
@@ -338,6 +336,8 @@ end
 bin/rake "graphql_armory:versions:audit[AppSchema]"   # prints the report; exit 1 on problems
 ```
 
+`Audit.(AppSchema, strict: true)` also fails on members that live only in retired versions (`:retired_only`, information otherwise). Under `profiles: true` the audit asks each version under its own profile, as its queries run.
+
 It asks each member with a context that names the version and `armory_full_schema: true`, so Authorization's `visible_when:` never hides a refusal from it; it records no signal. What it reports:
 
 | Kind | What it means |
@@ -356,19 +356,19 @@ It asks each member with a context that names the version and `armory_full_schem
 | `:undeclared_version` | `added:` or `removed:` names a label that is not in `versions:` |
 | `:outside_lifecycle` | A served version lists a type, field, argument, enum value or membership outside its lifecycle: your own `visible?` answers before the plugin's, or graphql-ruby serves it without asking. A client of that version gets it |
 | `:unchecked` | Asking the member raised something else (an app `visible?` that needs a user, for example): it was not checked |
-| `:profiles` | `profiles: true` meets a check that needs the query's user: a `visible_when:` (it raises under a profile), or your own `visible?` on a type, field, argument, enum value or membership class, or on the schema (asked once per version, so it decides for every user at once; the audit cannot read whether it reads the user). Drop one of the two |
+| `:profiles` | `profiles: true` meets a check that needs the query's user: a `visible_when:` (it raises under a profile), or your own `visible?` on a type, field, argument, enum value or membership class, or on the schema (asked once per version, so it decides for every user at once; the audit cannot read whether it reads the user). Drop one of the two. A `visible?` you declare in `own_checks:` is not reported here: the declaration is your word that it is safe, and it is listed as `:own_check` information |
 | `:retired_only` | A type, field, argument, enum value or membership (one of two twins included) whose lifecycle covers only retired versions: no client can reach it. Delete it. Information, which `ok?` ignores, unless `strict: true` |
 
-`ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see, a type with nothing in it, or a field or argument that another definition of its name serves or that an interface still declares; no `visible?` of yours answers before the plugin's undeclared; no default names a value or input field its version does not have; and no subscription trigger breaks on an argument that differs between versions. Information (an optional member hidden because its type is, the natural way to version a field with its type, a declared `visible?`, a subscription field outside the `default:` version) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: whether a type's field or argument in a version has a type its interface's definition allows (covariance). A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
+`ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see, a type with nothing in it, or a field or argument that another definition of its name serves or that an interface still declares; no `visible?` of yours answers before the plugin's undeclared; no default names a value or input field its version does not have; and no subscription trigger breaks on an argument that differs between versions; under `profiles: true`, no check needs the query's user. Information (an optional member hidden because its type is, the natural way to version a field with its type, a declared `visible?`, a subscription field outside the `default:` version, a member only retired versions have) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: whether a type's field or argument in a version has a type its interface's definition allows (covariance). A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
 
 ### Evolving a version
 
 A change reaches clients in four steps. Each one is a new label at the end of `versions:` (or a lifecycle that names one you already have), and older clients keep what they had until their version is retired:
 
 1. **Add.** Give the new member `added: "2025-01-01"`. Older versions never see it.
-2. **Deprecate.** `deprecation_reason:` labels the member in every version it lives in; `deprecated:` labels it from one version on (see "Deprecating"). Clients still get it.
+2. **Deprecate.** `deprecation_reason:` labels the member in every version it lives in; `deprecated:` labels it from one version on (see [Deprecating](#deprecating)). Clients still get it.
 3. **Remove.** Give it `removed: "2025-06-01"`: clients of the versions before keep it, and only a client that moves to 2025-06-01 loses it. To change a member's shape instead, give it a twin (see "How to use it").
-4. **Retire.** Once no client asks for the oldest versions (`:version_served` for them reaches zero), move them to `retired:`. A member whose `removed:` is the oldest served version or earlier is now served nowhere: delete it, and delete a label from `versions:` once nothing names it.
+4. **Retire.** Once no client asks for the oldest versions (`:version_served` for them reaches zero), move them to `retired:`. A member whose `removed:` is the oldest served version or earlier is now served nowhere: delete it, and delete a label from `versions:` once nothing names it. The audit lists each such member (`:retired_only`).
 
 Two tools show what each step changes. The dump writes each served version's SDL to a file, so a pull request shows every version's schema change line by line:
 
@@ -435,7 +435,7 @@ Types are compared by name, as a client sees them. A renamed type is a type remo
 
 ## Reference
 
-`use GraphQL::Armory::Versioning, versions:, default:, retired: [], sinks: [], on_sink_error: nil, own_checks: {}`
+`use GraphQL::Armory::Versioning, versions:, default:, retired: [], sinks: [], on_sink_error: nil, own_checks: {}, profiles: false`
 
 - `versions:` an Array of non-empty String labels, oldest first, with no duplicate; ascending when every label is a date (`YYYY-MM-DD`).
 - `retired:` an Array: the oldest labels of `versions:`, leaving at least one served.
@@ -446,7 +446,7 @@ Types are compared by name, as a client sees them. A renamed type is a type remo
 - Anything else raises `Versioning::ConfigurationError` when the schema loads.
 - Works with your own `query_class`, set before `use`, after it, or in a child schema: the plugin subclasses it. `use` it once per schema hierarchy: a second `use`, on the same schema or a child, raises.
 
-`include GraphQL::Armory::Versioning::Base` goes in a field, argument or enum value class (a subclass of `GraphQL::Schema::Field`, `Argument` or `EnumValue`); anywhere else it raises `ArgumentError` in this part. It adds `added:` and `removed:` to `field`, `argument` and `value`, each a non-empty String: anything else, or the same label for both, raises `ConfigurationError` when the member is defined. A label `versions:` does not hold, or a `removed:` before its `added:`, raises `ConfigurationError`, naming the member, every time a query asks about it: types load before `use`, so it cannot be checked earlier. `member.armory_lifecycle.to_h` answers `{ added:, removed: }`.
+`include GraphQL::Armory::Versioning::Base` goes in a field, argument or enum value class (a subclass of `GraphQL::Schema::Field`, `Argument` or `EnumValue`); anywhere else it raises `ArgumentError`. It adds `added:` and `removed:` to `field`, `argument` and `value`, each a non-empty String: anything else, or the same label for both, raises `ConfigurationError` when the member is defined. A label `versions:` does not hold, or a `removed:` before its `added:`, raises `ConfigurationError`, naming the member, every time a query asks about it: types load before `use`, so it cannot be checked earlier. `member.armory_lifecycle.to_h` answers `{ added:, removed: }`.
 
 `deprecated:` (a non-empty String naming a version) goes with `deprecation_reason:` on `field` in an object, interface, resolver or mutation class, on `argument` in a field, input object, resolver or mutation class, and on `value` in an enum class, when that class includes `Base`. It defines the member twice, as `removed: D` with no reason and `added: D` with the reason, each keeping the other keywords; the enum value's second definition gets `value_method: false`. It raises `ConfigurationError` when the member is defined: without `deprecation_reason:`, with the label of `added:` or `removed:`, in a class without `Base` (the member's class reports it), on the arguments of a `GraphQL::Schema::Subscription` class, and on a `resolver:` (or `mutation:`, `subscription:`) field whose resolver class has its own `deprecation_reason`, which graphql-ruby would give the field in every version. A `deprecated:` outside `added:`..`removed:` in `versions:` raises the first time a query asks, like any lifecycle out of order.
 
@@ -493,7 +493,7 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
 ## Guarantees and limits
 
-**What is guaranteed.** A client that names version V gets V's schema on every path that reads the query's schema: selection and aliases, fragments, validation and its suggestions, introspection (`__schema`, `__type`, `fields`), `to_definition` and `Schema.validate` with V in the context, on the interpreter and on `Execution::Next`, and each query of a multiplex sees its own version. A refused version runs nothing, even with `validate: false`, and even when the query brings its own `static_validator:` (the plugin replaces it; a [persisted queries](persisted-queries.md) refusal is kept, since it runs nothing either). The version lives in the query's context: one query's version cannot reach another's. What this part covers is types, fields, arguments (input fields and directive arguments included), enum values and memberships (`implements`, `possible_types`).
+**What is guaranteed.** A client that names version V gets V's schema on every path that reads the query's schema: selection and aliases, fragments, validation and its suggestions, introspection (`__schema`, `__type`, `fields`), `to_definition` and `Schema.validate` with V in the context, on the interpreter and on `Execution::Next`, and each query of a multiplex sees its own version. A refused version runs nothing, even with `validate: false`, and even when the query brings its own `static_validator:` (the plugin replaces it; a [persisted queries](persisted-queries.md) refusal is kept, since it runs nothing either). The version lives in the query's context: one query's version cannot reach another's. What it covers is types, fields, arguments (input fields and directive arguments included), enum values and memberships (`implements`, `possible_types`).
 
 **Limits.**
 
