@@ -332,3 +332,15 @@ RSpec.describe "GraphQL::Armory::Caching values on every supported Ruby" do
     expect { caching::Decision.pass(:x).reason = :y }.to raise_error(FrozenError)
   end
 end
+
+RSpec.describe GraphQL::Armory::Caching::RecordKeys do
+  it "reads without leaving empty namespaces on a query that has none" do
+    schema = Class.new(GraphQL::Schema) { query(Class.new(GraphQL::Schema::Object) { graphql_name "Query"; field :ping, String }) }
+    context = GraphQL::Query.new(schema, "{ ping }").context
+    keys = described_class
+
+    expect([keys.recorder(context), keys.persisted?(context), keys.viewer_dependent?(context), keys.rescued?(context),
+            keys.guard_built?(context), keys.hit_result(context), keys.record(context)]).to eq([nil, false, false, false, false, nil, nil])
+    expect(%i[armory armory_cache graphql_armory].map { |name| context.namespace?(name) }).to eq([false, false, false])
+  end
+end
