@@ -62,6 +62,8 @@ module GraphQL
 
         # Takes a slot for the query: the refusal when none is free, or nil to let it run.
         def call(query)
+          return nil if Settings.delivery?(query)
+
           unless query.current_trace.is_a?(Release)
             raise ConfigurationError, "this query runs with its own trace (context[:trace]), so Concurrency could never release its slot: remove context[:trace] or add trace_with to that trace"
           end

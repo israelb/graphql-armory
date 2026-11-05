@@ -185,6 +185,24 @@ The reasons of `:id_refused`:
 
 The reasons of `:cache_skipped` are listed in [Response caching](response-caching.md#reasons). `key` is a name your own code gave a context key, never something a client sent, and the signal never holds the tag or the viewer of a purge. What the cache did for one query is also in `context[:response_cache]` (`{ status:, reason:, scope:, ttl:, age: }`), for your controller or log.
 
+### Subscriptions
+
+| Signal | When | Data |
+|---|---|---|
+| `:subscription_created` | A subscription was stored | `engine`, `events` (how many topics) |
+| `:subscription_refused` | A subscribe request was refused | `reason`, such as `:viewer_cap`, `:topic_cap`, `:client_id`, `:context` or `:variables` |
+| `:subscription_delivered` | An update reached the transport | `subscription`, `complexity`, `bytes` |
+| `:subscription_ended` | A subscription was deleted | `reason`: `:refused`, `:viewer_gone`, `:expired`, `:unsubscribed`, `:gone`, `:webhook` or `:drift`; `subscription` |
+| `:subscription_payload_too_large` | A result did not fit the transport and `RESULT_TOO_LARGE` was sent instead | `subscription`, `bytes`, `limit` |
+| `:subscription_trigger_budget` | A trigger reached `max_executions_per_trigger` | `skipped` |
+| `:subscription_delivery_error` | Executing one subscriber raised | `error`: the error's class name; `subscription` |
+| `:subscription_transport_error` | A publish failed or the transport refused a message | `operation`, `error` or `outcome` and `reason` |
+| `:subscription_record_unreadable` | A stored record did not open (tampered or foreign) and was deleted | `subscription` |
+| `:subscription_webhook_refused` | A webhook request failed verification; nothing was deleted | `reason` |
+
+`subscription` is a short keyed digest of the subscription id, never the id itself (the id names the channel). No
+signal holds a viewer id, a variable or a result. See [Subscriptions](subscriptions.md).
+
 ### Rate limiting
 
 Rate limiting takes `sinks:` for one signal, when its store fails:

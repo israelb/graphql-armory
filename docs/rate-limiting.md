@@ -265,6 +265,15 @@ With the [response cache](response-caching.md), a query can be answered from the
 
 The limiters read the context to name and limit the client (`key:`, `limit:`, `rate_limit_key`) inside `Caching.neutral`, so those reads do not keep an answer out of the cache: who is charged does not change the answer. A resolver that reads the same keys is still seen. The limiters' own records (`context[:rate_limit_points]` and the others) are not writes of the query either, so a resolver that returns them is seen as reading an input the cache key does not hold, and its answer is not stored.
 
+### Subscription deliveries
+
+An update that [Subscriptions](subscriptions.md) delivers is server work a trigger caused, not a request from the
+subscriber, so no limiter charges it: `Points`, `Time`, `Concurrency` and invalid-query charges skip a query the
+backend marked in `context.namespace(:armory)`, which a request cannot write. A delivery needs no `rate_limit_key`.
+The subscribe request itself is charged like any other, and `max_complexity` and `max_depth` still apply to every
+delivery. The subscriptions caps (`max_per_viewer:`, `max_per_topic:`, `max_executions_per_trigger:`) bound the
+deliveries instead.
+
 ### Testing your limits
 
 `RateLimits::Store::Substitute` is a `MemoryStore` on a clock your test moves, that records its calls and fails when told, so specs need no mocks and no sleeping:
