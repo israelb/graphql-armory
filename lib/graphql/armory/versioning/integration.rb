@@ -127,6 +127,7 @@ module GraphQL
           end
 
           def visible?(context)
+            Integration.refuse_late_member(self) unless defined?(@armory_lifecycle)
             Integration.refuse_twin_overlap(self, armory_twins, context, field: true)
             return false unless super
 
@@ -152,6 +153,7 @@ module GraphQL
           EXECUTABLE = %i[QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD INLINE_FRAGMENT VARIABLE_DEFINITION].freeze
 
           def visible?(context)
+            Integration.refuse_late_member(self) unless defined?(@armory_lifecycle)
             Integration.refuse_twin_overlap(self, armory_twins, context)
             return false unless super
 
@@ -229,6 +231,7 @@ module GraphQL
           include Member
 
           def visible?(context)
+            Integration.refuse_late_member(self) unless defined?(@armory_lifecycle)
             Integration.refuse_twin_overlap(self, armory_twins, context)
             return false unless super
             return true unless armory_versioned?
@@ -319,6 +322,7 @@ module GraphQL
           attr_reader :armory_lifecycle
 
           def visible?(context)
+            Integration.refuse_late_member(self) unless defined?(@armory_lifecycle)
             return false unless super
             return true if Lifecycle::EVERYWHERE.equal?(@armory_lifecycle)
 
@@ -786,11 +790,21 @@ module GraphQL
 
           names = late.first(LATE_BASE_LISTED).map { |member| late_base_name(member) }
           names << "and #{late.size - LATE_BASE_LISTED} more" if late.size > LATE_BASE_LISTED
-          first = late_base_name(late.first, located: false)
-          raise ConfigurationError, "#{names.join(", ")}: the class of #{first} included GraphQL::Armory::Versioning::Base after #{first} " \
-                                    "was defined, so it has no lifecycle and every query would fail. include Base in the class before " \
-                                    "defining any field, argument or enum value with it (your base field, argument and enum value classes)"
+          raise ConfigurationError, "#{names.join(", ")}: #{late_base_message(late_base_name(late.first, located: false))}"
         end
+
+        # The same refusal from the member itself, for the paths that never run the schema checks: `Schema::Visibility`'s
+        # preload of named profiles, and a member built after the schema already ran a query (the checks are remembered).
+        def self.refuse_late_member(member)
+          raise ConfigurationError, late_base_message(late_base_name(member, located: false))
+        end
+
+        def self.late_base_message(name)
+          "the class of #{name} included GraphQL::Armory::Versioning::Base after #{name} was defined, so it has no lifecycle " \
+            "and every query would fail. include Base in the class before defining any field, argument or enum value with it " \
+            "(your base field, argument and enum value classes)"
+        end
+        private_class_method :late_base_message
 
         def self.late_base_name(member, located: true)
           name = if member.is_a?(Membership)

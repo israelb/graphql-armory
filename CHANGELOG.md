@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Versioning refuses a schema whose field, argument, enum value or membership was built before its class included `Versioning::Base`, with a `ConfigurationError` naming those members and where they were defined, on the first query, `Versioning.types` and in the audit. Before, every query that reached such a member and the audit failed with a `NoMethodError` (#80).
+- Versioning refuses a schema whose field, argument, enum value or membership was built before its class included `Versioning::Base`, with a `ConfigurationError` naming those members, on the first query, `Versioning.types`, `Schema::Visibility`'s preload of named profiles and in the audit. Before, every query that reached such a member and the audit failed with a `NoMethodError` (#80).
 
 ## 0.1.0.pre14 (2026-11-05)
 

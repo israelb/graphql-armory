@@ -105,6 +105,39 @@ RSpec.describe "GraphQL::Armory::Versioning with Base included late" do
     end
   end
 
+  describe "paths that never build a query" do
+    it "security: profiles: true with preload: true raises ConfigurationError while the schema is defined" do
+      query = late_field_query
+      labels = self.labels
+      expect do
+        Class.new(ArmoryEngine.base_schema) do
+          query(query)
+          use GraphQL::Armory::Versioning, versions: labels, default: :latest, profiles: true
+          use GraphQL::Schema::Visibility, profiles: GraphQL::Armory::Versioning.profiles(self), preload: true
+        end
+      end.to raise_error(GraphQL::Armory::Versioning::ConfigurationError, /Query\.hi/)
+    end
+
+    it "security: a member built before Base after the schema already ran a query raises ConfigurationError, not NoMethodError" do
+      query = Class.new(GraphQL::Schema::Object) do
+        graphql_name "Query"
+        field_class Class.new(GraphQL::Schema::Field) { include GraphQL::Armory::Versioning::Base }
+        field :early, String, null: true
+      end
+      schema = schema_over(query)
+      root = Struct.new(:early, :later).new("early", "later")
+      expect(execute_query(schema, "{ early }", root_value: root).to_h).to eq("data" => { "early" => "early" })
+
+      plain = Class.new(GraphQL::Schema::Field)
+      query.field_class(plain)
+      query.field(:later, String, null: true)
+      plain.include(GraphQL::Armory::Versioning::Base)
+
+      expect { execute_query(schema, "{ later }", root_value: root) }
+        .to raise_error(GraphQL::Armory::Versioning::ConfigurationError, /Query\.later.*included GraphQL::Armory::Versioning::Base after/m)
+    end
+  end
+
   describe "the audit" do
     it "security: reports the late members under Schema instead of raising" do
       report = nil
