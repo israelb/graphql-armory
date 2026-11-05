@@ -31,5 +31,5 @@ require "graphql/armory/subscriptions/controls"
 #   require "graphql/armory/subscriptions/webhook_app"   # U1
 #   require "graphql/armory/subscriptions/memory_store"  # U2
 #   require "graphql/armory/subscriptions/redis_store"   # U2
-#   require "graphql/armory/subscriptions/pusher"        # U3
+require "graphql/armory/subscriptions/pusher"          # U3
 #   require "graphql/armory/subscriptions/ably"          # U4
