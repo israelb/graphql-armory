@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "graphql/armory/rate_limits/cached_charge"
+
 module GraphQL
   module Armory
     module RateLimits
@@ -12,7 +14,13 @@ module GraphQL
       # A query that costs more than the client has left is refused before any field resolves, and charged
       # nothing. Soft mode (the default) charges and records but refuses nothing. What happened is in
       # `context[:rate_limit_points]`. An invalid query, which no analyzer sees, costs `invalid_cost:`, charged by a trace.
+      # A response the cache answers is charged the points its run cost, through `charge_cached` (CachedCharge).
+      #
+      # The key, limit and exemption lookups and the limiter's own records go through `Caching.neutral`: who is charged
+      # does not change the answer, so the response cache does not count them as inputs of it.
       class Points
+        include CachedCharge
+
         CONTEXT_KEY = :rate_limit_points
         NAMESPACE = :graphql_armory
 
@@ -101,15 +109,15 @@ module GraphQL
 
         # Whether this query's client has no limit to charge.
         def exempt?(query)
-          Settings.exempt?(@key, @limit, query)
+          Caching.neutral(query.context) { Settings.exempt?(@key, @limit, query) }
         end
 
         # The refusal for a query that costs `cost`, or nil to let it run.
         def call(query, cost)
-          key = Settings.key_for(@key, query)
+          key = Caching.neutral(query.context) { Settings.key_for(@key, query) }
           return call_several(query, key, cost) if key.is_a?(Array)
 
-          limit = Settings.limit_for(@limit, key, query)
+          limit = Caching.neutral(query.context) { Settings.limit_for(@limit, key, query) }
           if limit.nil?
             record(query, key: key, cost: cost, limit: nil, remaining: nil, limited: false)
             return nil
@@ -119,7 +127,7 @@ module GraphQL
             @store.take(key, cost: cost, limit: limit, window: @window, force: @soft)
           rescue StandardError => error
             # No record: a context hash shared with an earlier query must not keep its numbers.
-            query.context[CONTEXT_KEY] = nil
+            Caching.neutral(query.context) { query.context[CONTEXT_KEY] = nil }
             @on_store_error.call(error, query)
             return nil
           end
@@ -136,7 +144,7 @@ module GraphQL
         # Two queries can race between the two steps: then the refused one leaves the other keys charged. A key whose store
         # fails is left out, and the others still decide: an attacker who can pick a dead shard must not cancel a refusal.
         def call_several(query, keys, cost)
-          limits = Settings.limits_for(@limit, keys, query)
+          limits = Caching.neutral(query.context) { Settings.limits_for(@limit, keys, query) }
           if limits.empty?
             record(query, key: keys.first, cost: cost, limit: nil, remaining: nil, limited: false, keys: [])
             return nil
@@ -149,7 +157,7 @@ module GraphQL
                       takes(query, read ? read.to_h { |budget| budget.values_at(:key, :limit) } : limits, cost, @soft, charging: true)
                     end
           if budgets.empty?
-            query.context[CONTEXT_KEY] = nil
+            Caching.neutral(query.context) { query.context[CONTEXT_KEY] = nil }
             return nil
           end
 
@@ -187,11 +195,13 @@ module GraphQL
         end
 
         # In the context hash for instrumentation, and per query for `headers`: queries of a multiplex may share one
-        # context hash, where the last query's record wins.
+        # context hash, where the last query's record wins. The limiter's write is not the query's: a resolver that reads
+        # the record later reads an input of its answer, and the response cache must see that read.
         def record(query, **info)
           info = { **info.slice(:key, :cost, :limit, :remaining), window: @window, soft: @soft, limited: info[:limited], **info.slice(:keys, :invalid) }
           query.context.namespace(NAMESPACE)[:points] = info
-          query.context[CONTEXT_KEY] = info
+          Caching.neutral(query.context) { query.context[CONTEXT_KEY] = info }
+          info
         end
 
         def refusal(cost, limit, remaining)
@@ -223,7 +233,7 @@ module GraphQL
             rescue GraphQL::Error => error
               raise unless error.instance_of?(GraphQL::Error) && error.message.start_with?(UNSIZED_CONNECTION)
 
-              query.context[CONTEXT_KEY] = nil
+              Caching.neutral(query.context) { query.context[CONTEXT_KEY] = nil }
               return AnalysisGuard.answer(query, points) { GraphQL::AnalysisError.new("This connection needs first: or last:", extensions: { "code" => "PAGE_SIZE_REQUIRED" }) }
             end
             unless cost.is_a?(Numeric) && cost.finite? && !cost.negative?
