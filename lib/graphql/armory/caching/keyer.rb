@@ -18,7 +18,8 @@ module GraphQL
       # Refusals: the policy's own (a refused policy is answered as it is), `:unconfigured` (an inert keyer), `:operation`
       # (no operation selected), `:variables` (a declared variable's value is not JSON), `:viewer_unconfigured` and
       # `:anonymous` (a `:viewer` policy with no `viewer:` key, or an anonymous request under `anonymous: :uncacheable`),
-      # `:vary_value` (a `vary:` value of a type the key cannot hold), `:version` (a refused version). A principal the key
+      # `:vary_value` (a `vary:` value of a type the key cannot hold), `:version` (a refused version), `:schema_unprintable`
+      # (graphql-ruby cannot print the schema: graphql 2.4 with json 3.x). A principal the key
       # cannot name (an anonymous class, a bad id) raises `ConfigurationError`: that is the app's setup, not the client's.
       #
       # The engine comes from the caller (the gate is told it per `multiplex` call): a query does not know it before it runs.
@@ -74,8 +75,13 @@ module GraphQL
 
           profile = profile_name(query)
           schema = query.schema
+          schema_digest = begin
+            @schema_identity.schema_digest(schema, label, profile)
+          rescue SchemaIdentity::Unprintable
+            return Policy.refused(:schema_unprintable)
+          end
           components = [
-            FORMAT, @release, schema.name, @schema_identity.schema_digest(schema, label, profile), engine.to_s,
+            FORMAT, @release, schema.name, schema_digest, engine.to_s,
             @schema_identity.document_digest(query.document), operation.name, variables, label,
             profile.nil? ? nil : Canonical.typed(profile), limit(query.max_depth, :max_depth), limit(query.max_complexity, :max_complexity),
             policy.scope.to_s, viewer&.component, vary

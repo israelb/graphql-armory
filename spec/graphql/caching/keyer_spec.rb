@@ -38,6 +38,29 @@ RSpec.describe GraphQL::Armory::Caching::Keyer do
     keyer.(query, policy, engine: engine)
   end
 
+  describe "a schema graphql-ruby cannot print" do
+    # graphql 2.4 with json 3.x raises from `to_definition` on a deprecation reason: the request runs uncached.
+    let(:unprintable) do
+      Class.new(caching::Controls::Schema.example) do
+        def self.printed = (@printed ||= 0)
+
+        def self.to_definition(**)
+          @printed = printed + 1
+          raise ArgumentError, "quirks_mode"
+        end
+      end
+    end
+
+    it "refuses (:schema_unprintable) without raising, and prints the schema once" do
+      built = keyer
+      first = key_for(query(schema: unprintable), keyer: built)
+      second = key_for(query(schema: unprintable), keyer: built)
+
+      expect([first, second]).to all(eq(caching::Policy.refused(:schema_unprintable)))
+      expect(unprintable.printed).to eq(1)
+    end
+  end
+
   describe ".build" do
     it "refuses a missing, empty or non-String release" do
       [nil, "", "  ", :r1].each do |release|

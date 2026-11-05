@@ -26,6 +26,11 @@ module GraphQL
         # `computed` keeps the latest computations only.
         RECORDED = 100
 
+        # graphql-ruby could not print the schema (graphql 2.4 with json 3.x raises on a deprecation reason). The
+        # failure is memoized like a digest: the schema is not printed again on every request.
+        class Unprintable < StandardError; end
+        UNPRINTABLE = :unprintable
+
         attr_reader :computed
 
         def initialize(limit: LIMIT)
@@ -44,12 +49,23 @@ module GraphQL
         # digest is the schema's and not one viewer's view of it.
         def schema_digest(schema, label, profile)
           found = @lock.synchronize { @schemas[schema]&.[]([label, profile]) }
-          return found if found
+          found ||= compute_schema_digest(schema, label, profile)
+          raise Unprintable, "#{schema.name || "the schema"} cannot be printed by this graphql-ruby" if found == UNPRINTABLE
 
+          found
+        end
+
+        def compute_schema_digest(schema, label, profile)
           context = { armory_full_schema: true }
           context[:armory_version] = label unless label.nil?
           context[:visibility_profile] = profile unless profile.nil?
-          digest = Digest::SHA256.hexdigest(schema.to_definition(context: context)).freeze
+          digest = begin
+            Digest::SHA256.hexdigest(schema.to_definition(context: context)).freeze
+          rescue Versioning::RefusedVersionError
+            raise
+          rescue StandardError
+            UNPRINTABLE
+          end
 
           @lock.synchronize do
             record([:schema, label, profile])
@@ -57,6 +73,7 @@ module GraphQL
             (@schemas[schema] ||= {})[[label, profile]] ||= digest
           end
         end
+        private :compute_schema_digest
 
         # SHA-256 of `document.to_query_string`.
         def document_digest(document)
