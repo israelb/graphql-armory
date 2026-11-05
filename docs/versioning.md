@@ -295,6 +295,26 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 `version` is the schema's own label, never the client's value. `:version_defaulted` counts the clients that do not send a version yet; `:version_refused` with `:retired` counts the clients still on a version you retired. See [Telemetry](telemetry.md).
 
+### One visibility profile per version
+
+By default graphql-ruby asks every member's `visible?` again for each query. With `profiles: true`, each served version gets one named `Schema::Visibility` profile, computed once and kept for the life of the schema, and each query runs under its own version's profile (graphql 2.4.10 or later):
+
+```ruby
+class AppSchema < GraphQL::Schema
+  query Types::Query
+  use GraphQL::Armory::Versioning, versions: %w[2024-06-01 2025-01-01], default: :latest, profiles: true
+  use GraphQL::Schema::Visibility, profiles: GraphQL::Armory::Versioning.profiles(self), preload: true
+end
+```
+
+- `use GraphQL::Armory::Versioning` comes first: `Versioning.profiles(self)` builds the profiles from its own version list, one per served version, named `:"armory_v_<label>"`, so the two lists cannot drift. A retired version has no profile.
+- The plugin names the profile for each query from its `armory_version`, before graphql-ruby builds it. Your code never sets `visibility_profile`: a query whose context or `visibility_profile:` names another profile, even another version's, raises `ConfigurationError` before anything runs, and so does a version a custom `context_class` changes after the query was built. A refused version runs under no profile and is refused as usual.
+- With `preload: true` (graphql-ruby's default in production) every version's visibility is computed when the schema loads, so a lifecycle naming a label `versions:` does not hold raises there, not on the first request.
+- `dynamic: true` is optional: it keeps working a `GraphQL::Query` your code builds by hand without a version's profile. Do not add profiles of your own: a profile Hash that did not come from `Versioning.profiles` raises `ConfigurationError` when a versioned member is asked under it.
+- **A profile holds only the version, never a user.** Authorization's `visible_when:` raises under it, and your own `visible?` is asked once per version, not once per query, so it must not read the user. Use `profiles: true` on schemas whose visibility depends on the version alone. The audit reports both (`:profiles`).
+
+Without `profiles: true`, a query that runs under a named profile of your own raises `ConfigurationError`: a named profile keeps one visibility for every query that names it, so it cannot follow each query's version.
+
 ### The audit
 
 Most mistakes in a versioned schema are refused with `ConfigurationError`, but only when a query first asks the member, which may be in production. The audit asks every member of every served version before that:
@@ -336,6 +356,8 @@ It asks each member with a context that names the version and `armory_full_schem
 | `:undeclared_version` | `added:` or `removed:` names a label that is not in `versions:` |
 | `:outside_lifecycle` | A served version lists a type, field, argument, enum value or membership outside its lifecycle: your own `visible?` answers before the plugin's, or graphql-ruby serves it without asking. A client of that version gets it |
 | `:unchecked` | Asking the member raised something else (an app `visible?` that needs a user, for example): it was not checked |
+| `:profiles` | `profiles: true` meets a check that needs the query's user: a `visible_when:` (it raises under a profile), or your own `visible?` on a type, field, argument, enum value or membership class, or on the schema (asked once per version, so it decides for every user at once; the audit cannot read whether it reads the user). Drop one of the two |
+| `:retired_only` | A type, field, argument, enum value or membership (one of two twins included) whose lifecycle covers only retired versions: no client can reach it. Delete it. Information, which `ok?` ignores, unless `strict: true` |
 
 `ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see, a type with nothing in it, or a field or argument that another definition of its name serves or that an interface still declares; no `visible?` of yours answers before the plugin's undeclared; no default names a value or input field its version does not have; and no subscription trigger breaks on an argument that differs between versions. Information (an optional member hidden because its type is, the natural way to version a field with its type, a declared `visible?`, a subscription field outside the `default:` version) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: whether a type's field or argument in a version has a type its interface's definition allows (covariance). A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
 
@@ -420,6 +442,7 @@ Types are compared by name, as a client sees them. A renamed type is a type remo
 - `default:` `:latest`, a served label, or `:refuse`. Required.
 - `sinks:` an Array of callables taking `(signal, data)` or `(signal, data, context)`; `on_sink_error:` a callable `(error, signal)`. See [Telemetry](telemetry.md).
 - `own_checks:` a Hash mapping each class or module that defines a `visible?` of yours ahead of the plugin's to `{ visible?: "the reason you keep it" }`, for the audit (`:own_check`). Nothing else is accepted: `{ Types::BaseObject => { visible?: "hides drafts from guests, calls super" } }`. A schema's own `self.visible?` is declared under the schema class.
+- `profiles:` `true` or `false` (the default): run each query under its version's named `Schema::Visibility` profile. `true` raises `ArgumentError` on graphql before 2.4.10. `GraphQL::Armory::Versioning.profiles(schema)` answers the Hash for `use GraphQL::Schema::Visibility, profiles:` (a new one each call, `{ :"armory_v_<label>" => { armory_version:, armory_versions: } }` per served version), and raises `ConfigurationError` on a schema whose `use` did not say `profiles: true`. Under it, these raise `ConfigurationError` when a query is built, before anything runs: a context or `visibility_profile:` naming another profile, a version changed after the profile was picked, a profile that is not the version's (the schema's `Schema::Visibility` lacks `Versioning.profiles`), and a schema without `Schema::Visibility`. A query your code builds with `use_visibility_profile: false` runs under the Warden, still versioned. `schema.armory_versioning_profiles.enabled?` tells whether it is on.
 - Anything else raises `Versioning::ConfigurationError` when the schema loads.
 - Works with your own `query_class`, set before `use`, after it, or in a child schema: the plugin subclasses it. `use` it once per schema hierarchy: a second `use`, on the same schema or a child, raises.
 
@@ -498,9 +521,20 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 - **A required argument hidden in V is not required in V.** A client of a version where the argument does not exist cannot send it, so the field runs without it: the resolver needs a Ruby default for it. An input field hidden in V is absent from the input object, and a `validates required: { one_of: }` whose every option is hidden in V fails every request in V.
 - **Default values that graphql-ruby checks at boot.** graphql-ruby validates every `default_value:` against the latest version when the schema loads, so a default naming an enum value removed in the latest version raises its `InvalidDefaultValueError` at boot, whatever the argument's own lifecycle. An argument defined after the schema loaded (code reloading) escapes that check, and then `to_definition` raises in every version: the audit reports it (`:default_value`).
 - **An enum with every value hidden in V** raises graphql-ruby's `MissingValuesError` on any query that reaches it in V, introspection included. Give the enum the lifecycle instead.
-- **Named `Schema::Visibility` profiles** (`profiles:`) are not supported yet: any field of a class that includes `Base` asked under one raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work.
+- **Named `Schema::Visibility` profiles** work only as the plugin's own, with `profiles: true` (graphql 2.4.10 or later; earlier versions build a named profile from the first query's context and keep it for every query, so `use` raises `ArgumentError` there). They hold the version and nothing else: Authorization's `visible_when:` raises under them, and your own `visible?` is asked once per version, so it must not read the user (the audit's `:profiles`). Without `profiles: true`, a query under a named profile raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work either way.
 - **`Schema::AlwaysVisible`** never asks `visible?`, so nothing would be versioned: the first query and `Versioning.types` raise `ConfigurationError` instead, even when it was added after `use`.
 - **Your own `visible?`** on a base class, or the schema's `self.visible?`, must call `super`, or the plugin is skipped for those members. The audit cannot read whether it does: it reports each one (`:own_check`) until you declare it in `own_checks:`.
 - **Two refusing plugins.** With persisted queries, a request both refuse gets the persisted query's code. Either way nothing runs.
 - **Signals.** `to_definition`, `Schema.validate` and subscription triggers go through `query_class` too, so each records one signal.
-- **Cost.** A member without a lifecycle costs nothing (an argument's default value is read once). A versioned member costs a few Hash lookups each time graphql-ruby asks `visible?` (once per member per query). Not measured yet.
+- **Cost.** A member without a lifecycle costs nothing (an argument's default value is read once). A versioned member costs a few Hash lookups each time graphql-ruby asks `visible?` (once per member per query, or once per member per version with `profiles: true`). See [Performance](#performance).
+
+## Performance
+
+`benchmark/versioning.rb`: 40 object types of 25 fields; in the versioned setups half the fields have a lifecycle and 10 types have a field defined twice. The query selects all 25 fields of 8 types, each over a list of 100 items (20,000 fields resolved), as a client of the third of four versions. graphql 2.6.14, Ruby 3.3, Docker on Windows (one laptop, background load: read the differences, not the absolute numbers). Time per query and objects allocated:
+
+| Engine | plain | warden | visibility | profiles |
+|---|---|---|---|---|
+| interpreter | 70.0 ms, 6,655 | 76.4 ms, 26,239 | 70.3 ms, 27,109 | 67.9 ms, 25,568 |
+| next | 12.3 ms, 25,008 | 15.5 ms, 27,200 | 16.1 ms, 28,070 | 14.6 ms, 26,529 |
+
+`plain` has no versioning and uses `Schema::Visibility`; `warden` and `visibility` ask `visible?` once per member per query; `profiles` is `profiles: true` with `preload: true`. On the interpreter the four are within the measurement's error (±7%). On `Execution::Next`, versioning costs about 3.5 ms per query on this query, and `profiles: true` takes about 1.5 ms of it away: what remains is not visibility but graphql-ruby running `authorized?` on each of the 800 objects, because `Base` on an object type adds one (to refuse a type outside the version that `loads:` reached). Run it yourself: `docker compose run --rm test bundle exec ruby benchmark/versioning.rb` (add `GRAPHQL_ARMORY_ENGINE=next` for Next, and `PROFILE=1 PROFILE_SETUP=profiles` passed with `docker compose run -e` to see where the time goes).
