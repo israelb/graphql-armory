@@ -120,7 +120,26 @@ The signal never holds the ID, the key or the record. A rising `:invalid` is som
 
 ### Testing with IDs
 
-`Encoder::Substitute` encodes reversibly without a key and records what it encoded and decoded, for specs of code that uses an encoder; never hand out real IDs with it. `IDs::Controls::Encoder.example` is an Encoder subclass with a fixed test key, and `IDs::Controls::Record.example(id:)` a record to build IDs from. `IDs::Lookup.new`, with nothing wired, hands out no ID and honours none (`Encoder::Null`); `IDs::Lookup.build(encoder:, find:)` takes the same settings as `use`.
+`Encoder::Substitute` encodes reversibly without a key and records what it encoded and decoded (and what it sealed, opened and digested, in `sealed`, `opened` and `macs`), for specs of code that uses an encoder; never hand out real IDs with it. `IDs::Controls::Encoder.example` is an Encoder subclass with a fixed test key, and `IDs::Controls::Record.example(id:)` a record to build IDs from. `IDs::Lookup.new`, with nothing wired, hands out no ID and honours none (`Encoder::Null`); `IDs::Lookup.build(encoder:, find:)` takes the same settings as `use`.
+
+## Sealing other data
+
+The same encoder seals data your app stores and must get back untouched, and gives keyed digests. [Response caching](response-caching.md) uses both to seal its entries and to name its keys and tags; you rarely call them yourself.
+
+```ruby
+blob = AppEncoder.seal(bytes, aad: "invoice-cache:42", purpose: "cache")
+AppEncoder.open(blob, aad: "invoice-cache:42", purpose: "cache")   # => the bytes, binary
+AppEncoder.mac("viewer:7", purpose: "cache-digest")                # => 32 raw bytes (HMAC-SHA256)
+```
+
+- **`seal`** encrypts with AES-256-GCM and a random nonce, and answers base64url text (whatever `codec` IDs use). `aad`, the additional data, is authenticated but not stored: say where the value belongs (a store key), and a value copied anywhere else does not open.
+- **`open`** answers the bytes only for the same `aad`, `purpose`, key and tag; anything else raises `InvalidError`, without saying why.
+- **`mac`** answers the raw 32-byte HMAC, the same every time, so equal inputs give equal digests and whoever sees a digest cannot confirm a guess without the key.
+- **Each purpose has its own key**, derived from yours with HKDF exactly as the ID and cursor keys are, under another name: a sealed value is never accepted as an ID or a cursor, an ID never opens as a sealed value, and `cache` values never open as `cache-digest` ones. A purpose is lowercase words joined by dashes.
+- **The tag is bound too**: an app with another tag cannot open your values, and its digests differ.
+- **IDs and cursors do not change**: the same IDs come out byte for byte, and the ones already handed out keep decoding.
+- **In a versioned chain**, `seal` and `mac` use the newest encoder and `open` tries each one, so values sealed before a rotation keep opening while the old encoder stays in the chain. Digests change with the newest key: what was stored under old digests is no longer found.
+- **`Encoder::Legacy` and `Encoder::Null` refuse to seal and to digest** (`ConfigurationError`) and open nothing: neither has a key. A chain whose newest member is `Legacy` refuses too.
 
 ## Reference
 
@@ -139,12 +158,15 @@ The signal never holds the ID, the key or the record. A rising `:invalid` is som
 | `chain.decode_versioned(text, nonce: false)` | `[data, encoder]`, or `[nil, nil]` when no encoder accepts it. |
 | `use GraphQL::Armory::IDs, encoder: nil, find: nil, sinks: [], on_sink_error: nil` | Defines `id_from_object` and `object_from_id`; `encoder` defaults to `Encoder.default`; `find:` loads types without `Base`; `sinks:` hears `:id_resolved` and `:id_refused` ([Telemetry](telemetry.md)). |
 | `Encoder.default` | An encoder keyed by `GRAPHQL_ARMORY_KEY`, else by a key derived with HKDF from Rails' `secret_key_base`; raises `ConfigurationError` without either. |
+| `seal(bytes, aad:, purpose:)` | Base64url text: `bytes` encrypted and authenticated with `aad`, under the key of `purpose`. Also on a chain (newest encoder). |
+| `open(text, aad:, purpose:)` | The sealed bytes, binary, or raises `InvalidError`. Also on a chain (any encoder). |
+| `mac(bytes, purpose:)` | The raw 32-byte HMAC-SHA256 under the key of `purpose`. Also on a chain (newest encoder). |
 
 A subclass inherits `key`, `tag` and `codec`, and can override any of them. Passing `nil` to any of them raises `ConfigurationError`, so an unset environment variable fails at boot instead of being ignored.
 
 ## Guarantees and limits
 
-Covered by `spec/security/encoder_spec.rb`, `encoder_versioning_spec.rb`, `default_encoder_spec.rb` and `ids_plugin_spec.rb` on both engines: round trips, tampering at several positions, another key, another tag, a cursor used as an ID and the reverse, malformed and truncated input, encrypted pagination and a tampered cursor, rotation and migration from base64 cursors, where the default encoder takes its key, and the plugin answering every ID it cannot honour (foreign, tampered, unknown or non-object type, another model in `loads:`) like a missing one.
+Covered by `spec/security/encoder_spec.rb`, `encoder_versioning_spec.rb`, `default_encoder_spec.rb`, `ids_plugin_spec.rb` and `spec/graphql/encoder_seal_spec.rb` on both engines (the last also pins IDs and cursors from before sealing existed): round trips, tampering at several positions, another key, another tag, a cursor used as an ID and the reverse, malformed and truncated input, encrypted pagination and a tampered cursor, rotation and migration from base64 cursors, where the default encoder takes its key, and the plugin answering every ID it cannot honour (foreign, tampered, unknown or non-object type, another model in `loads:`) like a missing one.
 
 - **Changing the key invalidates every ID and cursor already handed out**, unless the old encoder stays in a versioned chain.
 - **`Legacy` in a chain can be forged**, and it does not separate IDs from cursors. Keep it only while migrating.
