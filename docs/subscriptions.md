@@ -28,7 +28,8 @@ has its own message size limit, from 10 KB on Pusher to 64 or 256 KiB on Ably.
 a transport.
 
 - **Each delivery runs as its subscriber.** The core stores the subscription as a record sealed with your
-  `Encoder`: the document, its variables, the viewer's id, the API version Versioning decided, the persisted
+  `Encoder`: the document, its variables (as plain JSON, never graphql-ruby's `Serialize`, so a client's `__gid__`
+  key is never located), the viewer's id, the API version Versioning decided, the persisted
   operation id and only the context keys you list in `context_keys:`. On a trigger it rebuilds each subscriber's
   context from that record, reloads the viewer with your `viewer: { load: }`, and runs the document through your
   schema's query class, on the engine that created the subscription. Authorization, Versioning and
@@ -46,7 +47,8 @@ a transport.
   and only then does the transport sign the provider's auth answer. The id is built by the server; a client that sets
   `context[:subscription_id]` is refused.
 - **Every subscription ends.** `max_lifetime:` is required. Provider webhooks (Pusher `channel_vacated`, Ably
-  presence `leave`), verified in constant time, end one sooner.
+  presence `leave`), verified in constant time and refused when dated more than 5 minutes before or after now, end one
+  sooner.
 - **Deliveries are not rate-charged.** A delivery is marked in `context.namespace(:armory)`, which a request cannot
   write, and RateLimits charges no budget for it, so someone who causes triggers cannot spend another user's budget.
   `max_complexity` and `max_depth` still apply, and caps bound the work: `max_per_viewer:`, `max_per_topic:` and
@@ -143,7 +145,8 @@ GraphQL::Armory::Subscriptions::Ably.build(
 ```
 
 Ably authorizes a connection, not a channel, so a channel is `<prefix>:<viewer digest>:<id>` and your token endpoint
-answers a TokenRequest whose capability is the viewer's own channels only:
+answers a TokenRequest whose capability is the viewer's own channels only (`presence` and `subscribe`), with the viewer
+digest as its `clientId` (`"anonymous"` in anonymous mode), which Ably's presence, and so the leave webhook, needs:
 
 ```ruby
 post "/ably/auth" do
@@ -197,7 +200,7 @@ it; `Subscriptions.new` is inert: it stores, delivers and authorizes nothing).
 | `context_keys:` | `{}` | `{ key: "reason" }`: the only context values stored and restored; values must round-trip through graphql-ruby's `Serialize`. `armory_version`, `operation_id`, `armory_allow_raw_query`, `visibility_profile` and `subscription_id` are reserved |
 | `max_per_viewer:` | 100 | live subscriptions per viewer (or per `cap_key`) |
 | `max_per_topic:` | 10_000 | live subscriptions per topic |
-| `max_executions_per_trigger:` | 10_000 | subscribers executed per trigger; the rest are skipped and recorded |
+| `max_executions_per_trigger:` | 10_000 | subscribers executed per trigger, from a random start so repeated triggers reach every subscriber; the rest are skipped and recorded |
 | `on_delivery_error:` | `:record` | `:raise` raises after the whole topic was processed |
 | `sinks:`, `on_sink_error:` | | [Telemetry](telemetry.md#subscriptions) |
 
@@ -229,7 +232,17 @@ Guaranteed:
 Limits:
 
 - Between a permission change and the next trigger, nothing is sent, but the subscription exists.
+- A viewer its policy refuses can still create a subscription (there is no object to check yet): it counts against
+  `max_per_viewer:` and `max_per_topic:` until the first trigger ends it.
 - A nested null (one hidden field) does not end a subscription; only the root field decides.
+- A null root field ends the subscription, so a trigger whose object one subscriber may not see ends that
+  subscriber. To keep it, authorize each event in the subscription's `update` and skip the ones it may not see:
+
+  ```ruby
+  def update(**)
+    MessagePolicy.new(context[:current_user], object).show? ? object : NO_UPDATE
+  end
+  ```
 - Channel auth is as strong as your auth endpoint: it must build the context as your GraphQL endpoint does.
 - Webhooks are lossy and late (about 3 seconds on Pusher, 15 on Ably); `max_lifetime` is what bounds a subscription.
 - An expired subscription gets `{ more: false }` only if a trigger reaches it before `cleanup` removes it; after
@@ -239,4 +252,10 @@ Limits:
 - A result larger than the transport's limit is replaced with `RESULT_TOO_LARGE`, never truncated.
 - Subscription arguments with `loads:` or `prepare:` are not supported.
 - Install it on the schema that executes: graphql-ruby shares one backend with child schemas.
+- A subscription's variables must come back the same from JSON: a `Date`, a `Symbol` or another object your own code
+  passes as a variable is refused with `SUBSCRIPTION_REFUSED`.
+- `trigger` with a single value for a list argument raises graphql-ruby's own `NoMethodError`: pass a list.
+- The engine a delivery runs on is the one `context[:__graphql_execute_next]` named at subscribe, which graphql-ruby
+  sets on `Execution::Next`. An app that copies client input into the context could let a client choose the engine
+  its deliveries run on; Authorization applies on both.
 - No ActionCable or AnyCable transport, no broadcast, no Ably end-to-end encryption.
