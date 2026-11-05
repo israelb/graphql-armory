@@ -13,14 +13,11 @@ module GraphQL
         # - A query's context: the version `Lookup` stored for it. A second context graphql-ruby builds for a query
         #   (`Visibility::Migration`'s) and a `Query::Partial`'s see that query's version. A `GraphQL::Query` the app built
         #   itself is decided once from its own `armory_version`, recording nothing.
-        # - Anything else, such as the frozen Hash of a named `Schema::Visibility` profile: refused, fail closed.
+        # - The frozen Hash of a named `Schema::Visibility` profile built by `Versioning.profiles`: its version.
+        # - Anything else, such as an app's own profile Hash: refused, fail closed.
         def self.version(context)
           return Version::LATEST if context.is_a?(GraphQL::Query::NullContext)
-
-          unless context.respond_to?(:namespace)
-            raise ConfigurationError, "versioned members need a query's context, got a #{context.class}: named Schema::Visibility profiles " \
-                                      "(profiles:) are not supported by Versioning yet, use dynamic: true or no profiles"
-          end
+          return profile_version(context) unless context.respond_to?(:namespace)
 
           store = context.namespace(:armory)
           store.fetch(:version) do
@@ -30,6 +27,23 @@ module GraphQL
             store[:version] = undecided(context)
           end
         end
+
+        # A profile's Hash carries no schema: it carries the gate's own list instead, and a served label of it.
+        def self.profile_version(context)
+          versions = context.is_a?(Hash) ? context[:armory_versions] : nil
+          unless versions.is_a?(Versions)
+            named = context.is_a?(Hash) && context[:visibility_profile] ? " (visibility profile #{context[:visibility_profile].inspect})" : ""
+            raise ConfigurationError, "versioned members need a query's context or a profile from Versioning.profiles, got a #{context.class}#{named}: " \
+                                      "pass `profiles: GraphQL::Armory::Versioning.profiles(Schema)` to Schema::Visibility, with " \
+                                      "`use GraphQL::Armory::Versioning, ..., profiles: true`, or use dynamic: true and no named profiles"
+          end
+
+          version = versions.fetch(context[:armory_version])
+          raise ConfigurationError, "the visibility profile #{context[:visibility_profile].inspect} names #{version.label}, which is retired" if version.retired?
+
+          version
+        end
+        private_class_method :profile_version
 
         def self.undecided(context)
           query = context.query
@@ -761,6 +775,11 @@ module GraphQL
           def armory_versioning
             @armory_versioning || superclass.armory_versioning
           end
+
+          # The named profiles `use ..., profiles: true` runs queries under, or `Profiles::Off`.
+          def armory_versioning_profiles
+            @armory_versioning_profiles || superclass.armory_versioning_profiles
+          end
         end
 
         # Decides the query's version after the query is built, from its own context, so a version set by a custom
@@ -770,9 +789,11 @@ module GraphQL
           def initialize(schema, query_string = nil, **options)
             Integration.refuse_always_visible(schema)
             Integration.check_schema(schema)
-            super
+            profiles = schema.armory_versioning_profiles
+            super(schema, query_string, **profiles.options(schema.armory_versioning, options))
 
             decision = schema.armory_versioning.(context)
+            profiles.check(self, decision)
             store = context.namespace(:armory)
             return store[:version] = decision.version unless decision.refused?
 

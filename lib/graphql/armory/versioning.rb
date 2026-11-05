@@ -63,7 +63,9 @@ module GraphQL
 
         Integration.refuse_always_visible(schema)
         Integration.check_schema(schema)
-        query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: context.merge(armory_version: label))
+        # Under `profiles: true`, the version's own profile: what its requests see.
+        profile = schema.armory_versioning_profiles.query_options(decision.version)
+        query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: context.merge(armory_version: label), **profile)
         View.new(query.types)
       end
 
@@ -77,16 +79,29 @@ module GraphQL
         end
       end
 
+      # The Hash for `use GraphQL::Schema::Visibility, profiles:` on a schema that says `use ..., profiles: true`: one named
+      # profile per served version, built from the gate's own list, so the two cannot drift.
+      #
+      #   use GraphQL::Armory::Versioning, versions: [...], default: :latest, profiles: true
+      #   use GraphQL::Schema::Visibility, profiles: GraphQL::Armory::Versioning.profiles(self), preload: true
+      def self.profiles(schema)
+        Integration.gate(schema)
+        schema.armory_versioning_profiles.to_h
+      end
+
       # `versions:` the labels, oldest first; `retired:` the oldest ones, no longer served; `default:` what a request with no
-      # version gets: `:latest`, a served label or `:refuse`. `sinks:` and `on_sink_error:` as in Telemetry.
-      def self.use(schema, versions:, default: Gate::UNSET, retired: [], sinks: [], on_sink_error: nil)
+      # version gets: `:latest`, a served label or `:refuse`. `sinks:` and `on_sink_error:` as in Telemetry. `profiles: true`
+      # runs each query under its version's named `Schema::Visibility` profile (graphql >= 2.4.10; see `profiles`).
+      def self.use(schema, versions:, default: Gate::UNSET, retired: [], sinks: [], on_sink_error: nil, profiles: false)
         gate = Gate.build(versions: versions, default: default, retired: retired, sinks: sinks, on_sink_error: on_sink_error)
+        named_profiles = Profiles.build(gate.versions, enabled: profiles)
 
         if schema.singleton_class.include?(Integration::Guard)
           raise ConfigurationError, "#{schema} already uses Versioning (here or in a parent schema): use it once"
         end
 
         schema.instance_variable_set(:@armory_versioning, gate)
+        schema.instance_variable_set(:@armory_versioning_profiles, named_profiles)
         schema.singleton_class.prepend(Integration::Guard)
         schema.query_class(schema.query_class)
       end
@@ -100,8 +115,10 @@ require "graphql/armory/versioning/versions"
 require "graphql/armory/versioning/lifecycle"
 require "graphql/armory/versioning/decision"
 require "graphql/armory/versioning/gate"
+require "graphql/armory/versioning/profiles"
 require "graphql/armory/versioning/integration"
 require "graphql/armory/versioning/view"
 require "graphql/armory/versioning/audit"
 require "graphql/armory/versioning/audit/command"
+require "graphql/armory/versioning/audit/profiles"
 require "graphql/armory/versioning/controls"
