@@ -374,7 +374,7 @@ RSpec.describe "Versioning audit 3a: verification probes" do
       end
 
       # ---------------------------------------------------------------- (a) hidden by the user
-      it "security S20: an app visible? ahead of the plugin that answers false with no user (documented as not checked)" do
+      it "security S20: an app visible? ahead of the plugin that answers false with no user (reported as :own_check)" do
         b = bases
         parent = Class.new(b[:object]) { graphql_name "AdminBase"; lifecycle added: "2025-01-01"; field :a, String, null: true }
         admin = Class.new(parent) do
@@ -388,7 +388,8 @@ RSpec.describe "Versioning audit 3a: verification probes" do
           .to raise_error(cerr, /parent AdminBase does not/)
         report = audit!(schema)
         warn "S20 #{vis}: ok?=#{report.ok?} problems=#{report.problems.map(&:to_s)}"
-        expect(report.to_s).to include("your own visible? methods")
+        expect(kinds(report)).to include([:own_check, "Admin.visible?"])
+        expect(report.ok?).to be(false)
       end
 
       %i[before after].each do |order|
@@ -496,7 +497,7 @@ RSpec.describe "Versioning audit 3a: verification probes" do
         end
       end
 
-      it "security S31: Warden fallback to an interface's definition (documented as not checked)" do
+      it "security S31: Warden fallback to an interface's definition (reported as :fallback)" do
         b = bases
         named = Module.new { include b[:interface]; graphql_name "Totaled"; field :total, Integer, null: true }
         inv = Class.new(b[:object]) { graphql_name "Invoice"; implements named; field :total, Integer, null: true, removed: "2025-01-01" }
@@ -505,7 +506,8 @@ RSpec.describe "Versioning audit 3a: verification probes" do
         result = run(schema, "{ invoice { total } }", VA_NEWV, root: obj(invoice: obj(total: 7)))
         report = audit!(schema)
         warn "S31 #{vis}: new=#{result} ok?=#{report.ok?} #{report.problems.map(&:to_s)}"
-        expect(report.to_s).to include("under the Warden")
+        expect(kinds(report)).to include([:fallback, "Invoice.total"])
+        expect(report.ok?).to be(false)
       end
 
       it "security S32: a type outside its lifecycle reachable only by name" do

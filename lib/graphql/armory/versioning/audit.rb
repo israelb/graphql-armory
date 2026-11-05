@@ -9,13 +9,13 @@ module GraphQL
       #   report = GraphQL::Armory::Versioning::Audit.(AppSchema)
       #   report.ok?    # false when a query of some served version would be refused, or would see a member it should not
       #   puts report
+      #   GraphQL::Armory::Versioning::Audit.(AppSchema, strict: true)   # members only retired versions have fail it too
       #
       # Each member is asked with a context that names the version and `armory_full_schema: true`, so a check that hides it
       # from a user (Authorization's `visible_when:`) never hides a refusal. Nothing it does records a signal.
       class Audit
         # What the report does not check yet: it says so, so `ok?` never claims more than was checked.
-        NOT_CHECKED = "fields served by a parent or an interface under the Warden, your own visible? methods, defaults of " \
-                      "arguments without Base, and subscription triggers"
+        NOT_CHECKED = "whether a type's field or argument in a version has a type its interface's definition allows (covariance)"
 
         # `location` is "path:line" where the app wrote what the problem is about, or nil. `severity` is nil for a problem,
         # or :information for something listed that changes nothing a client relies on: `ok?` ignores it.
@@ -87,11 +87,12 @@ module GraphQL
           end
         end
 
-        def self.call(schema)
-          new.(schema)
+        def self.call(schema, strict: false)
+          new.(schema, strict: strict)
         end
 
-        def call(schema)
+        # `strict: true` makes `:retired_only` (a member only retired versions have) a problem instead of information.
+        def call(schema, strict: false)
           findings = Findings.new
           return findings.report unless installed?(schema, findings) && visibility?(schema, findings)
 
@@ -100,6 +101,11 @@ module GraphQL
           members = definitions.flat_map { |type| members_of(type) }.uniq
           members.concat(schema.directives.values.flat_map(&:all_argument_definitions))
           undeclared(schema, members, findings)
+          guarded(findings, "Schema") { OwnChecks.(schema, definitions, members, findings) }
+          outside_latest(members, findings)
+          guarded(findings, "Schema") { SubscriptionTriggers.(schema, findings) }
+          guarded(findings, "Schema") { Profiles.(schema, findings) }
+          guarded(findings, "Schema") { RetiredOnly.(schema, findings, strict: strict) }
           # A schema-level refusal fails every query, before any member is asked.
           schema.armory_versioning.versions.each_served { |version| walk(schema, version, definitions, members, findings) } unless refused
           findings.report
@@ -160,7 +166,10 @@ module GraphQL
         end
 
         def walk(schema, version, definitions, members, findings)
-          query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: { armory_full_schema: true, armory_version: version.label })
+          # Under `profiles: true`, the version's own profile, as its queries run: with named profiles and no `dynamic: true`,
+          # graphql-ruby refuses a query that names none.
+          profile = schema.armory_versioning_profiles.query_options(version)
+          query = GraphQL::Query.new(schema, "{ __typename }", validate: false, context: { armory_full_schema: true, armory_version: version.label }, **profile)
           context = query.context
           members.each do |member|
             # graphql-ruby never asks a member whose owner the version does not have.
@@ -192,11 +201,129 @@ module GraphQL
               hidden_by_type(view, type, version, findings)
               empty(schema, view, type, version, definitions, findings)
             end
+            guarded(findings, type) { served_arguments(view, type).each { |argument| default_outside(argument, version, findings) } }
           end
           (guarded(findings, "Schema") { types.directives } || []).each do |directive|
             guarded(findings, directive) { hidden_arguments(view, directive, version, findings) }
+            guarded(findings, directive) { view.arguments(directive).each { |argument| default_outside(argument, version, findings) } }
           end
           guarded(findings, "Schema") { unlisted_abstract(view, version, definitions, listed, findings) }
+          listed.each do |type|
+            next unless type.kind.fields?
+
+            guarded(findings, type) { fallbacks(view, type, version, findings) }
+            guarded(findings, type) { contract_arguments(view, type, version, findings) } if type.kind.object?
+          end
+        end
+
+        # A field whose nearest definition V hides while a farther one (a parent's or an interface's) lives in V: the Warden
+        # serves the farther one, `Schema::Visibility` drops the name. graphql-ruby walks the ancestors in order, interfaces
+        # before the superclass, skipping an interface whose membership V hides.
+        def fallbacks(view, type, version, findings)
+          levels = type.ancestors.select { |ancestor| ancestor.respond_to?(:own_fields) && member_in?(type, ancestor, version) }
+          levels.flat_map { |level| level.own_fields.keys }.uniq.each do |name|
+            defining = levels.select { |level| level.own_fields.key?(name) }
+            next if defining.size < 2
+
+            nearest = Array(defining.first.own_fields[name])
+            served = view.field(type, name)
+            next if nearest.any? { |field| field.equal?(served) } || nearest.any? { |field| live?(field, version) }
+
+            farther = defining.drop(1).flat_map { |level| Array(level.own_fields[name]) }.select { |field| live?(field, version) }
+            next if farther.empty?
+
+            path = "#{type.graphql_name}.#{name}"
+            hidden = Integration.display_name(defining.first)
+            if served
+              findings.problem(:fallback, path, "#{label(version)} hides #{hidden}'s definition, so the Warden serves " \
+                                                "#{Integration.display_name(served.owner)}'s definition instead, with its type, " \
+                                                "arguments and resolver", at: nearest.first)
+            else
+              interface = farther.map(&:owner).find { |owner| owner.respond_to?(:kind) && owner.kind.interface? && view.visible?(owner) }
+              why = if interface
+                      "which #{interface.graphql_name} declares: a schema with it is invalid"
+                    else
+                      "though #{Integration.display_name(farther.first.owner)}'s definition lives there: the Warden would serve that one"
+                    end
+              findings.problem(:fallback, path, "#{type.graphql_name} no longer has #{name} in #{label(version)}, #{why}", at: nearest.first)
+            end
+          end
+        end
+
+        # An argument of an interface's field that the object's own field hides in V: the object no longer takes what the
+        # interface declares. Only an argument the object defines and V hides is versioning's doing.
+        def contract_arguments(view, type, version, findings)
+          view.interfaces(type).each do |interface|
+            view.fields(interface).each do |declared|
+              field = view.field(type, declared.graphql_name)
+              next if field.nil? || field.equal?(declared)
+
+              taken = view.arguments(field).map(&:graphql_name)
+              view.arguments(declared).each do |argument|
+                name = argument.graphql_name
+                next if taken.include?(name)
+
+                hidden = field.all_argument_definitions.select { |own| own.graphql_name == name && !Integration.covers?(own, version) }
+                next if hidden.empty?
+
+                findings.problem(:fallback, "#{type.graphql_name}.#{field.graphql_name}.#{name}",
+                                 "#{label(version)} hides it on #{type.graphql_name}.#{field.graphql_name}, though " \
+                                 "#{interface.graphql_name}.#{declared.graphql_name} takes it: a schema with it is invalid", at: hidden.first)
+              end
+            end
+          end
+        end
+
+        def served_arguments(view, type)
+          return view.arguments(type) if type.kind.input_object?
+          return [] unless type.kind.fields?
+
+          view.fields(type).flat_map { |field| view.arguments(field) }
+        end
+
+        # A default naming an enum value the latest version does not have: graphql-ruby's SDL printer reads defaults with no
+        # query, as the latest version sees them, so `to_definition` raises in every version. Any argument class.
+        def outside_latest(members, findings)
+          members.grep(GraphQL::Schema::Argument).each do |argument|
+            next unless argument.default_value?
+
+            guarded(findings, argument) do
+              missing = Integration.members_in(argument.type, argument.default_value).select do |choices|
+                choices.first.is_a?(GraphQL::Schema::EnumValue) && choices.none? { |value| Integration.lifecycle_of(value).covers?(Version::LATEST) }
+              end
+              unless missing.empty?
+                findings.problem(:default_value, argument.path, "its default_value names #{names(missing)}, which the latest version does not " \
+                                                                "have: graphql-ruby prints defaults as the latest version sees them, so " \
+                                                                "to_definition raises in every version. Use a default the latest version has", at: argument)
+              end
+            end
+          end
+        end
+
+        # A default naming an enum value or an input field V does not have, on an argument class without `Base` (whose own
+        # check refuses it): introspection of V raises, and V's SDL raises or prints what V does not have.
+        def default_outside(argument, version, findings)
+          return if !argument.default_value? || argument.is_a?(Integration::Argument)
+
+          missing = Integration.members_in(argument.type, argument.default_value).reject do |choices|
+            choices.any? { |member| Integration.covers?(member, version) }
+          end
+          return if missing.empty?
+
+          findings.problem(:default_value, argument.path, "its default_value names #{names(missing)}, not in #{label(version)}: introspection " \
+                                                          "of #{label(version)} raises, and its SDL raises or prints a value it does not have. " \
+                                                          "Use a default every version of this argument has, or include " \
+                                                          "GraphQL::Armory::Versioning::Base in its argument class", at: argument)
+        end
+
+        def names(missing) = missing.map { |choices| choices.first.path }.join(", ")
+
+        # A field's own lifecycle, its owner's and its resolver's cover V.
+        # A definition whose own, owner's or resolver's lifecycle, or whose return type's, leaves the version out is not
+        # served there: graphql-ruby hides a field whose type it hides, and looks further for the name.
+        def live?(field, version)
+          [field, field.owner, field.resolver].compact.all? { |member| Integration.lifecycle_of(member).covers?(version) } &&
+            Integration.covers?(field, version)
         end
 
         def hidden_by_type(view, type, version, findings)

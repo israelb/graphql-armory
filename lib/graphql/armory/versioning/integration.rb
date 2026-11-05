@@ -13,14 +13,11 @@ module GraphQL
         # - A query's context: the version `Lookup` stored for it. A second context graphql-ruby builds for a query
         #   (`Visibility::Migration`'s) and a `Query::Partial`'s see that query's version. A `GraphQL::Query` the app built
         #   itself is decided once from its own `armory_version`, recording nothing.
-        # - Anything else, such as the frozen Hash of a named `Schema::Visibility` profile: refused, fail closed.
+        # - The frozen Hash of a named `Schema::Visibility` profile built by `Versioning.profiles`: its version.
+        # - Anything else, such as an app's own profile Hash: refused, fail closed.
         def self.version(context)
           return Version::LATEST if context.is_a?(GraphQL::Query::NullContext)
-
-          unless context.respond_to?(:namespace)
-            raise ConfigurationError, "versioned members need a query's context, got a #{context.class}: named Schema::Visibility profiles " \
-                                      "(profiles:) are not supported by Versioning yet, use dynamic: true or no profiles"
-          end
+          return profile_version(context) unless context.respond_to?(:namespace)
 
           store = context.namespace(:armory)
           store.fetch(:version) do
@@ -30,6 +27,23 @@ module GraphQL
             store[:version] = undecided(context)
           end
         end
+
+        # A profile's Hash carries no schema: it carries the gate's own list instead, and a served label of it.
+        def self.profile_version(context)
+          versions = context.is_a?(Hash) ? context[:armory_versions] : nil
+          unless versions.is_a?(Versions)
+            named = context.is_a?(Hash) && context[:visibility_profile] ? " (visibility profile #{context[:visibility_profile].inspect})" : ""
+            raise ConfigurationError, "versioned members need a query's context or a profile from Versioning.profiles, got a #{context.class}#{named}: " \
+                                      "pass `profiles: GraphQL::Armory::Versioning.profiles(Schema)` to Schema::Visibility, with " \
+                                      "`use GraphQL::Armory::Versioning, ..., profiles: true`, or use dynamic: true and no named profiles"
+          end
+
+          version = versions.fetch(context[:armory_version])
+          raise ConfigurationError, "the visibility profile #{context[:visibility_profile].inspect} names #{version.label}, which is retired" if version.retired?
+
+          version
+        end
+        private_class_method :profile_version
 
         def self.undecided(context)
           query = context.query
@@ -61,7 +75,10 @@ module GraphQL
 
         # What every versioned member keeps: its lifecycle, built from `added:` and `removed:`, which it strips before `super`.
         module Member
-          def initialize(*args, added: nil, removed: nil, **kwargs, &block)
+          def initialize(*args, added: nil, removed: nil, deprecated: nil, **kwargs, &block)
+            unless deprecated.nil?
+              raise ConfigurationError, "#{kwargs[:name] || args.first}: deprecated: needs the class that defines it to include "                                         "GraphQL::Armory::Versioning::Base, which makes its two definitions"
+            end
             begin
               @armory_lifecycle = Lifecycle.build(added: added, removed: removed)
             rescue ConfigurationError => error
@@ -74,6 +91,9 @@ module GraphQL
 
           # When the member lives, for the audit and for tooling.
           attr_reader :armory_lifecycle
+
+          # The definition before `deprecated:`'s version, when `deprecated:` wrote this one: the two are one member.
+          def armory_deprecated_of = @armory_deprecated_of
 
           # The GraphQL names its type was given by, when it was a `LateBoundType`: the schema check refuses one that has
           # twins.
@@ -95,6 +115,7 @@ module GraphQL
         #   field :amount, Integer, null: false, removed: "2025-01-01"  # up to 2024-06-01
         module Field
           include Member
+          include Deprecation::Arguments
 
           # A field also leaves with the type that declared it: an interface that includes a versioned interface would
           # otherwise keep that interface's fields where it does not live.
@@ -311,6 +332,7 @@ module GraphQL
         # would ignore the keywords, apply them partly or fail halfway.
         module Implements
           def implements(*interfaces, added: nil, removed: nil, **options)
+            Integration.refuse_deprecated_membership(options, "implements")
             interfaces.each do |interface|
               name = Integration.late_bound_name(interface)
               Integration.mark_late_bound(self, name) if name
@@ -322,9 +344,18 @@ module GraphQL
           end
         end
 
+        # GraphQL cannot deprecate a membership, and graphql-ruby would keep the keyword without a word.
+        def self.refuse_deprecated_membership(options, method)
+          return unless options.key?(:deprecated) || options.key?(:deprecation_reason)
+
+          raise ConfigurationError, "#{method} cannot take deprecated: or deprecation_reason:: GraphQL has no deprecated " \
+                                    "membership. Use removed: instead"
+        end
+
         # The same for a union's `possible_types`. Called with no types, it is graphql-ruby's reader.
         module Members
           def possible_types(*types, added: nil, removed: nil, **options)
+            Integration.refuse_deprecated_membership(options, "possible_types")
             return super(*types, **options) if added.nil? && removed.nil?
 
             Integration.check_possible_types(self, types, added, removed)
@@ -642,7 +673,7 @@ module GraphQL
           arguments.group_by(&:graphql_name).each do |name, definitions|
             if definitions.size > 1
               raise ConfigurationError, "#{at}: #{holder}.#{name} has two definitions, and graphql-ruby's subscription trigger reads " \
-                                        "arguments with no version, where they raise. Keep one definition"
+                                        "arguments with no version, where they raise. Keep one definition (deprecated: makes two)"
             end
 
             input = definitions.first.type.unwrap
@@ -761,6 +792,11 @@ module GraphQL
           def armory_versioning
             @armory_versioning || superclass.armory_versioning
           end
+
+          # The named profiles `use ..., profiles: true` runs queries under, or `Profiles::Off`.
+          def armory_versioning_profiles
+            @armory_versioning_profiles || superclass.armory_versioning_profiles
+          end
         end
 
         # Decides the query's version after the query is built, from its own context, so a version set by a custom
@@ -770,9 +806,11 @@ module GraphQL
           def initialize(schema, query_string = nil, **options)
             Integration.refuse_always_visible(schema)
             Integration.check_schema(schema)
-            super
+            profiles = schema.armory_versioning_profiles
+            super(schema, query_string, **profiles.options(schema.armory_versioning, options))
 
             decision = schema.armory_versioning.(context)
+            profiles.check(self, decision)
             store = context.namespace(:armory)
             return store[:version] = decision.version unless decision.refused?
 
@@ -841,19 +879,19 @@ module GraphQL
           GraphQL::Schema::TypeMembership => :Membership
         }.freeze
         TYPES = {
-          GraphQL::Schema::Object => %i[Type Implements Authorized], GraphQL::Schema::Union => %i[Type Members],
-          GraphQL::Schema::InputObject => %i[Type], GraphQL::Schema::Enum => %i[Type], GraphQL::Schema::Scalar => %i[Type],
-          GraphQL::Schema::Resolver => %i[Type]
+          GraphQL::Schema::Object => %i[Type Implements Authorized Fields], GraphQL::Schema::Union => %i[Type Members],
+          GraphQL::Schema::InputObject => %i[Type Arguments], GraphQL::Schema::Enum => %i[Type Values], GraphQL::Schema::Scalar => %i[Type],
+          GraphQL::Schema::Resolver => %i[Type Arguments Fields]
         }.freeze
 
         def self.included(base)
           if !base.is_a?(Class) && base.include?(GraphQL::Schema::Interface)
-            modules = [Integration::Type, Integration::Implements]
+            modules = [Integration::Type, Integration::Implements, Deprecation::Fields]
             base.definition_methods { modules.each { |mod| include mod } }
           elsif base.is_a?(Class) && (member = MEMBERS.find { |parent, _| base <= parent })
             base.include(Integration.const_get(member.last))
           elsif base.is_a?(Class) && (type = TYPES.find { |parent, _| base <= parent })
-            type.last.each { |name| base.extend(Integration.const_get(name)) }
+            type.last.each { |name| base.extend(Integration.const_defined?(name, false) ? Integration.const_get(name) : Deprecation.const_get(name)) }
           else
             raise ArgumentError, "GraphQL::Armory::Versioning::Base goes in a field, argument, enum value, type membership, object, interface, union, enum, " \
                                  "scalar, input object, resolver or mutation class, not #{base}. In an interface, include GraphQL::Schema::Interface first"

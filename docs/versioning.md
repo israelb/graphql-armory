@@ -2,8 +2,6 @@
 
 Each client gets the schema it was built against, and fields can arrive and leave without breaking older clients.
 
-> **In progress.** This first part versions **fields** (`added:`, `removed:`) and decides each request's version. Arguments, enum values, input fields, types, the per-version audit, the diff and the `deprecated:` keyword come in the next parts, and are not available yet.
-
 ## The problem
 
 A public GraphQL API has clients you do not control: mobile builds that stay in the stores for months, partners who integrated once. graphql-ruby gives you one tool for change, `deprecation_reason:`, and it only labels a field:
@@ -118,7 +116,7 @@ class Types::InvoiceFilter < Types::BaseInputObject
 end
 ```
 
-A member lives from `added:` (the first version when absent) up to, not including, `removed:` (still here when absent). A member with neither lives in every version. Every field and enum value of a class that includes `Base` still reads the query's version when graphql-ruby asks whether it is visible; an argument reads it only when it, its default value or the type it `loads:` is versioned. `deprecation_reason:` is graphql-ruby's own and works as always: the member is deprecated in every version it exists in. Deprecating it only from a given version comes in a later part.
+A member lives from `added:` (the first version when absent) up to, not including, `removed:` (still here when absent). A member with neither lives in every version. Every field and enum value of a class that includes `Base` still reads the query's version when graphql-ruby asks whether it is visible; an argument reads it only when it, its default value or the type it `loads:` is versioned. `deprecation_reason:` is graphql-ruby's own and works as always: the member is deprecated in every version it exists in. To deprecate it from a given version on, use `deprecated:` (see "Deprecating").
 
 A versioned argument is the client's to omit in the versions it does not live in, so give its resolver keyword a Ruby default (`def tags(first: 10)`): graphql-ruby never applies the `default_value:` of an argument hidden in the query's version, and calls the resolver without it.
 
@@ -190,6 +188,37 @@ field :total, Types::MoneyV2, null: false, added: "2025-01-01"
 Each version sees one `Money`. Reference each twin by its class: a `GraphQL::Schema::LateBoundType` naming a type with twins raises `ConfigurationError`, since graphql-ruby binds the name to the first class registered with it in every version. Give both twins a common base without a lifecycle; never subclass one twin from the other (the subclass would be refused as wider than its parent). A `resolve_type` answers the twin of the query's version (see "Data outside the version"), and Authorization's audit judges each twin's rule.
 
 Use `GraphQL::Schema::Visibility` (or `GraphQL::Schema::Warden`): without either, graphql-ruby prints a deprecation warning the first time a query hides something.
+
+### Deprecating
+
+`deprecated:` with `deprecation_reason:` deprecates a member from one version on. Clients of earlier versions see it as it was, with no `@deprecated`; clients of that version and later ones see the reason in introspection, in the SDL, and in `includeDeprecated: false` lists, which leave it out. It works on fields (of objects, interfaces and mutation payloads), arguments (of fields, resolvers and mutations), input fields and enum values, and combines with `added:` and `removed:`:
+
+```ruby
+class Types::Invoice < Types::BaseObject
+  field :amount, Integer, null: false, deprecated: "2024-06-01", deprecation_reason: "Use `total`",
+                 removed: "2025-01-01"                  # plain up to 2024-06-01, deprecated in 2024-06-01, gone after
+  field :tags, [String], null: false do
+    argument :page, Integer, required: false, deprecated: "2025-01-01", deprecation_reason: "Use `after`"
+  end
+end
+
+class Types::Status < Types::BaseEnum
+  value "CANCELLED", deprecated: "2025-01-01", deprecation_reason: "Use `VOID`"
+end
+```
+
+graphql-ruby's `deprecation_reason` is the same in every version a definition lives in, so `deprecated: D` is written for you as the two definitions of the section above: one living up to `D` with no reason, and one from `D` with it. The `amount` field above is exactly:
+
+```ruby
+field :amount, Integer, null: false, removed: "2024-06-01"
+field :amount, Integer, null: false, added: "2024-06-01", removed: "2025-01-01", deprecation_reason: "Use `total`"
+```
+
+So everything said about two definitions applies: [Authorization](authorization.md)'s audit reads them as one member (a problem with both is listed once), each keeps the field's keywords (its rule, its `resolver:`), lookups with no query raise graphql-ruby's `DuplicateNamesError` on the name (see "Guarantees and limits"), and field definitions need graphql 2.4.9 or later, enum values 2.4.10 or later. A field's block runs once per definition, so the arguments it declares, with their own lifecycles, belong to both. An enum value's Ruby method (`Types::Status.cancelled`) is defined once, by the first definition.
+
+The class that defines the member writes the two definitions, so `deprecated:` needs `Base` in that class (the object, interface, input object, enum, resolver or mutation, or the field class for a field's arguments) as well as in the member's class. It is refused on a subscription's arguments: graphql-ruby's trigger reads them with no version, where two definitions raise. It is refused on `implements` and `possible_types` too, since GraphQL cannot deprecate a membership: use `removed:`.
+
+To test against it, `Versioning::Controls::Deprecations::Query.example(Bases.example)` is a query type with `deprecated:` on each member kind, deprecated from `2025-01-01`, and `Deprecations::Root.example` its root object.
 
 ### Labels
 
@@ -264,6 +293,26 @@ Pass `sinks:` to see what the plugin decided, one signal per query:
 
 `version` is the schema's own label, never the client's value. `:version_defaulted` counts the clients that do not send a version yet; `:version_refused` with `:retired` counts the clients still on a version you retired. See [Telemetry](telemetry.md).
 
+### One visibility profile per version
+
+By default graphql-ruby asks every member's `visible?` again for each query. With `profiles: true`, each served version gets one named `Schema::Visibility` profile, computed once and kept for the life of the schema, and each query runs under its own version's profile (graphql 2.4.10 or later):
+
+```ruby
+class AppSchema < GraphQL::Schema
+  query Types::Query
+  use GraphQL::Armory::Versioning, versions: %w[2024-06-01 2025-01-01], default: :latest, profiles: true
+  use GraphQL::Schema::Visibility, profiles: GraphQL::Armory::Versioning.profiles(self), preload: true
+end
+```
+
+- `use GraphQL::Armory::Versioning` comes first: `Versioning.profiles(self)` builds the profiles from its own version list, one per served version, named `:"armory_v_<label>"`, so the two lists cannot drift. A retired version has no profile.
+- The plugin names the profile for each query from its `armory_version`, before graphql-ruby builds it. Your code never sets `visibility_profile`: a query whose context or `visibility_profile:` names another profile, even another version's, raises `ConfigurationError` before anything runs, and so does a version a custom `context_class` changes after the query was built. A refused version runs under no profile and is refused as usual.
+- With `preload: true` (graphql-ruby's default in production) every version's visibility is computed when the schema loads, so a lifecycle naming a label `versions:` does not hold raises there, not on the first request.
+- `dynamic: true` is optional: it keeps working a `GraphQL::Query` your code builds by hand without a version's profile. Do not add profiles of your own: a profile Hash that did not come from `Versioning.profiles` raises `ConfigurationError` when a versioned member is asked under it.
+- **A profile holds only the version, never a user.** Authorization's `visible_when:` raises under it, and your own `visible?` is asked once per version, not once per query, so it must not read the user. Use `profiles: true` on schemas whose visibility depends on the version alone. The audit reports both (`:profiles`).
+
+Without `profiles: true`, a query that runs under a named profile of your own raises `ConfigurationError`: a named profile keeps one visibility for every query that names it, so it cannot follow each query's version.
+
 ### The audit
 
 Most mistakes in a versioned schema are refused with `ConfigurationError`, but only when a query first asks the member, which may be in production. The audit asks every member of every served version before that:
@@ -287,6 +336,8 @@ end
 bin/rake "graphql_armory:versions:audit[AppSchema]"   # prints the report; exit 1 on problems
 ```
 
+`Audit.(AppSchema, strict: true)` also fails on members that live only in retired versions (`:retired_only`, information otherwise). Under `profiles: true` the audit asks each version under its own profile, as its queries run.
+
 It asks each member with a context that names the version and `armory_full_schema: true`, so Authorization's `visible_when:` never hides a refusal from it; it records no signal. What it reports:
 
 | Kind | What it means |
@@ -298,11 +349,85 @@ It asks each member with a context that names the version and `armory_full_schem
 | `:empty` | A served version has an enum with no value, an object, interface or input object with no field (a client can select only `__typename`; a type with `has_no_fields(true)` is not reported), or a union with no member |
 | `:orphan_interface` | A served version has no object implementing an interface. The Warden hides the interface and every field that returns it; `Schema::Visibility` serves it with an empty `possibleTypes`, so a fragment on any object fails, and data returned for it raises |
 | `:implicit` | A served version hides a required argument or input field because its type is outside the version (for `loads:`, the loaded type): a client of that version can call the field without it, and the resolver runs with no value. An optional member or a field hidden this way is listed as information, and so is an argument with `required: :nullable` |
+| `:fallback` | A served version hides a type's own definition of a field while a parent class's or an interface's definition of that name lives there. The legacy Warden serves that other definition, with its type, arguments and resolver; `Schema::Visibility` drops the field, and when an interface declares it the type no longer implements the interface. Also reported: an argument the type's field hides in a version while the interface's field takes it |
+| `:own_check` | Your own `visible?` answers before the plugin's: on a type, resolver or mutation class, a field, argument, enum value or membership class, or the schema's `self.visible?`. If it does not call `super`, it serves members outside their lifecycle (on the schema, nothing is versioned). Declare each one you keep in `own_checks:` with a reason: it is then listed as information. A `def self.visible?` on one member (inside a field's block) is reported at that member and cannot be declared. A class named in `own_checks:` with no such method is reported too |
+| `:default_value` | A `default_value:` names an enum value the latest version does not have (graphql-ruby prints defaults as the latest version sees them, so `to_definition` raises in every version), or, on an argument class without `Base`, an enum value or input field a served version does not have (that version's introspection raises, and its SDL raises or prints what the version does not have) |
+| `:subscription_trigger` | A subscription field's argument or nested input field is in a served version and not in the latest, or the reverse. graphql-ruby's `trigger` fills in the default of every argument whatever its version: with a default, a trigger naming the version without it raises and a trigger naming another version never reaches that version's subscribers; without one, a trigger that passes it raises unless its context names a version that has it. Listed as information: a subscription field the `default:` version does not have, and `default: :refuse`, since a trigger that names no version raises |
 | `:undeclared_version` | `added:` or `removed:` names a label that is not in `versions:` |
 | `:outside_lifecycle` | A served version lists a type, field, argument, enum value or membership outside its lifecycle: your own `visible?` answers before the plugin's, or graphql-ruby serves it without asking. A client of that version gets it |
 | `:unchecked` | Asking the member raised something else (an app `visible?` that needs a user, for example): it was not checked |
+| `:profiles` | `profiles: true` meets a check that needs the query's user: a `visible_when:` (it raises under a profile), or your own `visible?` on a type, field, argument, enum value or membership class, or on the schema (asked once per version, so it decides for every user at once; the audit cannot read whether it reads the user). Drop one of the two. A `visible?` you declare in `own_checks:` is not reported here: the declaration is your word that it is safe, and it is listed as `:own_check` information |
+| `:retired_only` | A type, field, argument, enum value or membership (one of two twins included) whose lifecycle covers only retired versions: no client can reach it. Delete it. Information, which `ok?` ignores, unless `strict: true` |
 
-`ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see or a type with nothing in it. Information (an optional member hidden because its type is, the natural way to version a field with its type) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: fields served by a parent or an interface under the Warden, your own `visible?` methods, defaults of arguments without `Base`, and subscription triggers. A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
+`ok?` means: no query of a served version is refused, no served version lists a member outside its lifecycle, and none is left with a required argument it cannot see, a type with nothing in it, or a field or argument that another definition of its name serves or that an interface still declares; no `visible?` of yours answers before the plugin's undeclared; no default names a value or input field its version does not have; and no subscription trigger breaks on an argument that differs between versions; under `profiles: true`, no check needs the query's user. Information (an optional member hidden because its type is, the natural way to version a field with its type, a declared `visible?`, a subscription field outside the `default:` version, a member only retired versions have) is printed under "Information:" and does not fail `ok?`. It does not check yet, and the report says so: whether a type's field or argument in a version has a type its interface's definition allows (covariance). A schema-level refusal fails every query, so the audit reports it and asks no member; each schema check reports its first refusal.
+
+### Evolving a version
+
+A change reaches clients in four steps. Each one is a new label at the end of `versions:` (or a lifecycle that names one you already have), and older clients keep what they had until their version is retired:
+
+1. **Add.** Give the new member `added: "2025-01-01"`. Older versions never see it.
+2. **Deprecate.** `deprecation_reason:` labels the member in every version it lives in; `deprecated:` labels it from one version on (see [Deprecating](#deprecating)). Clients still get it.
+3. **Remove.** Give it `removed: "2025-06-01"`: clients of the versions before keep it, and only a client that moves to 2025-06-01 loses it. To change a member's shape instead, give it a twin (see "How to use it").
+4. **Retire.** Once no client asks for the oldest versions (`:version_served` for them reaches zero), move them to `retired:`. A member whose `removed:` is the oldest served version or earlier is now served nowhere: delete it, and delete a label from `versions:` once nothing names it. The audit lists each such member (`:retired_only`).
+
+Two tools show what each step changes. The dump writes each served version's SDL to a file, so a pull request shows every version's schema change line by line:
+
+```sh
+bin/rake "graphql_armory:versions:dump[AppSchema,schema]"   # schema/2024-06-01.graphql, schema/2025-01-01.graphql, schema/latest.graphql
+```
+
+```ruby
+GraphQL::Armory::Versioning::Dump.(AppSchema, "schema")      # the paths it wrote
+```
+
+Commit the directory, and in CI run the dump and then `git diff --exit-code schema/` to fail a build whose dumps are out of date. Each file is `to_definition(context: { armory_version: label, armory_full_schema: true })`, so Authorization's `visible_when:` hides nothing from it; `latest.graphql` is the latest version's. Retired versions are not written, and the file of a version you retire stays until you delete it. Every SDL is printed before the first file is written. A label becomes a file name, so the dump refuses (`ConfigurationError`, writing nothing) a label with a slash, a backslash or a NUL, one that starts with a dot, `latest` in any case, and two labels that differ only by case.
+
+The diff says what changes between two served versions for a client built against the first:
+
+```ruby
+result = GraphQL::Armory::Versioning::Diff.(AppSchema, from: "2024-06-01", to: "2025-01-01")
+result.breaking?    # true when a client of 2024-06-01 can break on 2025-01-01
+puts result
+```
+
+```sh
+bin/rake "graphql_armory:versions:diff[AppSchema,2024-06-01,2025-01-01]"   # prints it; exit 1 when something breaks
+```
+
+```ruby
+# spec/graphql/versions_spec.rb, for a version line that should only grow
+require "graphql/armory/versioning/rspec"
+
+RSpec.describe AppSchema do
+  it { is_expected.to have_no_breaking_changes(from: "2024-06-01", to: "2025-01-01") }
+end
+```
+
+```
+From 2024-06-01 to 2025-01-01:
+
+Breaking (2):
+  Invoice.amount: field removed
+  Query.invoices.limit: type changed from Int to Int!
+
+Dangerous (1):
+  Status.VOID: value added
+
+Safe (1):
+  Invoice.tags: field added
+```
+
+| Bucket | What it lists |
+|---|---|
+| Breaking: a query that worked against `from` can fail against `to` | A type, field, argument, input field, enum value or union member removed; a required argument or input field added (non-null with no default), or a default removed from a non-null one; a type changed (see nullability below); an interface no longer implemented; a type's kind changed (a scalar that became an object) |
+| Dangerous: queries still validate, but a client may meet something it does not expect | An enum value, union member or implemented interface added; a deprecation added; a default value added, changed or removed; an output made non-null |
+| Safe | A type, field, optional argument or optional input field added; an input made nullable; a deprecation removed or its reason changed; a description changed |
+
+Nullability follows the GraphQL spec's rules for each direction. An output that becomes nullable (`String!` to `String`) is breaking: the client gets a `null` it never handled. An output that becomes non-null (`String` to `String!`) is dangerous: two fields with one response name must have the same shape to merge, so a query selecting it beside a nullable field of the same name on another type stops validating. An input that becomes non-null (`Int` to `Int!`) is breaking; one that becomes nullable (`Int!` to `Int`) is safe, since a `Int!` variable is still allowed where `Int` is expected. The same rules apply inside lists.
+
+Types are compared by name, as a client sees them. A renamed type is a type removed, a type added, and each field or argument that used it changed, all breaking for the old name's clients. Type twins with one name are compared field by field, and field, argument and enum value twins by their type, default and deprecation, so a twin that changes nothing a client sees lists nothing. Each version is read through `Versioning.types` with `armory_full_schema: true`; pass `context:` when your own `visible?` methods need a user. Directives are not compared. A built-in scalar (`Int`, `Float`, ...) that no member of the newer version uses is listed as a type removed, since a query declaring a variable of that type would no longer validate. Two definitions of one name that one version both sees raise graphql-ruby's `DuplicateNamesError`, as in a query: run the audit first.
+
+`Versioning::Controls::Evolution.example(visibility:)` is a schema with one change of each kind from 2024-06-01 to 2025-01-01, and `Evolution::BREAKING`, `DANGEROUS` and `SAFE` list what the diff answers for it.
 
 ### Testing with versioning
 
@@ -310,22 +435,26 @@ It asks each member with a context that names the version and `armory_full_schem
 
 ## Reference
 
-`use GraphQL::Armory::Versioning, versions:, default:, retired: [], sinks: [], on_sink_error: nil`
+`use GraphQL::Armory::Versioning, versions:, default:, retired: [], sinks: [], on_sink_error: nil, own_checks: {}, profiles: false`
 
 - `versions:` an Array of non-empty String labels, oldest first, with no duplicate; ascending when every label is a date (`YYYY-MM-DD`).
 - `retired:` an Array: the oldest labels of `versions:`, leaving at least one served.
 - `default:` `:latest`, a served label, or `:refuse`. Required.
 - `sinks:` an Array of callables taking `(signal, data)` or `(signal, data, context)`; `on_sink_error:` a callable `(error, signal)`. See [Telemetry](telemetry.md).
+- `own_checks:` a Hash mapping each class or module that defines a `visible?` of yours ahead of the plugin's to `{ visible?: "the reason you keep it" }`, for the audit (`:own_check`). Nothing else is accepted: `{ Types::BaseObject => { visible?: "hides drafts from guests, calls super" } }`. A schema's own `self.visible?` is declared under the schema class.
+- `profiles:` `true` or `false` (the default): run each query under its version's named `Schema::Visibility` profile. `true` raises `ArgumentError` on graphql before 2.4.10. `GraphQL::Armory::Versioning.profiles(schema)` answers the Hash for `use GraphQL::Schema::Visibility, profiles:` (a new one each call, `{ :"armory_v_<label>" => { armory_version:, armory_versions: } }` per served version), and raises `ConfigurationError` on a schema whose `use` did not say `profiles: true`. Under it, these raise `ConfigurationError` when a query is built, before anything runs: a context or `visibility_profile:` naming another profile, a version changed after the profile was picked, a profile that is not the version's (the schema's `Schema::Visibility` lacks `Versioning.profiles`), and a schema without `Schema::Visibility`. A query your code builds with `use_visibility_profile: false` runs under the Warden, still versioned. `schema.armory_versioning_profiles.enabled?` tells whether it is on.
 - Anything else raises `Versioning::ConfigurationError` when the schema loads.
 - Works with your own `query_class`, set before `use`, after it, or in a child schema: the plugin subclasses it. `use` it once per schema hierarchy: a second `use`, on the same schema or a child, raises.
 
-`include GraphQL::Armory::Versioning::Base` goes in a field, argument or enum value class (a subclass of `GraphQL::Schema::Field`, `Argument` or `EnumValue`); anywhere else it raises `ArgumentError` in this part. It adds `added:` and `removed:` to `field`, `argument` and `value`, each a non-empty String: anything else, or the same label for both, raises `ConfigurationError` when the member is defined. A label `versions:` does not hold, or a `removed:` before its `added:`, raises `ConfigurationError`, naming the member, every time a query asks about it: types load before `use`, so it cannot be checked earlier. `member.armory_lifecycle.to_h` answers `{ added:, removed: }`.
+`include GraphQL::Armory::Versioning::Base` goes in a field, argument or enum value class (a subclass of `GraphQL::Schema::Field`, `Argument` or `EnumValue`); anywhere else it raises `ArgumentError`. It adds `added:` and `removed:` to `field`, `argument` and `value`, each a non-empty String: anything else, or the same label for both, raises `ConfigurationError` when the member is defined. A label `versions:` does not hold, or a `removed:` before its `added:`, raises `ConfigurationError`, naming the member, every time a query asks about it: types load before `use`, so it cannot be checked earlier. `member.armory_lifecycle.to_h` answers `{ added:, removed: }`.
+
+`deprecated:` (a non-empty String naming a version) goes with `deprecation_reason:` on `field` in an object, interface, resolver or mutation class, on `argument` in a field, input object, resolver or mutation class, and on `value` in an enum class, when that class includes `Base`. It defines the member twice, as `removed: D` with no reason and `added: D` with the reason, each keeping the other keywords; the enum value's second definition gets `value_method: false`. It raises `ConfigurationError` when the member is defined: without `deprecation_reason:`, with the label of `added:` or `removed:`, in a class without `Base` (the member's class reports it), on the arguments of a `GraphQL::Schema::Subscription` class, and on a `resolver:` (or `mutation:`, `subscription:`) field whose resolver class has its own `deprecation_reason`, which graphql-ruby would give the field in every version. A `deprecated:` outside `added:`..`removed:` in `versions:` raises the first time a query asks, like any lifecycle out of order.
 
 `include GraphQL::Armory::Versioning::Base` in an object, interface (after `include GraphQL::Schema::Interface`), union, enum, scalar, input object, resolver or mutation class adds the class method `lifecycle added:, removed:`, with the same rules; `Type.armory_lifecycle.to_h` answers it, inherited as described in "How to use it". `GraphQL::Armory::Versioning.types(schema, label, context: {})` answers a `Versioning::View`; `View.new` with nothing answers nothing.
 
 These raise `ConfigurationError` when a query of the schema is built (a `GraphQL::Query` built by hand included), and from `Versioning.types`; a root or `extra_types` changed later is checked again:
 
-- Two definitions of one argument name or enum value on a subscription field's arguments, or in an input object or enum they take: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise.
+- Two definitions of one argument name or enum value on a subscription field's arguments, or in an input object or enum they take: graphql-ruby's `trigger` reads those arguments with no version, where two definitions raise. `deprecated:` makes two definitions, so it is refused there too.
 
 - A lifecycle on the query, mutation or subscription root type: a version without it would have no root. Version its fields.
 - A type with a lifecycle in `extra_types`: `__type` and the SDL read `extra_types` without asking `visible?`.
@@ -345,9 +474,18 @@ These raise `ConfigurationError`, naming the member, the first time a query asks
 
 - A type that lives in a version where one of its versioned ancestors does not.
 
-- A `default_value:` that names an input field or enum value the query's version does not have, by its own lifecycle or its type's. Introspection would print it, and the field would run without it. Use a default that every version of the argument has. An enum value renamed across versions with the same Ruby `value:` counts as one: the default is fine in every version where either name lives. The check runs only on argument classes that include `Base`: an argument class without it can still print, in an older version's SDL, a default naming a value added later.
+- A `default_value:` that names an input field or enum value the query's version does not have, by its own lifecycle or its type's. Introspection would print it, and the field would run without it. Use a default that every version of the argument has. An enum value renamed across versions with the same Ruby `value:` counts as one: the default is fine in every version where either name lives. The check runs only on argument classes that include `Base`: an argument class without it can still print, in an older version's SDL, a default naming a value added later; the audit reports it (`:default_value`).
 - A versioned argument or enum value with the same name as one its parent class defines (an input object, enum, resolver or mutation subclass, or a field's own argument over its resolver's). graphql-ruby serves the parent's definition where the local one is hidden. Version the parent's definition, or rename it.
 - On a directive used in the SDL (any location such as `FIELD_DEFINITION` or `OBJECT`, on the directive or on a subclass of it), an argument with a lifecycle, or one whose type reaches a versioned type, enum value or input field: the SDL prints applied directive arguments as the latest version sees them, without asking `visible?`. Arguments of directives used only in queries (`FIELD`, `QUERY` and the rest) can be versioned and can use versioned enums; graphql-ruby's built-in directives cannot be versioned.
+
+`GraphQL::Armory::Versioning::Diff.(schema, from:, to:, context: {})` is `Diff.build(schema, context:).(from:, to:)` and answers a `Diff::Result`: `changes`, `breaking`, `dangerous` and `safe` (each a list of `Diff::Change` with `bucket`, `path` and `message`, breaking first, sorted by path), `breaking?`, `from`, `to`, and `to_s`. A label `versions:` does not hold raises `UnknownVersionError`; a retired one, or a schema that never installed the plugin, `ConfigurationError`. `Diff.new` has no schema and raises `ConfigurationError` instead of answering no changes; `Diff.new(reader)` reads each version through `reader.view(label)`. `Diff::Reader::Substitute` answers the views it is told (`answer(label, view)`) and records `labels`; `Diff::Substitute.new(result)` answers `result` and records `calls`.
+
+`GraphQL::Armory::Versioning::Dump.(schema, dir, context: {})` is `Dump.build(dir).(schema, context:)` and answers the paths it wrote: each served version oldest first, then `latest.graphql`. It creates `dir` when missing. An empty `dir`, or a file in it that is a symbolic link, raises `ConfigurationError`. Each version it prints goes through `to_definition`, which records one `:version_served` signal per version: filter dumps out of rollout metrics. `Dump.new` writes nothing and answers `[]`; `Dump.new(directory)` writes through `directory.write(name, text)`. `Dump::Directory::Substitute` records `written` (file name => SDL) and, told `fail_with(error)`, raises it.
+
+Rake tasks (Rails loads them; elsewhere `load "tasks/graphql_armory.rake"` from the gem):
+
+- `graphql_armory:versions:dump[Schema,dir]`: writes the files (`dir` defaults to `schema`) and prints each path; exit 1 on a missing or unknown schema or a `ConfigurationError`.
+- `graphql_armory:versions:diff[Schema,from,to]`: prints the diff; exit 1 when something breaks, on a missing argument, an unknown schema or a version it cannot compare.
 
 Context key: `armory_version` (a String naming a served version).
 
@@ -355,15 +493,15 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 
 ## Guarantees and limits
 
-**What is guaranteed.** A client that names version V gets V's schema on every path that reads the query's schema: selection and aliases, fragments, validation and its suggestions, introspection (`__schema`, `__type`, `fields`), `to_definition` and `Schema.validate` with V in the context, on the interpreter and on `Execution::Next`, and each query of a multiplex sees its own version. A refused version runs nothing, even with `validate: false`, and even when the query brings its own `static_validator:` (the plugin replaces it; a [persisted queries](persisted-queries.md) refusal is kept, since it runs nothing either). The version lives in the query's context: one query's version cannot reach another's. What this part covers is types, fields, arguments (input fields and directive arguments included), enum values and memberships (`implements`, `possible_types`).
+**What is guaranteed.** A client that names version V gets V's schema on every path that reads the query's schema: selection and aliases, fragments, validation and its suggestions, introspection (`__schema`, `__type`, `fields`), `to_definition` and `Schema.validate` with V in the context, on the interpreter and on `Execution::Next`, and each query of a multiplex sees its own version. A refused version runs nothing, even with `validate: false`, and even when the query brings its own `static_validator:` (the plugin replaces it; a [persisted queries](persisted-queries.md) refusal is kept, since it runs nothing either). The version lives in the query's context: one query's version cannot reach another's. What it covers is types, fields, arguments (input fields and directive arguments included), enum values and memberships (`implements`, `possible_types`).
 
 **Limits.**
 
 - **Lookups with no context see every field and argument.** With two definitions of one name, they raise graphql-ruby's `DuplicateNamesError` instead (`Types::Invoice.get_field("total")`, and the default values graphql-ruby checks when the schema boots). `Types::Invoice.get_field("amount")`, `Types::Invoice.fields`, `get_argument`, a union's `possible_types`, an object's `interfaces` and other lookups without a query answer the member whatever its lifecycle: graphql-ruby answers them without asking `visible?`. Enum values asked without a query (`Types::Status.values`) and, under `Schema::Visibility`, `AppSchema.get_type` answer the latest version. Read a version's schema through `Versioning.types(schema, label)` or `to_definition(context: { armory_version: ... })`.
-- **Subscription triggers** build their query with `context: {}` unless you pass one, so the `default:` policy applies to them: under `default: :refuse` a trigger that reaches a versioned field raises `MissingVersionError`, and under `:latest` it cannot name a field removed in the latest version. Pass `context: { armory_version: ... }` to every `trigger`. Subscriptions are not tested with versioning yet.
+- **Subscription triggers** build their query with `context: {}` unless you pass one, so the `default:` policy applies to finding the field: under `default: :refuse` a trigger that reaches a versioned field raises `MissingVersionError`, and under `:latest` it cannot name a field removed in the latest version. Pass `context: { armory_version: ... }` to every `trigger`, naming a version that has the field and the arguments you pass. Its arguments are another matter: graphql-ruby reads them with no query, where every definition counts, fills in the default of every argument and input field whatever its version, and then builds the topic with the trigger's version. So a subscription argument with a default that one served version does not have breaks that version's triggers (a trigger naming it raises, and a trigger naming another version never reaches its subscribers), whatever context you pass. Keep subscription arguments with a default in every version; the audit reports the ones that differ (`:subscription_trigger`). Each subscriber's update runs with the context it stored, so its own version applies there.
 - **Queries built outside `query_class`.** A `Query::Partial` (`run_partials`) sees its parent's version, because it reads its parent's schema, and so does the second context `Schema::Visibility`'s `migration_errors: true` builds for a query; neither records a signal. A `GraphQL::Query` your code builds itself skips `query_class`: it is decided from its own `armory_version` the first time a versioned field is asked about, and records no signal. A refused version raises `RefusedVersionError` there instead of answering a validation error, and such a query that touches no field of a class that includes `Base` runs.
 - **`validate: false` with a field outside the version** raises graphql-ruby's own error ("No field definition found", or a `NoMethodError` on graphql 2.4) quoting the client's selection; nothing resolves.
-- **The legacy `Schema::Warden` falls back.** When a type's own definition of a field is hidden in V, the Warden serves a parent class's or an interface's definition of the same name instead. `Schema::Visibility` never does: use it. For arguments and enum values, where graphql-ruby falls back on every path, the plugin refuses the shape instead (see Reference).
+- **The legacy `Schema::Warden` falls back.** When a type's own definition of a field is hidden in V, the Warden serves a parent class's or an interface's definition of the same name instead. `Schema::Visibility` never does: use it. Under either, the audit reports the shape (`:fallback`): version the parent's or the interface's definition with the type's. For arguments and enum values, where graphql-ruby falls back on every path, the plugin refuses the shape instead (see Reference).
 - **Data outside the version fails the response.** A resolver that returns an enum value the client's version does not have raises graphql-ruby's `GraphQL::Schema::Enum::UnresolvedValueError`, and a `resolve_type` that answers a type outside it raises `GraphQL::UnresolvedTypeError`, the twin of another version included; neither is turned into `null`. Filter or map the data in the resolver with `GraphQL::Armory::Versioning.version(context)`:
 
   ```ruby
@@ -381,11 +519,22 @@ Errors: `Versioning::ConfigurationError` (a server-side setup mistake), `Unknown
 - **A type reachable only through a hidden membership** stays findable by name (`__type`, `__schema.types`, the SDL, `Versioning.types`) under `Schema::Visibility`, while the legacy Warden drops it. Give it its own `lifecycle`.
 - **An interface or union left with no member in V.** The legacy Warden hides an interface with no visible implementer, with every field that returns it; `Schema::Visibility` keeps it, and an empty union prints as an invalid `union X` in the SDL. Give the abstract type the lifecycle its members have.
 - **A required argument hidden in V is not required in V.** A client of a version where the argument does not exist cannot send it, so the field runs without it: the resolver needs a Ruby default for it. An input field hidden in V is absent from the input object, and a `validates required: { one_of: }` whose every option is hidden in V fails every request in V.
-- **Default values that graphql-ruby checks at boot.** graphql-ruby validates every `default_value:` against the latest version when the schema loads, so a default naming an enum value removed in the latest version raises its `InvalidDefaultValueError` at boot, whatever the argument's own lifecycle.
+- **Default values that graphql-ruby checks at boot.** graphql-ruby validates every `default_value:` against the latest version when the schema loads, so a default naming an enum value removed in the latest version raises its `InvalidDefaultValueError` at boot, whatever the argument's own lifecycle. An argument defined after the schema loaded (code reloading) escapes that check, and then `to_definition` raises in every version: the audit reports it (`:default_value`).
 - **An enum with every value hidden in V** raises graphql-ruby's `MissingValuesError` on any query that reaches it in V, introspection included. Give the enum the lifecycle instead.
-- **Named `Schema::Visibility` profiles** (`profiles:`) are not supported yet: any field of a class that includes `Base` asked under one raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work.
+- **Named `Schema::Visibility` profiles** work only as the plugin's own, with `profiles: true` (graphql 2.4.10 or later; earlier versions build a named profile from the first query's context and keep it for every query, so `use` raises `ArgumentError` there). They hold the version and nothing else: Authorization's `visible_when:` raises under them, and your own `visible?` is asked once per version, so it must not read the user (the audit's `:profiles`). Without `profiles: true`, a query under a named profile raises `ConfigurationError`. Dynamic profiles (`dynamic: true`, or no profiles) work either way.
 - **`Schema::AlwaysVisible`** never asks `visible?`, so nothing would be versioned: the first query and `Versioning.types` raise `ConfigurationError` instead, even when it was added after `use`.
-- **Your own `visible?`** on a base class must call `super`, or the plugin is skipped for those members.
+- **Your own `visible?`** on a base class, or the schema's `self.visible?`, must call `super`, or the plugin is skipped for those members. The audit cannot read whether it does: it reports each one (`:own_check`) until you declare it in `own_checks:`.
 - **Two refusing plugins.** With persisted queries, a request both refuse gets the persisted query's code. Either way nothing runs.
 - **Signals.** `to_definition`, `Schema.validate` and subscription triggers go through `query_class` too, so each records one signal.
-- **Cost.** A member without a lifecycle costs nothing (an argument's default value is read once). A versioned member costs a few Hash lookups each time graphql-ruby asks `visible?` (once per member per query). Not measured yet.
+- **Cost.** A member without a lifecycle costs nothing (an argument's default value is read once). A versioned member costs a few Hash lookups each time graphql-ruby asks `visible?` (once per member per query, or once per member per version with `profiles: true`). See [Performance](#performance).
+
+## Performance
+
+`benchmark/versioning.rb`: 40 object types of 25 fields; in the versioned setups half the fields have a lifecycle and 10 types have a field defined twice. The query selects all 25 fields of 8 types, each over a list of 100 items (20,000 fields resolved), as a client of the third of four versions. graphql 2.6.14, Ruby 3.3, Docker on Windows (one laptop, background load: read the differences, not the absolute numbers). Time per query and objects allocated:
+
+| Engine | plain | warden | visibility | profiles |
+|---|---|---|---|---|
+| interpreter | 70.0 ms, 6,655 | 76.4 ms, 26,239 | 70.3 ms, 27,109 | 67.9 ms, 25,568 |
+| next | 12.3 ms, 25,008 | 15.5 ms, 27,200 | 16.1 ms, 28,070 | 14.6 ms, 26,529 |
+
+`plain` has no versioning and uses `Schema::Visibility`; `warden` and `visibility` ask `visible?` once per member per query; `profiles` is `profiles: true` with `preload: true`. On the interpreter the four are within the measurement's error (±7%). On `Execution::Next`, versioning costs about 3.5 ms per query on this query, and `profiles: true` takes about 1.5 ms of it away: what remains is not visibility but graphql-ruby running `authorized?` on each of the 800 objects, because `Base` on an object type adds one (to refuse a type outside the version that `loads:` reached). Run it yourself: `docker compose run --rm test bundle exec ruby benchmark/versioning.rb` (add `GRAPHQL_ARMORY_ENGINE=next` for Next, and `PROFILE=1 PROFILE_SETUP=profiles` passed with `docker compose run -e` to see where the time goes).
