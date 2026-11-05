@@ -70,7 +70,8 @@ module GraphQL
           return ids if ids.size <= budget
 
           record_signal(:subscription_trigger_budget, skipped: ids.size - budget)
-          ids.first(budget)
+          # From a random start each time, so a topic over the budget never skips the same subscribers on every trigger.
+          ids.rotate(rand(ids.size)).first(budget)
         end
 
         # The Delivery for one subscriber, or nil when nothing is sent.

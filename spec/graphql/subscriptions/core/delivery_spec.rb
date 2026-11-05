@@ -98,6 +98,16 @@ RSpec.describe "GraphQL::Armory::Subscriptions::Core delivery" do
       expect(transport.published.size).to eq(2)
       expect(signals(:subscription_trigger_budget)).to eq([{ skipped: 1 }])
     end
+
+    it "starts the budget at a random subscriber, so repeated triggers reach every subscriber" do
+      schema = build_schema(max_executions_per_trigger: 2)
+      channels = Array.new(3) { |index| schema.subscriptions.channel_for(subscribe(posted, on: schema, user: index.even? ? "user-1" : "user-2")) }
+      30.times { schema.subscriptions.trigger(:message_posted, { room_id: 5 }, message, scope: "acme") }
+
+      expect(transport.published.size).to eq(60)
+      expect(channels.map { |channel| transport.delivered_to(channel).size }).to all(be_positive)
+      expect(signals(:subscription_trigger_budget)).to eq([{ skipped: 1 }] * 30)
+    end
   end
 
   describe "who the delivery runs as" do
