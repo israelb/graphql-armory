@@ -374,7 +374,7 @@ RSpec.describe "Versioning audit 3a: verification probes" do
       end
 
       # ---------------------------------------------------------------- (a) hidden by the user
-      it "security S20: an app visible? ahead of the plugin that answers false with no user (documented as not checked)" do
+      it "security S20: an app visible? ahead of the plugin that answers false with no user (reported as :own_check)" do
         b = bases
         parent = Class.new(b[:object]) { graphql_name "AdminBase"; lifecycle added: "2025-01-01"; field :a, String, null: true }
         admin = Class.new(parent) do
@@ -388,7 +388,8 @@ RSpec.describe "Versioning audit 3a: verification probes" do
           .to raise_error(cerr, /parent AdminBase does not/)
         report = audit!(schema)
         warn "S20 #{vis}: ok?=#{report.ok?} problems=#{report.problems.map(&:to_s)}"
-        expect(report.to_s).to include("your own visible? methods")
+        expect(kinds(report)).to include([:own_check, "Admin.visible?"])
+        expect(report.ok?).to be(false)
       end
 
       %i[before after].each do |order|

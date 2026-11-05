@@ -52,6 +52,66 @@ RSpec.describe "GraphQL::Armory::Versioning::Audit against a request" do
     { argument: argument, field: field, object: object, input: input, interface: interface, union: union, enum: enum }
   end
 
+  # Stores each subscription in memory and records what each trigger built, so a spec sees which subscribers it reached.
+  def subscriptions_class
+    Class.new(GraphQL::Subscriptions) do
+      attr_reader :topics, :deliveries
+
+      def initialize(**options)
+        super
+        @queries = {}
+        @topics = Hash.new { |hash, key| hash[key] = [] }
+        @deliveries = []
+      end
+
+      def write_subscription(query, events)
+        id = query.context[:subscription_id] = build_id
+        @queries[id] = query
+        events.each { |event| @topics[event.topic] << id }
+      end
+
+      def read_subscription(id)
+        query = @queries[id]
+        query && { query_string: query.query_string, operation_name: query.operation_name, variables: query.provided_variables,
+                   context: { armory_version: query.context[:armory_version] } }
+      end
+
+      def execute_all(event, object)
+        @topics[event.topic].each { |id| execute(id, event, object) }
+      end
+
+      def deliver(id, result) = @deliveries << [id, result.to_h]
+
+      def delete_subscription(id) = @queries.delete(id)
+    end
+  end
+
+  def subscribed_schema(query_type, subscription_type, visibility, **options)
+    plugin = controls::Schema::PLUGINS.fetch(visibility)
+    subscriptions = subscriptions_class
+    settings = { versions: controls::Versions::LABELS, retired: controls::Versions::RETIRED, default: :latest, **options }
+    Class.new(ArmoryEngine.base_schema) do
+      query(query_type)
+      subscription(subscription_type)
+      use plugin
+      use subscriptions
+      use GraphQL::Armory::Versioning, **settings
+    end
+  end
+
+  def subscription_with(b, default_arg)
+    Class.new(b[:object]) do
+      graphql_name "Subscription"
+      field :updated, String, null: true do
+        argument :id, String, required: true
+        argument :channel, String, required: false, default_value: "all", added: "2025-01-01" if default_arg == :versioned
+        argument :channel, String, required: false, default_value: "all" if default_arg == :everywhere
+      end
+
+      def updated(**) = object
+    end
+  end
+
   %i[warden visibility].each do |visibility|
     context "with #{visibility}" do
       describe ":implicit" do
@@ -235,6 +295,93 @@ RSpec.describe "GraphQL::Armory::Versioning::Audit against a request" do
           expect(found(report, :fallback).first.message).to match(/2025-01-01.*Searchable\.search takes it/)
           expect(report.ok?).to be(false)
         end
+      end
+
+      describe ":own_check" do
+        it "reports an app visible? ahead of the plugin's: it serves a field outside its lifecycle" do
+          b = bases
+          leaky = Class.new(b[:field]) { def visible?(context) = original_name == :old || super }
+          query = Class.new(b[:object]) { graphql_name "Query"; field_class(leaky); field :old, String, null: true, removed: "2025-01-01" }
+          schema = schema_over(query, visibility)
+
+          expect(run(schema, "{ old }", new, root: record(old: "served"))).to eq("data" => { "old" => "served" })
+          report = audit(schema)
+          expect(found(report, :own_check).map(&:message)).to contain_exactly(/answers before the plugin's/)
+          expect(found(report, :own_check).first.path).to end_with("#visible?")
+          expect(report.ok?).to be(false)
+        end
+      end
+
+      describe ":default_value" do
+        it "reports a default naming an enum value outside the version, on an argument class without Base" do
+          b = bases
+          kind = Class.new(b[:enum]) { graphql_name "Kind"; value "A"; value "NEW", added: "2025-01-01" }
+          plain = Class.new(b[:field]) { argument_class(GraphQL::Schema::Argument) }
+          query = Class.new(b[:object]) do
+            graphql_name "Query"
+            field_class(plain)
+            field :pick, String, null: true do
+              argument :kind, kind, required: false, default_value: "NEW"
+            end
+          end
+          schema = schema_over(query, visibility)
+
+          expect { run(schema, '{ __type(name: "Query") { fields { args { defaultValue } } } }', old) }
+            .to raise_error(GraphQL::Schema::Enum::UnresolvedValueError)
+          report = audit(schema)
+          expect(paths(report, :default_value)).to eq(["Query.pick.kind"])
+          expect(found(report, :default_value).first.message).to match(/names Kind\.NEW, not in 2024-06-01/)
+          expect(report.ok?).to be(false)
+        end
+      end
+
+      describe ":subscription_trigger" do
+        it "reports a subscription argument with a default that a served version does not have: its triggers raise" do
+          b = bases
+          query = Class.new(b[:object]) { graphql_name "Query"; field :ping, String, null: true }
+          schema = subscribed_schema(query, subscription_with(b, :versioned), visibility)
+
+          execute_query(schema, 'subscription { updated(id: "1") }', context: { armory_version: old })
+          expect { schema.subscriptions.trigger(:updated, { id: "1" }, "changed", context: { armory_version: old }) }.to raise_error(NoMethodError)
+          schema.subscriptions.trigger(:updated, { id: "1" }, "changed", context: { armory_version: new })
+          expect(schema.subscriptions.deliveries).to eq([])
+          report = audit(schema)
+          expect(paths(report, :subscription_trigger)).to eq(["Subscription.updated.channel"])
+          expect(found(report, :subscription_trigger).first.message).to match(/has a default.*not in 2024-06-01/)
+          expect(report.ok?).to be(false)
+        end
+      end
+
+      it "is ok once each hazard is fixed" do
+        b = bases
+        totaled = Module.new { include b[:interface]; graphql_name "Totaled"; field :id, GraphQL::Types::ID, null: true; field :total, Integer, null: true, removed: "2025-01-01" }
+        invoice = Class.new(b[:object]) { graphql_name "Invoice"; implements totaled; field :total, Integer, null: true, removed: "2025-01-01" }
+        careful = Class.new(b[:field]) { def visible?(context) = super && true }
+        kind = Class.new(b[:enum]) { graphql_name "Kind"; value "A"; value "NEW", added: "2025-01-01" }
+        plain = Class.new(b[:field]) { argument_class(GraphQL::Schema::Argument) }
+        picker = Class.new(b[:object]) do
+          graphql_name "Picker"
+          field_class(plain)
+          field :pick, String, null: true do
+            argument :kind, kind, required: false, default_value: "A"
+          end
+        end
+        query = Class.new(b[:object]) do
+          graphql_name "Query"
+          field_class(careful)
+          field :invoice, invoice, null: true
+          field :picker, picker, null: true
+          field :old, String, null: true, removed: "2025-01-01"
+        end
+        schema = subscribed_schema(query, subscription_with(b, :everywhere), visibility, own_checks: { careful => { visible?: "calls super first" } })
+
+        execute_query(schema, 'subscription { updated(id: "1") }', context: { armory_version: old })
+        schema.subscriptions.trigger(:updated, { id: "1" }, "changed", context: { armory_version: new })
+        expect(schema.subscriptions.deliveries.size).to eq(1)
+        report = audit(schema)
+        expect(report.problems.reject(&:information?)).to eq([])
+        expect(found(report, :own_check).map(&:message)).to eq(["declared in own_checks: calls super first"])
+        expect(report.ok?).to be(true)
       end
 
       it "is ok on the same shapes once each member follows its type" do

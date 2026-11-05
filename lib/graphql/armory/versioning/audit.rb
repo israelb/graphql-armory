@@ -14,7 +14,7 @@ module GraphQL
       # from a user (Authorization's `visible_when:`) never hides a refusal. Nothing it does records a signal.
       class Audit
         # What the report does not check yet: it says so, so `ok?` never claims more than was checked.
-        NOT_CHECKED = "your own visible? methods, defaults of arguments without Base, and subscription triggers"
+        NOT_CHECKED = "whether a type's field or argument in a version has a type its interface's definition allows (covariance)"
 
         # `location` is "path:line" where the app wrote what the problem is about, or nil. `severity` is nil for a problem,
         # or :information for something listed that changes nothing a client relies on: `ok?` ignores it.
@@ -99,6 +99,9 @@ module GraphQL
           members = definitions.flat_map { |type| members_of(type) }.uniq
           members.concat(schema.directives.values.flat_map(&:all_argument_definitions))
           undeclared(schema, members, findings)
+          guarded(findings, "Schema") { OwnChecks.(schema, definitions, members, findings) }
+          outside_latest(members, findings)
+          guarded(findings, "Schema") { SubscriptionTriggers.(schema, findings) }
           # A schema-level refusal fails every query, before any member is asked.
           schema.armory_versioning.versions.each_served { |version| walk(schema, version, definitions, members, findings) } unless refused
           findings.report
@@ -191,9 +194,11 @@ module GraphQL
               hidden_by_type(view, type, version, findings)
               empty(schema, view, type, version, definitions, findings)
             end
+            guarded(findings, type) { served_arguments(view, type).each { |argument| default_outside(argument, version, findings) } }
           end
           (guarded(findings, "Schema") { types.directives } || []).each do |directive|
             guarded(findings, directive) { hidden_arguments(view, directive, version, findings) }
+            guarded(findings, directive) { view.arguments(directive).each { |argument| default_outside(argument, version, findings) } }
           end
           guarded(findings, "Schema") { unlisted_abstract(view, version, definitions, listed, findings) }
           listed.each do |type|
@@ -261,6 +266,50 @@ module GraphQL
             end
           end
         end
+
+        def served_arguments(view, type)
+          return view.arguments(type) if type.kind.input_object?
+          return [] unless type.kind.fields?
+
+          view.fields(type).flat_map { |field| view.arguments(field) }
+        end
+
+        # A default naming an enum value the latest version does not have: graphql-ruby's SDL printer reads defaults with no
+        # query, as the latest version sees them, so `to_definition` raises in every version. Any argument class.
+        def outside_latest(members, findings)
+          members.grep(GraphQL::Schema::Argument).each do |argument|
+            next unless argument.default_value?
+
+            guarded(findings, argument) do
+              missing = Integration.members_in(argument.type, argument.default_value).select do |choices|
+                choices.first.is_a?(GraphQL::Schema::EnumValue) && choices.none? { |value| Integration.lifecycle_of(value).covers?(Version::LATEST) }
+              end
+              unless missing.empty?
+                findings.problem(:default_value, argument.path, "its default_value names #{names(missing)}, which the latest version does not " \
+                                                                "have: graphql-ruby prints defaults as the latest version sees them, so " \
+                                                                "to_definition raises in every version. Use a default the latest version has", at: argument)
+              end
+            end
+          end
+        end
+
+        # A default naming an enum value or an input field V does not have, on an argument class without `Base` (whose own
+        # check refuses it): introspection of V raises, and V's SDL raises or prints what V does not have.
+        def default_outside(argument, version, findings)
+          return if !argument.default_value? || argument.is_a?(Integration::Argument)
+
+          missing = Integration.members_in(argument.type, argument.default_value).reject do |choices|
+            choices.any? { |member| Integration.covers?(member, version) }
+          end
+          return if missing.empty?
+
+          findings.problem(:default_value, argument.path, "its default_value names #{names(missing)}, not in #{label(version)}: introspection " \
+                                                          "of #{label(version)} raises, and its SDL raises or prints a value it does not have. " \
+                                                          "Use a default every version of this argument has, or include " \
+                                                          "GraphQL::Armory::Versioning::Base in its argument class", at: argument)
+        end
+
+        def names(missing) = missing.map { |choices| choices.first.path }.join(", ")
 
         # A field's own lifecycle, its owner's and its resolver's cover V.
         def live?(field, version)
